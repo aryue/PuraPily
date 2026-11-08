@@ -1,0 +1,20 @@
+--- a/ijksdl/ijksdl_timer.c
++++ b/ijksdl/ijksdl_timer.c
+@@ -84,12 +84,12 @@
+ #endif
+     
+ #if __OHOS__
++    /* CLOCK_MONOTONIC_COARSE advances in ~10 ms steps on OHOS, which quantises
++     * the vfps/vdps samplers to 10 ms windows (20 frames -> 160/170 ms, i.e.
++     * 125 or 117.65 fps for the same 120 fps stream). Use the fine-grained
++     * clock: one call per frame costs nothing. */
+     struct timespec now;
+-#ifdef CLOCK_MONOTONIC_COARSE
+-    clock_gettime(CLOCK_MONOTONIC_COARSE, &now);
+-#else
+-    clock_gettime(CLOCK_MONOTONIC_HR, &now);
+-#endif
++    clock_gettime(CLOCK_MONOTONIC, &now);
+     clock = now.tv_sec * 1000 + now.tv_nsec / 1000000;
+ #endif
+     return (clock);
