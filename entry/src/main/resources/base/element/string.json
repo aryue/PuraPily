@@ -1,0 +1,40 @@
+{
+  "string": [
+    {
+      "name": "permission_reason_nearlink_lab",
+      "value": "用于实验页读取已配对星闪设备的名称和连接状态，与音频输出路由对照"
+    },
+    {
+      "name": "permission_reason_audio_output_lab",
+      "value": "用于在音频输出实验页读取耳机名称等设备信息"
+    },
+    {
+      "name": "module_desc",
+      "value": "模块描述"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "主入口"
+    },
+    {
+      "name": "permission_reason_read_media",
+      "value": "用于选取照片作为应用壁纸"
+    },
+    {
+      "name": "EntryFormAbility_label",
+      "value": "B站卡片"
+    },
+    {
+      "name": "EntryFormAbility_desc",
+      "value": "在桌面显示B站信息"
+    },
+    {
+      "name": "widget_display_name",
+      "value": "B站"
+    },
+    {
+      "name": "widget_desc",
+      "value": "Bilibili 桌面卡片"
+    }
+  ]
+}

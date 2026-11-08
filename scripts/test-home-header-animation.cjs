@@ -1,0 +1,50 @@
+const fs = require('node:fs');
+const vm = require('node:vm');
+const assert = require('node:assert/strict');
+const ts = require('D:/Program Files/Huawei/DevEco Studio/sdk/default/openharmony/ets/build-tools/ets-loader/node_modules/typescript');
+const file = 'entry/build/default/cache/default/default@CompileArkTS/esmodule/debug/entry/src/main/ets/pages/Index.ts';
+const ast = ts.createSourceFile(file, fs.readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true);
+const subject = ast.statements.find(n => ts.isClassDeclaration(n) && n.name.text === 'Index');
+const method = subject.members.find(n => ts.isMethodDeclaration(n) && n.name.getText(ast) === 'updateSearchVisibility');
+const context = { exports: {}, HOME_SEARCH_ROW_HEIGHT: 44, HOME_CHANNEL_ROW_HEIGHT: 36, Curve: { FastOutSlowIn: 1 } };
+vm.runInNewContext(ts.transpileModule(`export class Subject { ${method.getText(ast)} }`, {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 }
+}).outputText, context);
+const page = new context.exports.Subject();
+const finishes = [];
+Object.assign(page, { floatingBottomBar: true, activeTab: 0, bottomBarHidden: false,
+  searchRowHeight: 44, titleContentHeight: 80, searchAnimationGeneration: 0, searchAnimationRunning: false,
+  getUIContext: () => ({ animateTo: (options, update) => { finishes.push(options.onFinish); update(); } }) });
+page.bottomBarHidden = true;
+page.updateSearchVisibility();
+assert.equal(page.titleContentHeight, 80, 'exit retains enough title space');
+assert.equal(page.searchRowHeight, 0);
+page.updateSearchVisibility();
+assert.equal(page.titleContentHeight, 80, 'duplicate target must not cut an in-flight exit short');
+assert.equal(finishes.length, 1);
+page.bottomBarHidden = false;
+page.updateSearchVisibility();
+finishes[0]();
+assert.equal(page.searchAnimationRunning, true, 'stale exit callback cannot finish the reverse animation');
+assert.equal(page.titleContentHeight, 80);
+finishes[1]();
+assert.equal(page.searchAnimationRunning, false);
+assert.equal(page.titleContentHeight, 80);
+page.bottomBarHidden = true;
+page.updateSearchVisibility();
+page.updateSearchVisibility();
+assert.equal(page.titleContentHeight, 80);
+finishes[2]();
+assert.equal(page.titleContentHeight, 36, 'only the completed current exit can reduce title space');
+assert.equal(page.searchAnimationRunning, false);
+page.bottomBarHidden = false;
+page.updateSearchVisibility();
+page.bottomBarHidden = true;
+page.updateSearchVisibility();
+finishes[3]();
+assert.equal(page.searchAnimationRunning, true);
+assert.equal(page.titleContentHeight, 80);
+finishes[4]();
+assert.equal(page.titleContentHeight, 36);
+assert.equal(page.searchAnimationRunning, false);
+console.log('PASS: compiled header animation: duplicate notifications, interrupted exit/entry, stale callbacks and final title height.');

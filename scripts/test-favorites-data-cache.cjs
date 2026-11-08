@@ -1,0 +1,23 @@
+const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
+const ts=require('D:/Program Files/Huawei/DevEco Studio/sdk/default/openharmony/ets/build-tools/ets-loader/node_modules/typescript');
+const base='entry/build/default/cache/default/default@CompileArkTS/esmodule/debug/entry/src/main/ets/';
+const source=fs.readFileSync(base+'services/FavoritesDataService.ts','utf8').replace(/^import .*;\r?\n/gm,'');
+const store=new Map([['biliCookie','SESSDATA=account-a']]),calls=[];
+const request=(kind,mid)=>new Promise(resolve=>calls.push({kind,mid,resolve}));
+const c={exports:{},AppStorage:{get:k=>store.get(k)},getCreatedFavFolders:mid=>request(0,mid),getCollectedFavFolders:()=>request(1),Date};
+vm.runInNewContext(ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020}}).outputText,c);
+(async()=>{
+ const s=new c.exports.FavoritesDataService();s.warm(1);assert.equal(calls.length,2);
+ const p=s.loadFolders(1,0);assert.equal(calls.length,2,'warm and navigation share pending requests');
+ calls[0].resolve([{id:10,title:'folder',media_count:2}]);calls[1].resolve([]);await p;
+ const rows=s.peekFolders(1,0);assert.equal(rows[0].title,'folder');assert.equal(s.peekFolders(1,1).length,0,'cached empty subscription is a real result');
+ await s.loadFolders(1,0);assert.equal(calls.length,2,'warm cache skips mandatory refetch');assert.equal(s.peekFolders(1,0),rows,'reentry keeps exact list identity');
+ s.rememberFolders(1,0,[{...rows[0],covers:['a','b','c']}]);const refresh=s.loadFolders(1,0,true);assert.equal(s.peekFolders(1,0)[0].covers[0],'a','refresh leaves current covers visible');
+ calls[2].resolve([{id:10,title:'renamed',media_count:3}]);await refresh;assert.equal(s.peekFolders(1,0)[0].covers[0],'a','a metadata refresh cannot blank loaded covers');
+ const failed=s.loadFolders(1,0,true);const before=s.peekFolders(1,0);calls[3].resolve(null);await failed;assert.equal(s.peekFolders(1,0),before,'failed refresh retains the good cache');
+ const videos=[{id:1,bvid:'BV1'}];s.rememberResources(1,10,videos,false);assert.equal(s.peekResources(1,10).items,videos);
+ const old=s.loadFolders(1,0,true);store.set('biliCookie','SESSDATA=account-b');assert.equal(s.peekFolders(2,0),undefined);assert.equal(s.peekResources(2,10),undefined);
+ const fresh=s.loadFolders(2,0);calls[4].resolve([{id:99,title:'old account',media_count:1}]);assert.equal(await old,null,'late old-account requests cannot populate or change the new account scope');calls[5].resolve([{id:20,title:'new account',media_count:1}]);await fresh;assert.equal(s.peekFolders(2,0)[0].id,20);
+ store.set('favoritesDataRevision',1);assert.equal(s.peekFolders(2,0),undefined,'successful favorite mutations invalidate snapshots');
+ console.log('PASS compiled favorites cache: prewarm/deduplication, identity, empty results, retained covers, failures, resource snapshots, account races and mutation invalidation.');
+})().catch(e=>{console.error(e);process.exitCode=1;});

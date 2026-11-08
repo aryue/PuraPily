@@ -1,0 +1,20 @@
+const fs=require('fs'),vm=require('vm'),assert=require('assert/strict');
+const ts=require('D:/Program Files/Huawei/DevEco Studio/sdk/default/openharmony/ets/build-tools/ets-loader/node_modules/typescript');
+const src=fs.readFileSync('entry/build/default/cache/default/default@CompileArkTS/esmodule/debug/entry/src/main/ets/pages/DynamicDetailPage.ts','utf8');
+const ast=ts.createSourceFile('p.ts',src,ts.ScriptTarget.Latest,true);
+const c=ast.statements.find(n=>ts.isClassDeclaration(n)&&n.name.text==='DynamicDetailPage');
+const methods=['loadComments','switchSort','restoreCommentCache','failComments'].map(name=>c.members.find(n=>ts.isMethodDeclaration(n)&&n.name.getText(ast)===name).getText(ast)).join('\n');
+let requests=[];const pending=[];
+const ctx={exports:{},setTimeout:()=>0,clearTimeout(){},ObservableComment:{from:c=>c},logError(){},getDynComments:(id,cursor,size,mode)=>new Promise(resolve=>{requests.push({id,cursor,mode});pending.push({mode,resolve});})};
+vm.runInNewContext(ts.transpileModule('export class Page{'+methods+'}',{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText,ctx);
+const p=new ctx.exports.Page();Object.assign(p,{item:{commentIdStr:'123',commentType:17},commentsSort:3,comments:[],commentFailures:new Set(),commentCaches:new Map(),commentRequests:new Map(),commentRequestSeq:0,commentsCursor:0,commentsHasMore:false,repliesVersion:0});
+const response=id=>({comments:[{rpid:id}],nextCursor:20,isEnd:false});
+(async()=>{
+ const first=p.loadComments(true);pending.shift().resolve(response(3));await first;
+ assert.equal(requests.length,2,'other sort is prefetched');assert.equal(p.comments[0].rpid,3);
+ const list=p.comments;p.switchSort(2);assert.equal(p.comments,list,'in-flight switch keeps content');assert.equal(p.commentsLoading,false);
+ p.switchSort(3);pending.shift().resolve(response(2));await new Promise(setImmediate);assert.equal(p.comments[0].rpid,3,'late response must not replace current ordering');
+ p.switchSort(2);assert.equal(p.comments[0].rpid,2);assert.equal(p.commentsLoading,false);p.switchSort(3);assert.equal(p.comments[0].rpid,3);assert.equal(requests.length,2,'cached switches never reload');
+ const old=p.loadComments(true),oldRequest=pending.shift();const fresh=p.loadComments(true),newRequest=pending.shift();newRequest.resolve(response(33));await fresh;oldRequest.resolve(response(30));await old;assert.equal(p.comments[0].rpid,33,'superseded request cannot overwrite fresh page');
+ console.log('PASS: compiled sort prefetch, instant cache switch, retained content and stale-response rejection');
+})().catch(e=>{console.error(e);process.exitCode=1;});

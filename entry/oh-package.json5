@@ -1,0 +1,14 @@
+{
+  "name": "entry",
+  "version": "1.0.0",
+  "description": "Please describe the basic information.",
+  "main": "",
+  "author": "",
+  "license": "GPL-3.0-only",
+  "dependencies": {
+    "@ohos/lottie": "2.0.29",
+    "@ohos/ijkplayer": "file:./libs/ijkplayer-2.0.13-purapily.har",
+    "libhigh_refresh.so": "file:./src/main/cpp/types/libhigh_refresh",
+    "libpurapily_ijk.so": "file:./src/main/cpp/types/libpurapily_ijk"
+  }
+}

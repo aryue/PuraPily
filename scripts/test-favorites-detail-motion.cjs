@@ -1,0 +1,31 @@
+const fs = require('node:fs'), vm = require('node:vm'), assert = require('node:assert/strict');
+const ts = require('D:/Program Files/Huawei/DevEco Studio/sdk/default/openharmony/ets/build-tools/ets-loader/node_modules/typescript');
+const path = 'entry/build/default/cache/default/default@CompileArkTS/esmodule/debug/entry/src/main/ets/pages/FavoritesPage.ts';
+const ast = ts.createSourceFile(path, fs.readFileSync(path, 'utf8'), ts.ScriptTarget.Latest, true);
+const cls = ast.statements.find(n => ts.isClassDeclaration(n) && n.name.text === 'FavoritesPage');
+const names = ['onFolderClick', 'loadFolderResources', 'goBackToFolderList'];
+const methods = cls.members.filter(n => ts.isMethodDeclaration(n) && names.includes(n.name.getText(ast))).map(n => n.getText(ast)).join('\n');
+const pending = [], moves = [];
+const ctx = { exports: {}, AppStorage:{get:()=> 'session'}, FavoritesDataService:{getInstance:()=>({peekResources:()=>undefined,rememberResources(){}})}, PageMode: {FOLDER_LIST: 0, FOLDER_DETAIL: 1}, logError() {},
+ getFavFolderResources: () => new Promise(resolve => pending.push(resolve)) };
+vm.runInNewContext(ts.transpileModule(`export class Subject { ${methods} }`, { compilerOptions: {module: ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020} }).outputText,ctx);
+(async () => {
+ const page = new ctx.exports.Subject();
+ Object.assign(page, {folderAnimating:false,folderRequestVersion:0,sessionCookie:'session',pageMode:0,currentFolderId:0,resourceList:[],detailPager:{changeIndex:(...args)=>moves.push(args)}});
+ const first = page.onFolderClick({id:1,title:'one'});
+ assert.equal(page.pageMode,1); assert.deepEqual(moves,[[1,true]],'enter loading page before response');
+ page.goBackToFolderList();
+ assert.equal(page.currentFolderId,1,'outgoing content remains until exit completes');
+ assert.deepEqual(moves,[[1,true],[0,true]],'return reverses the same native pager');
+ pending.shift()({medias:[{bvid:'stale'}],has_more:true}); await first;
+ assert.equal(page.resourceList.length,0,'response arriving after back cannot fill outgoing page');
+ const second = page.onFolderClick({id:2,title:'two'});
+ const third = page.onFolderClick({id:3,title:'three'});
+ pending.shift()({medias:[{bvid:'old-folder'}],has_more:true}); await second;
+ assert.equal(page.resourceList.length,0,'previous folder cannot fill new folder');
+ pending.shift()({medias:[{bvid:'new-folder'}],has_more:false}); await third;
+ assert.equal(page.resourceList[0].bvid,'new-folder');
+ const retained=page.resourceList;const failed=page.loadFolderResources(true);pending.shift()(null);await failed;assert.equal(page.resourceList,retained,'failed refresh preserves cached resources');
+ page.folderAnimating=true; const count=moves.length; await page.onFolderClick({id:4,title:'four'});page.goBackToFolderList();assert.equal(moves.length,count,'repeat taps cannot interrupt an active transition');
+ console.log('PASS: compiled favorites detail: immediate loading, reversible pager, retained outgoing content, stale response isolation and repeated tap guard.');
+})().catch(e=>{console.error(e);process.exitCode=1;});
