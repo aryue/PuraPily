@@ -8,6 +8,7 @@ import { VideoCardMoreButton } from './VideoCardMoreButton';
 import { VideoCardFeedback } from '../services/VideoCardFeedback';
 import { resizeImageUrl } from '../utils/ImageUrl';
 import { cardItemBg, cardItemBorder } from '../utils/CardStyle';
+import { secondaryTextColor } from '../utils/SurfaceColors';
 
 /** 多图网格单图角圆角：仅四角图加对应角（左上/右上/左下/右下） */
 interface DynCornerRadius {
@@ -777,7 +778,7 @@ export struct DynamicCardBody {
       }
       Text('暂不支持此动态类型')
         .fontSize(12)
-        .fontColor('#999999')
+        .fontColor(secondaryTextColor(this.isDarkMode))
         .padding({ top: 8, bottom: 8 })
     }
     .width('100%')

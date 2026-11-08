@@ -48,7 +48,7 @@ export class MaterialUtil {
     try {
       if (MaterialUtil.available()) {
         MaterialUtil.sheetMat_ = GlassMaterial.create('sheet', true);
-        logInfo('[MaterialUtil] 已挂沉浸光感材质（THICK, 静态玻璃无光效, 统一反色开启）');
+        logInfo('[MaterialUtil] 已挂沉浸光感材质（THICK, 静态玻璃无光效, 厚档不反色）');
       } else {
         logInfo('[MaterialUtil] 设备不支持沉浸光感，半模态面板走降级底色');
       }
@@ -78,7 +78,7 @@ export class MaterialUtil {
     try {
       if (MaterialUtil.available()) {
         MaterialUtil.pillMat_ = GlassMaterial.create('hint', true);
-        logInfo('[MaterialUtil] 胶囊专用材质已创建（REGULAR + materialColor 40% 黑 + 统一反色开启）');
+        logInfo('[MaterialUtil] 胶囊专用材质已创建（REGULAR + materialColor 40% 黑, 厚档不反色）');
       }
     } catch (e) {
       logWarn('[MaterialUtil] 创建胶囊专用材质失败: ' + e);
@@ -102,7 +102,7 @@ export class MaterialUtil {
     try {
       if (MaterialUtil.available()) {
         MaterialUtil.emoteMat_ = GlassMaterial.create('sheet', true);
-        logInfo('[MaterialUtil] 表情面板专用材质已创建（THICK 静态玻璃，独立实例，统一反色开启）');
+        logInfo('[MaterialUtil] 表情面板专用材质已创建（THICK 静态玻璃，独立实例, 厚档不反色）');
       }
     } catch (e) {
       logWarn('[MaterialUtil] 创建表情面板专用材质失败: ' + e);

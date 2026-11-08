@@ -6,6 +6,7 @@ import { fileIo } from '@kit.CoreFileKit';
 import { photoAccessHelper } from '@kit.MediaLibraryKit';
 import { logError, errMsg } from '../utils/Logger';
 import { VibrateUtils } from '../utils/VibrateUtils';
+import { secondaryTextColor } from '../utils/SurfaceColors';
 
 import { ChatEmote, ChatEmoteItem, ChatEmotePackage } from '../utils/ChatEmote';
 
@@ -639,7 +640,7 @@ export struct CommentInputBar {
       } else {
         // 未加载 / 未登录
         Column() {
-          Text('表情加载中或未登录').fontSize(13).fontColor('#999999')
+          Text('表情加载中或未登录').fontSize(13).fontColor(secondaryTextColor(this.isDarkMode))
           Button() { Text('重试').fontSize(13).fontColor('#007DFF') }
             .height(32)
             .margin({ top: 8 })

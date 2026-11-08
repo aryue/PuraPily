@@ -80,15 +80,23 @@ function page() {
   const actions = fs.readFileSync(root + 'components/DynamicFeedActions.ts', 'utf8');
   const handlers = [], dispatched = [];
   const node = new Proxy({}, { get: (_, key) => key === 'onClick' ? cb => handlers.push(cb) : () => {} });
-  const ui = { exports: {}, Row: node, Text: node, Image: node, FlexAlign: { Center: 0 }, fmtCount: String };
-  vm.runInNewContext(ts.transpileModule('export class Actions {' + extract(actions, 'initialRender') + extract(actions, 'countText') + '}', {
+  const usedColors = [];
+  const ui = { exports: {}, Row: node, Text: node, Image: node, FlexAlign: { Center: 0 }, fmtCount: String,
+    // 语义前景色桩：记录每次取色，验证操作栏不再写死中灰。
+    secondaryTextColor: (dark) => { usedColors.push(dark); return dark ? '#C9CDD3' : '#50545A'; } };
+  vm.runInNewContext(ts.transpileModule('export class Actions {' +
+    extract(actions, 'initialRender') + extract(actions, 'countText') + extract(actions, 'actionColor') + '}', {
     compilerOptions: { module: ts.ModuleKind.CommonJS }
   }).outputText, ui);
   const bar = new ui.exports.Actions();
-  Object.assign(bar, { observeComponentCreation2: cb => cb(), like: { liked: false, count: 0 },
+  Object.assign(bar, { observeComponentCreation2: cb => cb(), like: { liked: false, count: 0 }, isDarkMode: true,
     onForward: () => dispatched.push('forward'), onComment: () => dispatched.push('comment'), onToggleLike: () => dispatched.push('like') });
   bar.initialRender(); handlers.forEach(cb => cb());
   assert.deepEqual(dispatched, ['forward', 'comment', 'like'], 'compiled UI dispatches independent callbacks');
+  assert.ok(usedColors.length >= 6 && usedColors.every(d => d === true),
+    '动态操作栏 6 处文字/图标都应按当前主题取语义色');
+  bar.isDarkMode = false; bar.initialRender();
+  assert.ok(usedColors.slice(-6).every(d => d === false), '切到浅色后取色应随之翻转');
   const api = fs.readFileSync(root + 'api/BilibiliApi.ts', 'utf8');
   const start = api.indexOf('export async function repostDynamic(');
   const end = api.indexOf('export async function setDynamicLike(', start);

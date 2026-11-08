@@ -1,6 +1,6 @@
 import { HomeRefreshIndicator } from '../components/HomeRefreshIndicator';
 import { NativeComposerSurface } from '../components/NativeComposerSurface';
-import { pageBackgroundColor } from '../utils/SurfaceColors';
+import { pageBackgroundColor, secondaryTextColor, tertiaryTextColor } from '../utils/SurfaceColors';
 import { PageSurface } from '../components/PageSurface';
 import { NativeHeaderGlass } from '../components/NativeHeaderGlass';
 // DynamicsPage.ets — 首页关注动态流页
@@ -880,7 +880,7 @@ export struct DynamicsPage {
     NativeComposerSurface() {
     Column({ space: 16 }) {
       Row() {
-        Text('取消').fontSize(16).fontColor('#757A81')
+        Text('取消').fontSize(16).fontColor(tertiaryTextColor(this.isDarkMode))
           .onClick(() => { if (!this.repostSending) this.repostVisible = false; })
         Blank()
         Text('转发动态').fontSize(18).fontWeight(FontWeight.Medium)
@@ -1352,7 +1352,7 @@ export struct DynamicsPage {
               .textOverflow({ overflow: TextOverflow.Ellipsis })
               .onClick(() => this.openUpSpace(item))
               Text(`${fmtPubdate(item.pubTs)}${item.video ? ' · 投稿了视频' : ''}`)
-              .fontSize(12).fontColor('#858A92').maxLines(1)
+              .fontSize(12).fontColor(secondaryTextColor(this.isDarkMode)).maxLines(1)
             }.layoutWeight(1).alignItems(HorizontalAlign.Start)
             if (this.isLargeScreen() && item.video) {
               VideoCardMoreButton({ title: item.video.title, videoId: item.video.bvid, ownerMid: String(item.authorMid) })
@@ -1451,13 +1451,13 @@ export struct DynamicsPage {
         if (!this.tabFeeds[index].loaded && this.tabFeeds[index].items.length === 0) {
           Column() {
             LoadingProgress().width(28).height(28).color(this.customThemeColor)
-            Text('加载动态中...').fontSize(13).fontColor(this.pageWallpaperEnabled ? (this.isDarkMode ? '#C9CDD3' : '#50545A') : '#999999').margin({ top: 10 })
+            Text('加载动态中...').fontSize(13).fontColor(secondaryTextColor(this.isDarkMode)).margin({ top: 10 })
           }
           .width('100%').padding({ top: 40, bottom: 40 })
         } else if (this.tabFeeds[index].error && this.tabFeeds[index].items.length === 0) {
           Column() {
             Text(this.tabFeeds[index].error)
-            .fontSize(13).fontColor(this.pageWallpaperEnabled ? (this.isDarkMode ? '#C9CDD3' : '#50545A') : '#999999')
+            .fontSize(13).fontColor(secondaryTextColor(this.isDarkMode))
             .width('100%').textAlign(TextAlign.Center)
             Text('点击重试')
             .fontSize(13).fontColor(this.customThemeColor)
@@ -1468,10 +1468,10 @@ export struct DynamicsPage {
         } else if (this.tabFeeds[index].items.length === 0) {
           Column() {
             Text(this.tabFeeds[index].hint)
-            .fontSize(13).fontColor(this.pageWallpaperEnabled ? (this.isDarkMode ? '#C9CDD3' : '#50545A') : '#999999')
+            .fontSize(13).fontColor(secondaryTextColor(this.isDarkMode))
             .width('100%').textAlign(TextAlign.Center)
             Text('下拉可以刷新')
-            .fontSize(12).fontColor('#BBBBBB')
+            .fontSize(12).fontColor(tertiaryTextColor(this.isDarkMode))
             .width('100%').textAlign(TextAlign.Center)
             .margin({ top: 6 })
           }
@@ -1549,7 +1549,7 @@ export struct DynamicsPage {
   FeedTabTitle(label: string, index: number) {
     Column() {
       Text(label).fontSize(17).fontWeight(FontWeight.Medium).maxLines(1).flexShrink(0)
-        .fontColor(Math.round(this.feedTabPosition) === index ? '#D34E7E' : (this.isDarkMode ? '#A2A7AE' : '#757A81'))
+        .fontColor(Math.round(this.feedTabPosition) === index ? '#D34E7E' : tertiaryTextColor(this.isDarkMode))
     }.constraintSize({ minWidth: 48 }).flexShrink(0)
       .height(44).justifyContent(FlexAlign.End).padding({ bottom: 10 })
       .onAreaChange((_oldArea: Area, area: Area) => {
@@ -1580,7 +1580,7 @@ export struct DynamicsPage {
                   Circle().width(46).height(46).fill('#FB7299')
                   Image($r('app.media.ref_dynamic_selected')).width(28).height(28).fillColor(Color.White)
                 }
-                Text('全部动态').fontSize(11).fontColor(this.selectedUpMid === 0 ? '#D34E7E' : '#757A81')
+                Text('全部动态').fontSize(11).fontColor(this.selectedUpMid === 0 ? '#D34E7E' : secondaryTextColor(this.isDarkMode))
                   .maxLines(1).width(58).textAlign(TextAlign.Center)
               }.id('dynamic-frequent-all').onClick(() => this.selectAllUp())
               ForEach(this.upList.slice(0, 10), (up: DynUpItem) => {
@@ -1589,7 +1589,7 @@ export struct DynamicsPage {
                     Image(resizeImageUrl(up.face, 96)).width(46).height(46).borderRadius(23).objectFit(ImageFit.Cover)
                     if (up.hasUpdate) { Circle().width(8).height(8).fill('#D34E7E') }
                   }
-                  Text(up.uname).fontSize(11).fontColor(this.selectedUpMid === up.mid ? '#D34E7E' : '#757A81')
+                  Text(up.uname).fontSize(11).fontColor(this.selectedUpMid === up.mid ? '#D34E7E' : secondaryTextColor(this.isDarkMode))
                   .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).width(58).textAlign(TextAlign.Center)
                 }.id(`dynamic-frequent-up-${up.mid}`).onClick(() => this.selectUp(up))
               }, (up: DynUpItem) => up.mid.toString())
@@ -1639,7 +1639,7 @@ export struct DynamicsPage {
         Row() {
           Text('我的追番 · 追剧').fontSize(15).fontColor(this.isDarkMode ? '#E7E9EB' : '#18191C')
           Blank()
-          Text('全部 ›').fontSize(13).fontColor(this.pageWallpaperEnabled ? (this.isDarkMode ? '#C9CDD3' : '#50545A') : '#757A81').onClick(() => { this.showFollowedShows = true; this.loadFollowedShows(true); })
+          Text('全部 ›').fontSize(13).fontColor(secondaryTextColor(this.isDarkMode)).onClick(() => { this.showFollowedShows = true; this.loadFollowedShows(true); })
         }.width('100%')
         Row({ space: 6 }) {
           ForEach(this.followedShows.slice(0, 3), (show: DynamicFollowShow) => {
@@ -1677,7 +1677,7 @@ export struct DynamicsPage {
             Image(resizeImageUrl(show.new_ep?.cover || show.cover, 240)).width(120).height(75).objectFit(ImageFit.Cover).borderRadius(4)
             Column({ space: 6 }) {
               Text(show.title).fontSize(15).fontColor(this.isDarkMode ? '#E7E9EB' : '#18191C').maxLines(2)
-              Text(show.new_ep?.index_show || '').fontSize(12).fontColor(this.pageWallpaperEnabled ? (this.isDarkMode ? '#C9CDD3' : '#50545A') : '#757A81')
+              Text(show.new_ep?.index_show || '').fontSize(12).fontColor(secondaryTextColor(this.isDarkMode))
             }.layoutWeight(1).alignItems(HorizontalAlign.Start)
           }.width('100%').onClick(() => this.openFollowedShow(show))
         }

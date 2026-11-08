@@ -8,7 +8,7 @@ import { hdsMaterial } from '@kit.UIDesignKit';
  * 边界：
  * - 两套内容卡片（NativeCardGlass）有自己的开关/厚度/染色，不接入这里；
  * - 音量条 / 亮度条体系（controlcenter、PlayerLevelBar、ExperimentalLevelBar）完全不接入，保持原样；
- * - 反色一律写死开启，暂不提供设置项。改观感只改本文件。
+ * - 反色按类别决策，见 invertedFor()；改观感只改本文件。
  *
  * 每个调用点必须新建独立实例：材质实例与挂载表面绑定，跨表面复用会让整组弹窗不显示。
  */
@@ -27,11 +27,34 @@ export interface GlassRecipe {
   interactive?: boolean;
   shadow?: boolean;
   light?: uiMaterial.LightEffectOptions | null;
+  /** 是否开启原生反色。默认 false，只有前景使用 sys.color.font_primary 的控件才该开。 */
+  inverted?: boolean;
 }
 
 export class GlassMaterial {
-  /** 统一反色：写死开启，暂不提供设置项。 */
-  static readonly INVERTED: boolean = true;
+  /**
+   * 原生反色按类别决策（2026-11-08 深浅色对比度回归修复）。
+   *
+   * SDK 语义（@ohos.arkui.uiMaterial.d.ts → ImmersiveMaterialOptions.colorInvert）：
+   * - 让材质节点子树自适应「背景互补色」，只在 THIN / ULTRA_THIN 薄档、
+   *   且中高算力设备上生效；模拟器常不生效、真机才显现，默认值为 false。
+   * - 前景的自动反色只对 sys.color.font_primary 这类特殊系统资源生效，
+   *   硬编码 hex 的 fontColor / fillColor 完全不会跟着反色。
+   *
+   * 本工程只有 FloatingBottomBar 的未选中项使用 $r('sys.color.font_primary')，
+   * 与基线 6a0ec38 里仅有的两处 colorInvert:true（底栏 + NativeGlassCapsule，
+   * 二者都走 capsule 配方）配套。8f9f952 把 11 类配方统一写死 true 后，
+   * 顶栏 / 胶囊 / 菜单 / 输入 / 播放控件的薄档材质在真机上被翻成背景互补色，
+   * 而其中的文字仍按 isDarkMode 硬编码黑白，两套主题都会错位：
+   * 深色下底板提亮吃掉浅灰次级字（动态页「浅层」几乎看不清），
+   * 浅色下底板变深压住黑字（几乎所有页面看不清）。
+   *
+   * 因此恢复按类别决策：仅 capsule 保留 true，其余回到 SDK 默认 false。
+   * 若以后要给别的控件开启反色，必须同时把它的前景换成特殊系统资源。
+   */
+  static invertedFor(kind: GlassKind): boolean {
+    return kind === 'capsule';
+  }
 
   static supported(): boolean {
     try {
@@ -46,7 +69,7 @@ export class GlassMaterial {
     return new uiMaterial.ImmersiveMaterial({
       style: recipe.style,
       materialColor: recipe.tint ?? Color.Transparent,
-      colorInvert: GlassMaterial.INVERTED,
+      colorInvert: recipe.inverted ?? false,
       applyShadow: recipe.shadow ?? false,
       interactive: recipe.interactive ?? false,
       lightEffect: recipe.light === undefined ? null : recipe.light
@@ -60,7 +83,8 @@ export class GlassMaterial {
       tint: overrides?.tint ?? GlassMaterial.tintFor(kind, dark),
       interactive: overrides?.interactive ?? GlassMaterial.interactiveFor(kind),
       shadow: GlassMaterial.shadowFor(kind),
-      light: GlassMaterial.lightFor(kind, overrides?.light ?? Color.White)
+      light: GlassMaterial.lightFor(kind, overrides?.light ?? Color.White),
+      inverted: GlassMaterial.invertedFor(kind)
     };
     return GlassMaterial.createWithStyle(recipe);
   }

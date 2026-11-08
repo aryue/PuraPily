@@ -30,6 +30,7 @@ import { fmtCount } from '../utils/NumberFormat';
 import { fmtRelativeTime } from '../utils/TimeFormat';
 import { resizeImageUrl } from '../utils/ImageUrl';
 import { themeHexAlpha } from '../utils/ThemeColor';
+import { secondaryTextColor, tertiaryTextColor } from '../utils/SurfaceColors';
 
 /**
  * HdsNavigation（MINI 模式）标题栏高度（vp）。
@@ -1208,7 +1209,7 @@ struct DynamicDetailPage {
           .maxLines(1)
         Text(fmtRelativeTime(it.pubTs))
           .fontSize(11)
-          .fontColor(this.isDarkMode ? '#999999' : '#888888')
+          .fontColor(tertiaryTextColor(this.isDarkMode))
           .margin({ top: 2 })
       }
       .alignItems(HorizontalAlign.Start)
@@ -1285,14 +1286,14 @@ struct DynamicDetailPage {
       Blank()
       Text('按热度')
         .fontSize(12)
-        .fontColor(this.commentsSort === 3 ? this.customThemeColor : (this.isDarkMode ? '#999999' : '#888888'))
+        .fontColor(this.commentsSort === 3 ? this.customThemeColor : tertiaryTextColor(this.isDarkMode))
         .padding({ left: 10, right: 10, top: 4, bottom: 4 })
         .borderRadius(12)
         .backgroundColor(this.commentsSort === 3 ? themeHexAlpha(this.customThemeColor, 12) : Color.Transparent)
         .onClick(() => { this.switchSort(3); })
       Text('按时间')
         .fontSize(12)
-        .fontColor(this.commentsSort === 2 ? this.customThemeColor : (this.isDarkMode ? '#999999' : '#888888'))
+        .fontColor(this.commentsSort === 2 ? this.customThemeColor : tertiaryTextColor(this.isDarkMode))
         .padding({ left: 10, right: 10, top: 4, bottom: 4 })
         .borderRadius(12)
         .backgroundColor(this.commentsSort === 2 ? themeHexAlpha(this.customThemeColor, 12) : Color.Transparent)
@@ -1317,7 +1318,7 @@ struct DynamicDetailPage {
           } else {
             Text('还没有评论，来说点什么吧')
               .fontSize(13)
-              .fontColor(this.isDarkMode ? '#888888' : '#999999')
+              .fontColor(secondaryTextColor(this.isDarkMode))
           }
         }
         .width('100%')
@@ -1381,7 +1382,7 @@ struct DynamicDetailPage {
       } else if (this.comments.length > 0 && !this.commentsLoading && this.commentCaches.has(this.commentsSort)) {
         Text('没有更多评论了')
           .fontSize(12)
-          .fontColor(this.isDarkMode ? '#777777' : '#AAAAAA')
+          .fontColor(tertiaryTextColor(this.isDarkMode))
           .width('100%')
           .textAlign(TextAlign.Center)
           .padding({ top: 14, bottom: 20 })

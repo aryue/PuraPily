@@ -3,6 +3,7 @@ import { VideoDetail, getCommentDetail } from '../api/BilibiliApi';
 import { ObservableComment } from '../model/ObservableComment';
 import { CommentItemComponent } from './CommentItemComponent';
 import { sortCommentReplies } from '../utils/CommentReplySort';
+import { secondaryTextColor } from '../utils/SurfaceColors';
 
 /** 播放区域下方的评论详情；独立滚动，不重建背后的评论列表。 */
 @Component
@@ -96,11 +97,11 @@ export struct CommentThreadPanel {
         }
         ListItem() {
           Row() {
-            Text(`相关回复共${this.total}条`).fontSize(12).fontColor('#757A81')
+            Text(`相关回复共${this.total}条`).fontSize(12).fontColor(secondaryTextColor(this.isDarkMode))
             Blank()
             Row({ space: 4 }) {
-              Image($r('app.media.ref_menu')).width(16).height(16).fillColor('#757A81')
-              Text(this.sortByHeat ? '按热度' : '按时间').fontSize(12).fontColor('#757A81')
+              Image($r('app.media.ref_menu')).width(16).height(16).fillColor(secondaryTextColor(this.isDarkMode))
+              Text(this.sortByHeat ? '按热度' : '按时间').fontSize(12).fontColor(secondaryTextColor(this.isDarkMode))
             }.height(40).padding({ left: 8 }).id('comment-thread-sort')
               .onClick(() => {
                 this.sortByHeat = !this.sortByHeat;
@@ -127,7 +128,7 @@ export struct CommentThreadPanel {
             }
             Text(this.loading ? '加载中…' : (this.failed ? '加载失败，点击重试' :
               (this.hasMore ? '点击加载更多回复' : (this.replies.length > 0 ? '没有更多回复了' : '暂无回复'))))
-              .fontSize(12).fontColor('#757A81')
+              .fontSize(12).fontColor(secondaryTextColor(this.isDarkMode))
           }.width('100%').height(44).justifyContent(FlexAlign.Center)
             .onClick(() => { if (!this.loading && (this.failed || this.hasMore)) this.loadReplies(this.page === 0); })
         }

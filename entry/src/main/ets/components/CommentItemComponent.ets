@@ -14,6 +14,7 @@ import { logWarn } from '../utils/Logger';
 import { MaterialUtil } from '../utils/MaterialUtil';
 import { VibrateUtils } from '../utils/VibrateUtils';
 import { fmtCount } from '../utils/NumberFormat';
+import { secondaryTextColor } from '../utils/SurfaceColors';
 
 /**
  * Bilibili CDN 图片缩放辅助：在 URL 后追加 `@Ww` 参数缩放到指定宽度
@@ -379,7 +380,7 @@ export struct CommentItemComponent {
           }
         }.width('100%')
         Text(this.formatCommentDate(this.comment.ctime) + (this.comment.ipLocation ? `  IP属地：${this.comment.ipLocation}` : ''))
-          .fontSize(10).fontColor('#757A81')
+          .fontSize(10).fontColor(secondaryTextColor(this.isDarkMode))
         CommentContentRenderer({ content: this.comment.content, fontSize: 14,
           textColor: this.isDarkMode ? '#E7E9EB' : '#18191C', maxLines: this.fullContent || this.isTextExpanded ? 999 : 8,
           isCenter: false, thumbIdPrefix: String(this.comment.rpid), picBoxW: this.picBoxW, picBoxH: this.picBoxH, onTextTap: () => this.replyToComment(),
@@ -396,8 +397,8 @@ export struct CommentItemComponent {
               .width(16).height(16).objectFit(ImageFit.Contain).flexShrink(0)
               // Align the palm/body optically; the thumb is an ascender, not the visual centre.
               .translate({ y: -1.5 })
-              .fillColor(this.comment.action === 1 ? '#D34E7E' : '#757A81')
-            Text(fmtCount(this.comment.like)).fontSize(11).fontColor('#757A81')
+              .fillColor(this.comment.action === 1 ? '#D34E7E' : secondaryTextColor(this.isDarkMode))
+            Text(fmtCount(this.comment.like)).fontSize(11).fontColor(secondaryTextColor(this.isDarkMode))
               .maxLines(1).flexShrink(0)
           // Intrinsic count width keeps the next gap anchored to its last digit,
           // including count changes and compact formats such as 1.2万.
@@ -409,27 +410,27 @@ export struct CommentItemComponent {
             Image(this.comment.action === 2 ? $r('app.media.comment_disliked') : $r('app.media.comment_dislike_outline'))
               .width(16).height(16).objectFit(ImageFit.Contain)
               .translate({ y: 1.5 })
-              .fillColor(this.comment.action === 2 ? '#D34E7E' : '#757A81')
+              .fillColor(this.comment.action === 2 ? '#D34E7E' : secondaryTextColor(this.isDarkMode))
           }.width(32).height(28).alignItems(VerticalAlign.Center).justifyContent(FlexAlign.Center).flexShrink(0)
             .onClick(() => { this.toggleCommentDislike(); })
           Row() {
-            Image($r('app.media.comment_share')).width(16).height(16).objectFit(ImageFit.Contain).fillColor('#757A81')
+            Image($r('app.media.comment_share')).width(16).height(16).objectFit(ImageFit.Contain).fillColor(secondaryTextColor(this.isDarkMode))
               .translate({ y: 0.5 })
           }.width(32).height(28).alignItems(VerticalAlign.Center).justifyContent(FlexAlign.Center).flexShrink(0)
             .onClick(() => { this.shareComment(); })
           Row() {
-            Image($r('app.media.comment_reply')).width(16).height(16).objectFit(ImageFit.Contain).fillColor('#757A81')
+            Image($r('app.media.comment_reply')).width(16).height(16).objectFit(ImageFit.Contain).fillColor(secondaryTextColor(this.isDarkMode))
               .translate({ y: 0.75 })
           }.width(32).height(28).alignItems(VerticalAlign.Center).justifyContent(FlexAlign.Center).flexShrink(0)
             .onClick(() => { this.replyToComment(); })
           if (this.canViewConversation()) {
-            Text('查看对话').fontSize(11).fontColor('#757A81').height(28)
+            Text('查看对话').fontSize(11).fontColor(secondaryTextColor(this.isDarkMode)).height(28)
               .padding({ left: 4, right: 8 })
               .onClick(() => { this.onViewConversation?.(this.comment); })
           }
           Blank()
           Row() {
-            Image($r('app.media.comment_more')).width(16).height(16).objectFit(ImageFit.Contain).fillColor('#757A81')
+            Image($r('app.media.comment_more')).width(16).height(16).objectFit(ImageFit.Contain).fillColor(secondaryTextColor(this.isDarkMode))
           }.width(24).height(28).alignItems(VerticalAlign.Center).justifyContent(FlexAlign.End).flexShrink(0)
             .id('comment-more').accessibilityText('评论更多操作')
             .onClick(() => { this.showCommentMenu(); })
@@ -455,7 +456,7 @@ export struct CommentItemComponent {
             if (!this.isExpanded && this.referenceHasHiddenReplies()) {
               Row() {
                 if (this.referenceHasUploaderReply()) {
-                  Text('UP主等人').fontSize(12).fontColor('#757A81').margin({ right: 4 })
+                  Text('UP主等人').fontSize(12).fontColor(secondaryTextColor(this.isDarkMode)).margin({ right: 4 })
                 }
                 Text(this.comment.loadingReplies ? '加载中…' : `共${this.referenceReplyCount()}条回复 ›`)
                   .fontSize(12).fontColor('#00A1D6')

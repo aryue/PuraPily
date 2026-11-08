@@ -2,6 +2,7 @@ import { FloatingCommentEntry } from './FloatingCommentEntry';
 import { VideoDetail, getCommentDialog } from '../api/BilibiliApi';
 import { ObservableComment } from '../model/ObservableComment';
 import { CommentItemComponent } from './CommentItemComponent';
+import { secondaryTextColor } from '../utils/SurfaceColors';
 
 /** 独立显示服务端对话树，保留背后评论详情的列表位置。 */
 @Component
@@ -96,7 +97,7 @@ export struct CommentConversationPanel {
             if (this.loading) { LoadingProgress().width(18).height(18).margin({ right: 6 }) }
             Text(this.loading ? '加载中…' : (this.failed ? this.errorMessage :
               (this.hasMore ? '点击加载更多对话' : (this.replies.length > 0 ? '没有更多对话了' : '暂无可查看的对话'))))
-              .fontSize(12).fontColor('#757A81')
+              .fontSize(12).fontColor(secondaryTextColor(this.isDarkMode))
           }.width('100%').height(44).justifyContent(FlexAlign.Center)
             .onClick(() => { if (!this.loading && (this.failed || this.hasMore)) this.loadConversation(this.floor === 0); })
         }
