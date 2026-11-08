@@ -1,4 +1,5 @@
 const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
+const installGlassMaterial=require('./glass-material-test-stub.cjs');
 const ts=require('D:/Program Files/Huawei/DevEco Studio/sdk/default/openharmony/ets/build-tools/ets-loader/node_modules/typescript');
 const file='entry/build/default/cache/default/default@CompileArkTS/esmodule/debug/entry/src/main/ets/components/FloatingBottomBar.ts';
 const source=fs.readFileSync(file,'utf8').replace(/^import .*;\r?\n/gm,'');
@@ -18,6 +19,7 @@ const c={exports:{},ViewPU,SynchedPropertySimpleOneWayPU:Box,ObservedPropertySim
  FontWeight:{Bold:700,Medium:500},
  FlexAlign:{Center:0},HitTestMode:{None:0,Default:1,Transparent:2,BLOCK_HIERARCHY:3},Curve:{EaseIn:0,EaseOut:1,FastOutSlowIn:2},Context:{animation(){}},
  $r:(name)=>({resource:name}),AppStorage:{setOrCreate:(k,v)=>storage.set(k,v)}};
+installGlassMaterial(c);
 for(const name of ['Row','Column','Tabs','TabContent','Image','Text'])c[name]=component(name);
 vm.runInNewContext(ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020}}).outputText,c);
 const bar=new c.exports.FloatingBottomBar(null,{});bar.aboutToAppear();bar.initialRender();

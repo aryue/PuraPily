@@ -1,8 +1,8 @@
-import { uiMaterial } from '@kit.ArkUI';
-import { deviceInfo } from '@kit.BasicServicesKit';
+import { GlassMaterial } from '../utils/GlassMaterial';
+import { NativeGlassSurface } from './NativeGlassSurface';
 import { playbackHdrUiFilter } from '../utils/PlaybackHdrUi';
 
-/** Top-bar navigation uses native interactive glass independently of content-card settings. */
+/** Top-bar navigation uses the unified glass surface independently of content-card settings. */
 @Component
 export struct HeaderBackButton {
   @Prop hdrUiRatio: number = 1;
@@ -12,9 +12,7 @@ export struct HeaderBackButton {
   @State private supported: boolean = false;
 
   aboutToAppear(): void {
-    try {
-      this.supported = deviceInfo.apiAvailable('26.0.0') && uiMaterial.isImmersiveMaterialSupported();
-    } catch (_) { this.supported = false; }
+    this.supported = GlassMaterial.supported();
   }
 
   @Builder
@@ -26,17 +24,19 @@ export struct HeaderBackButton {
   }
 
   @Builder
+  private glassButton(insideScope: boolean) {
+    NativeGlassSurface({
+      surfaceWidth: 40, surfaceHeight: 40, radius: 20, kind: 'control', dark: this.dark,
+      supported: insideScope, attachPress: true,
+      insetX: insideScope ? 16 : 0, insetY: insideScope ? 16 : 0,
+      onActivate: () => this.onBack()
+    }) { this.arrow() }
+  }
+
+  @Builder
   private nativeButton() {
     Stack({ alignContent: Alignment.TopStart }) {
-      Stack() { this.arrow() }
-        .width(40).height(40).position({ x: 16, y: 16 }).borderRadius(20)
-        .systemMaterial(new uiMaterial.ImmersiveMaterial({
-          style: uiMaterial.ImmersiveStyle.ULTRA_THIN,
-          materialColor: this.dark ? '#301C2022' : '#30FFFFFF',
-          applyShadow: false, interactive: true, lightEffect: { color: Color.White }
-        }))
-        .onTouch((_event: TouchEvent) => {})
-        .onClick(() => this.onBack())
+      this.glassButton(true)
     }.width(72).height(72)
   }
 
@@ -50,10 +50,7 @@ export struct HeaderBackButton {
           })
           .hideBackButton(true).hideToolBar(true).backgroundColor(Color.Transparent).clip(false)
       } else {
-        Stack() { this.arrow() }.width(40).height(40).borderRadius(20)
-          .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THIN)
-          .backgroundColor(this.dark ? '#80202528' : '#80FFFFFF')
-          .onClick(() => this.onBack())
+        this.glassButton(false)
       }
     }.width(40).height(40).clip(false).id('header-back-glass')
       .accessibilityText('返回').accessibilityLevel('yes')

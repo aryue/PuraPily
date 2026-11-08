@@ -1,4 +1,5 @@
 import { HomeInitialLoading } from '../components/HomeInitialLoading';
+import { GlassMaterial } from '../utils/GlassMaterial';
 import { PageSurface } from '../components/PageSurface';
 import { pageBackgroundColor } from '../utils/SurfaceColors';
 import { HOME_SEARCH_ROW_HEIGHT, homeHeaderContentHeight, homeHeaderTopInset } from '../utils/HomeHeaderLayout';
@@ -1662,8 +1663,8 @@ export struct HomePage {
                           barWidth: this.resolveCarouselTitleBarWidth(),
                           barHeight: this.carouselTitleCapsuleHeight,
                           contentPadding: 4,
-                          materialType: hdsMaterial.MaterialType.IMMERSIVE,
-                          materialLevel: hdsMaterial.MaterialLevel.EXQUISITE,
+                          materialType: GlassMaterial.hdsType(),
+                          materialLevel: GlassMaterial.hdsLevel(true),
                           barOverlap: true,
                           barPosition: BarPosition.End,
                           onButtonClick: (): void => {

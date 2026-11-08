@@ -1,4 +1,5 @@
 import { FollowGlassButton } from '../components/FollowGlassButton';
+import { GlassMaterial } from '../utils/GlassMaterial';
 import { HistoryDustChip } from '../components/HistoryDustChip';
 import { HeaderGlassControl } from '../components/HeaderGlassControl';
 import { HeaderBackButton } from '../components/HeaderBackButton';
@@ -26,7 +27,6 @@ import { motion } from '@kit.MultimodalAwarenessKit';
 import { ImmersiveLightWrapper } from '../components/ImmersiveLightWrapper';
 import { HdsMiniBarButton } from '../components/infra/HdsMiniBarButton';
 import { HdsTabs } from '@kit.UIDesignKit';
-import { hdsMaterial } from '@hms.hds.hdsMaterial';
 import { StatusBarUtils } from '../utils/StatusBarUtils';
 import { HomeBarScrollTracker } from '../utils/HomeBarScrollTracker';
 
@@ -1606,8 +1606,8 @@ struct SearchPage {
                   },
                   barBottomMargin: 0,
                   systemMaterialEffect: {
-                    materialType: hdsMaterial.MaterialType.IMMERSIVE,
-                    materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE
+                    materialType: GlassMaterial.hdsType(),
+                    materialLevel: GlassMaterial.hdsLevel()
                   }
                 })
                 .scrollable(false)
@@ -1697,7 +1697,7 @@ struct SearchPage {
           .borderRadius(20)
           .backgroundColor(Color.Transparent)
           // 与直播页分类面板一致：系统磨砂毛玻璃 + clip 裁切成型
-          .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+          .backgroundBlurStyle(GlassMaterial.fallbackBlur('panel'))
           .clip(true)
         }
         .width('100%')

@@ -1,5 +1,5 @@
-import { uiMaterial } from '@kit.ArkUI';
-import { deviceInfo } from '@kit.BasicServicesKit';
+import { GlassMaterial } from '../utils/GlassMaterial';
+import { NativeGlassSurface } from './NativeGlassSurface';
 
 /** Independent interactive material. The native pressed light follows the current button color. */
 @Component
@@ -17,9 +17,7 @@ export struct FollowGlassButton {
 
   aboutToAppear(): void {
     if (typeof this.buttonWidth === 'number') this.measuredWidth = this.buttonWidth;
-    try {
-      this.supported = deviceInfo.apiAvailable('26.0.0') && uiMaterial.isImmersiveMaterialSupported();
-    } catch (_) {}
+    this.supported = GlassMaterial.supported();
   }
 
   private materialTint(): ResourceColor {
@@ -37,14 +35,14 @@ export struct FollowGlassButton {
   @Builder
   private materialButton() {
     Stack({ alignContent: Alignment.TopStart }) {
-      Row() { this.label() }.width(this.measuredWidth).height(this.buttonHeight)
-        .position({ x: 16, y: 16 }).borderRadius(this.buttonHeight / 2)
-        .systemMaterial(new uiMaterial.ImmersiveMaterial({
-          style: uiMaterial.ImmersiveStyle.ULTRA_THIN, materialColor: this.materialTint(),
-          applyShadow: false, interactive: true, lightEffect: { color: this.accent }
-        }))
-        .onTouch((_event: TouchEvent) => {})
-        .onClick(() => this.onActivate())
+      NativeGlassSurface({
+        surfaceWidth: this.measuredWidth, surfaceHeight: this.buttonHeight,
+        radius: this.buttonHeight / 2, kind: 'accent', dark: true,
+        supported: true, attachPress: true, insetX: 16, insetY: 16,
+        useTint: true, tintColor: this.materialTint(),
+        useLight: true, lightColor: this.accent,
+        onActivate: () => this.onActivate()
+      }) { this.label() }
     }.width(this.measuredWidth + 32).height(this.buttonHeight + 32)
   }
 

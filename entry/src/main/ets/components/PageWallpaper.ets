@@ -5,12 +5,6 @@ import { common } from '@kit.AbilityKit';
 import { image } from '@kit.ImageKit';
 import { PageWallpaperService } from '../services/PageWallpaperService';
 
-/**
- * 深色模式壁纸压暗遮罩（浅色不加）。当前临时置 0，用于对比无遮罩观感。
- * 恢复默认请改回 '#88000000'（53% 黑）。
- */
-const WALLPAPER_DARK_SCRIM: string = '#00000000';
-
 @Component
 export struct PageWallpaper {
   @Prop @Watch('reload') orientation: string = 'auto';
@@ -21,6 +15,7 @@ export struct PageWallpaper {
   @StorageLink('pageWallpaperSource') @Watch('reload') source: string = 'none';
   @StorageLink('pageWallpaperLocalComposition') localComposition: string = '{}';
   @StorageLink('pageWallpaperOpacity') imageOpacity: number = 0.7;
+  @StorageLink('pageWallpaperScrim') scrim: number = 0;
   @StorageLink('isDarkMode') dark: boolean = true;
   @State portrait: boolean = (AppStorage.get<number>('pageWallpaperViewportHeight') ?? 1) >=
     (AppStorage.get<number>('pageWallpaperViewportWidth') ?? 1);
@@ -53,6 +48,11 @@ export struct PageWallpaper {
   private local(): LocalWallpaper {
     try { return JSON.parse(this.localComposition) as LocalWallpaper; } catch (_) { return new LocalWallpaper(); }
   }
+  /** 遮罩强度 0–60（%）：深色压黑、浅色提白，共用设置里同一条滑块。 */
+  private scrimColor(): string {
+    const alpha = (Math.max(0, Math.min(60, this.scrim)) / 100).toFixed(3);
+    return this.dark ? `rgba(0, 0, 0, ${alpha})` : `rgba(255, 255, 255, ${alpha})`;
+  }
   build() {
     Stack() {
       if (this.source !== 'none' && this.currentImage()) {
@@ -65,10 +65,9 @@ export struct PageWallpaper {
           Image(this.paintSource()).width('100%').height('100%')
             .objectFit(ImageFit.Cover).draggable(false).opacity(this.imageOpacity)
         }
-        // Light mode uses the selected image opacity without an extra white veil.
-        // Content surfaces provide their own readable theme tint.
-        if (this.dark) {
-          Column().width('100%').height('100%').backgroundColor(WALLPAPER_DARK_SCRIM)
+        // 两种模式共用一条可调节的壁纸遮罩；深浅由 scrimColor 决定方向。
+        if (this.scrim > 0) {
+          Column().width('100%').height('100%').backgroundColor(this.scrimColor())
         }
       }
     }.width('100%').height('100%')

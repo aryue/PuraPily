@@ -1,4 +1,5 @@
 const fs = require('node:fs'), vm = require('node:vm'), assert = require('node:assert/strict');
+const installGlassMaterial = require('./glass-material-test-stub.cjs');
 const ts = require('D:/Program Files/Huawei/DevEco Studio/sdk/default/openharmony/ets/build-tools/ets-loader/node_modules/typescript');
 const base = 'entry/build/default/cache/default/default@CompileArkTS/esmodule/debug/entry/src/main/ets/components/';
 class Box { constructor(v) { this.v=v; } get(){return this.v;} set(v){this.v=v;} reset(v){this.v=v;} }
@@ -25,6 +26,7 @@ const c={exports:{},ColorFilter:class{constructor(v){this.values=v;}},ViewPU,Syn
   pasteboard:{MIMETYPE_TEXT_PLAIN:'text',createData:(_t,v)=>v,getSystemPasteboard:()=>({setData:async v=>copied.push(v)})},
   blacklistUploader:async mid=>{blacklisted.push(mid);return true;},reportComment:async(...args)=>{reports.push(args);return '举报已提交';},
   deviceInfo:{apiAvailable:()=>true,distributionOSApiVersion:260000},uiMaterial:{isImmersiveMaterialSupported:()=>true,ImmersiveStyle:{ULTRA_THIN:0,THICK:1},ImmersiveMaterial:class{constructor(o){this.options=o;}}}};
+installGlassMaterial(c);
 function load(file){c.exports={};vm.runInNewContext(ts.transpileModule(fs.readFileSync(base+file+'.ts','utf8').replace(/^import .*;\r?\n/gm,''),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020}}).outputText,c);return c.exports[file];}
 const Menu=load('CommentActionMenu');
 const target={oid:91,rpid:22,type:17,member:{mid:'44'},content:{message:'测试正文'}};

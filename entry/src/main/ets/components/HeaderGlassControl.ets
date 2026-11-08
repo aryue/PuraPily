@@ -1,7 +1,7 @@
-import { uiMaterial } from '@kit.ArkUI';
-import { deviceInfo } from '@kit.BasicServicesKit';
+import { GlassMaterial } from '../utils/GlassMaterial';
+import { NativeGlassSurface } from './NativeGlassSurface';
 
-/** Header actions share the back button material without reading content-card preferences. */
+/** Header actions share the unified glass surface without reading content-card preferences. */
 @Component
 export struct HeaderGlassControl {
   @Prop controlWidth: number = 40;
@@ -15,23 +15,24 @@ export struct HeaderGlassControl {
   @State private supported: boolean = false;
 
   aboutToAppear(): void {
-    try {
-      this.supported = deviceInfo.apiAvailable('26.0.0') && uiMaterial.isImmersiveMaterialSupported();
-    } catch (_) { this.supported = false; }
+    this.supported = GlassMaterial.supported();
+  }
+
+  @Builder
+  private glassButton(insideScope: boolean) {
+    NativeGlassSurface({
+      surfaceWidth: this.controlWidth, surfaceHeight: this.controlHeight,
+      radius: this.controlHeight / 2, kind: 'control', dark: this.dark,
+      supported: insideScope, attachPress: true,
+      insetX: insideScope ? 16 : 0, insetY: insideScope ? 16 : 0,
+      onActivate: () => { if (this.actionEnabled) this.onActivate(); }
+    }) { this.content() }
   }
 
   @Builder
   private nativeButton() {
     Stack({ alignContent: Alignment.TopStart }) {
-      Stack() { this.content() }
-        .width(this.controlWidth).height(this.controlHeight).position({ x: 16, y: 16 }).borderRadius(this.controlHeight / 2)
-        .systemMaterial(new uiMaterial.ImmersiveMaterial({
-          style: uiMaterial.ImmersiveStyle.ULTRA_THIN,
-          materialColor: this.dark ? '#301C2022' : '#30FFFFFF',
-          applyShadow: false, interactive: true, lightEffect: { color: Color.White }
-        }))
-        .onTouch((_event: TouchEvent) => {})
-        .onClick(() => { if (this.actionEnabled) this.onActivate(); })
+      this.glassButton(true)
     }.width(this.controlWidth + 32).height(this.controlHeight + 32)
   }
 
@@ -45,10 +46,7 @@ export struct HeaderGlassControl {
           })
           .hideBackButton(true).hideToolBar(true).backgroundColor(Color.Transparent).clip(false)
       } else {
-        Stack() { this.content() }.width(this.controlWidth).height(this.controlHeight).borderRadius(this.controlHeight / 2)
-          .backgroundBlurStyle(BlurStyle.COMPONENT_ULTRA_THIN)
-          .backgroundColor(this.dark ? '#80202528' : '#80FFFFFF')
-          .onClick(() => { if (this.actionEnabled) this.onActivate(); })
+        this.glassButton(false)
       }
     }.width(this.controlWidth).height(this.controlHeight).clip(false).id(this.controlId)
       .opacity(this.actionEnabled ? 1 : 0.4)

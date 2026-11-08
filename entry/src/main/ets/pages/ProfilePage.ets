@@ -13,7 +13,8 @@ import { logInfo, logWarn, logError } from '../utils/Logger';
 import { applyThemeMode } from '../utils/ReferenceAppearance';
 import { StatusBarUtils } from '../utils/StatusBarUtils';
 import { preferences } from '@kit.ArkData';
-import { window, uiMaterial, LengthMetrics } from '@kit.ArkUI';
+import { window, LengthMetrics } from '@kit.ArkUI';
+import { GlassMaterial } from '../utils/GlassMaterial';
 import { getUserInfo } from '../api/BilibiliApi';
 import { logoutSession } from '../services/LoginSession';
 import { getLoginAccessKey } from '../utils/CredentialStore';
@@ -37,6 +38,7 @@ export struct ProfilePage {
   @StorageLink('pageWallpaperSource') pageWallpaperSource: string = 'none';
   @StorageLink('pageWallpaperBusy') pageWallpaperBusy: boolean = false;
   @StorageLink('pageWallpaperOpacity') pageWallpaperOpacity: number = 0.7;
+  @StorageLink('pageWallpaperScrim') pageWallpaperScrim: number = 0;
   @StorageLink('isLandscape') wallpaperLandscape: boolean = false;
   @StorageLink('playbackKernel') playbackKernel: string = 'system';
   @State cacheSizeText: string = '计算中…';
@@ -656,11 +658,7 @@ export struct ProfilePage {
   private settingsMenuOptions(): MenuOptions {
     return {
       placement: Placement.BottomRight, enableArrow: false, borderRadius: 24,
-      systemMaterial: deviceInfo.apiAvailable('26.0.0') ? new uiMaterial.ImmersiveMaterial({
-        style: uiMaterial.ImmersiveStyle.REGULAR,
-        materialColor: this.isDarkMode ? '#66242628' : '#88F7F8FA',
-        interactive: true, applyShadow: true, lightEffect: { color: Color.White }
-      }) : undefined
+      systemMaterial: deviceInfo.apiAvailable('26.0.0') ? GlassMaterial.create('menu', this.isDarkMode) : undefined
     };
   }
 
@@ -719,6 +717,19 @@ export struct ProfilePage {
                   }
                 })
               }.width('100%').padding({ left: 16, right: 16 })
+              Column() {
+                Text('壁纸遮罩 ' + Math.round(this.pageWallpaperScrim) + '%')
+                  .fontSize(13).fontColor(this.isDarkMode ? '#E7E9EB' : '#18191C').width('100%')
+                Text('深色压黑 · 浅色提白，独立于透明度')
+                  .fontSize(11).fontColor(this.isDarkMode ? '#C9CDD3' : '#50545A').width('100%')
+                  .margin({ bottom: 2 })
+                Slider({ value: this.pageWallpaperScrim, min: 0, max: 60, step: 1 })
+                  .selectedColor('#D34E7E').onChange((value: number, mode: SliderChangeMode) => {
+                    if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
+                      PageWallpaperService.getInstance().setScrim(value).catch(() => {});
+                    }
+                  })
+              }.width('100%').padding({ left: 16, right: 16, bottom: 10 })
             }
           }.width('100%').padding({ top: 4, bottom: 4 })
         }

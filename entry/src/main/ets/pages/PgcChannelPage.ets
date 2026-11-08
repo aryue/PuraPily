@@ -1,4 +1,5 @@
 import { HomeInitialLoading } from '../components/HomeInitialLoading';
+import { GlassMaterial } from '../utils/GlassMaterial';
 import { cardItemBg } from '../utils/CardStyle';
 import { ChannelCardSurface } from '../components/ChannelCardSurface';
 import { HOME_SEARCH_ROW_HEIGHT, homeHeaderTopInset } from '../utils/HomeHeaderLayout';
@@ -973,7 +974,7 @@ export struct PgcChannelPage {
         // ⭐ 系统磨砂毛玻璃：圆角跟随卡片样式，背景改透明 + backgroundBlurStyle COMPONENT_THICK
         .borderRadius(this.cardListBorderRadius)
         .backgroundColor(Color.Transparent)
-        .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+        .backgroundBlurStyle(GlassMaterial.fallbackBlur('panel'))
         .clip(true)
       } else {
         Column() {
@@ -983,7 +984,7 @@ export struct PgcChannelPage {
         // ⭐ 系统磨砂毛玻璃：圆角跟随卡片样式，背景改透明 + backgroundBlurStyle COMPONENT_THICK
         .borderRadius(this.cardListBorderRadius)
         .backgroundColor(Color.Transparent)
-        .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+        .backgroundBlurStyle(GlassMaterial.fallbackBlur('panel'))
         .clip(true)
       }
     }

@@ -12,7 +12,8 @@ import { PageWallpaper } from '../components/PageWallpaper';
 import { FloatingVideoTransition } from '../services/FloatingVideoTransition';
 import { VideoListItem } from '../components/VideoListItem';
 // UpSpacePage.ets — UP主个人空间页
-import { router, mediaquery, window, uiMaterial } from '@kit.ArkUI';
+import { router, mediaquery, window } from '@kit.ArkUI';
+import { GlassMaterial } from '../utils/GlassMaterial';
 import { deviceInfo } from '@kit.BasicServicesKit';
 import { LengthMetrics } from '@kit.ArkUI';
 import { logInfo, logWarn, logError, errMsg } from '../utils/Logger';
@@ -1152,11 +1153,7 @@ struct UpSpacePage {
   private submissionOrderMenuOptions(): MenuOptions {
     return {
       placement: Placement.BottomRight, enableArrow: false, borderRadius: 24,
-      systemMaterial: deviceInfo.apiAvailable('26.0.0') ? new uiMaterial.ImmersiveMaterial({
-        style: uiMaterial.ImmersiveStyle.REGULAR,
-        materialColor: this.isDarkMode ? '#66242628' : '#88F7F8FA',
-        interactive: true, applyShadow: true, lightEffect: { color: Color.White }
-      }) : undefined
+      systemMaterial: deviceInfo.apiAvailable('26.0.0') ? GlassMaterial.create('menu', this.isDarkMode) : undefined
     };
   }
 

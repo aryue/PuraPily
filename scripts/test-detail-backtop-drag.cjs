@@ -1,4 +1,5 @@
 const fs=require('node:fs'),vm=require('node:vm'),assert=require('node:assert/strict');
+const installGlassMaterial=require('./glass-material-test-stub.cjs');
 const ts=require('D:/Program Files/Huawei/DevEco Studio/sdk/default/openharmony/ets/build-tools/ets-loader/node_modules/typescript');
 const file='entry/build/default/cache/default/default@CompileArkTS/esmodule/debug/entry/src/main/ets/pages/DynamicDetailPage.ts';
 const source=fs.readFileSync(file,'utf8'),ast=ts.createSourceFile('detail.ts',source,ts.ScriptTarget.Latest,true);
@@ -27,6 +28,7 @@ const region=['touchRegion','refreshMaterial','nativeButton'].map(name=>buttonCl
 ctx.HitTestMode={None:0,BLOCK_HIERARCHY:3};
 ctx.Color={Transparent:0};ctx.ButtonType={Normal:0};ctx.BlurStyle={NONE:0,COMPONENT_ULTRA_THIN:1};ctx.HorizontalAlign={Start:0};ctx.Alignment={TopStart:0};ctx.Curve={EaseOut:0};ctx.Context.animation=()=>{};
 ctx.uiMaterial={ImmersiveStyle:{ULTRA_THIN:0},ImmersiveMaterial:class {constructor(options){this.options=options;}}};
+installGlassMaterial(ctx);
 ctx.ObservedObject={GetRawObject:value=>value};
 const materialCalls=[],touchCallbacks=[];
 for(const name of ['Row','Column','Button','Stack'])ctx[name]=new Proxy({}, {get:(_target,key)=>(...args)=>{if(key==='systemMaterial')materialCalls.push(args[0]);if(key==='onTouch')touchCallbacks.push(args[0]);}});

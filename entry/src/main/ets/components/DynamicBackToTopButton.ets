@@ -1,5 +1,5 @@
 import { uiMaterial } from '@kit.ArkUI';
-import { deviceInfo } from '@kit.BasicServicesKit';
+import { GlassMaterial } from '../utils/GlassMaterial';
 
 /** A fixed native touch frame preserves incident light while the visual button follows the gesture. */
 @Component
@@ -19,9 +19,7 @@ export struct DynamicBackToTopButton {
   @State private pressed: boolean = false;
 
   aboutToAppear(): void {
-    try {
-      this.supported = deviceInfo.apiAvailable('26.0.0') && uiMaterial.isImmersiveMaterialSupported();
-    } catch (_) {}
+    this.supported = GlassMaterial.supported();
     this.refreshMaterial();
   }
 
@@ -43,15 +41,8 @@ export struct DynamicBackToTopButton {
   private refreshMaterial(): void {
     if (!this.supported) { this.material = null; this.touchMaterial = null; return; }
     // Keep the source object alive throughout drag frames; replacing it loses its native touch light.
-    this.material = new uiMaterial.ImmersiveMaterial({
-      style: uiMaterial.ImmersiveStyle.ULTRA_THIN,
-      materialColor: this.dark ? '#301C2022' : '#30FFFFFF',
-      applyShadow: false, interactive: false, lightEffect: { color: this.color }
-    });
-    this.touchMaterial = new uiMaterial.ImmersiveMaterial({
-      style: uiMaterial.ImmersiveStyle.ULTRA_THIN,
-      applyShadow: false, interactive: false, lightEffect: { color: this.color }
-    });
+    this.material = GlassMaterial.create('staticControl', this.dark, { light: this.color });
+    this.touchMaterial = GlassMaterial.create('touch', this.dark, { light: this.color });
   }
 
   @Builder

@@ -2,6 +2,7 @@
 // 自动检测运行时 API：API 26+ 使用 systemMaterial，否则降级到手动样式
 import { uiMaterial, curves } from '@kit.ArkUI';
 import { hdsEffect } from '@kit.UIDesignKit';
+import { GlassMaterial } from '../utils/GlassMaterial';
 
 @ComponentV2
 export struct ImmersiveLightWrapper {
@@ -40,9 +41,8 @@ export struct ImmersiveLightWrapper {
     //   构造失败（低版本 API）静默降级。
     if (this.trySystemMaterial) {
       try {
-        this.materialObj = new uiMaterial.ImmersiveMaterial({
-          style: this.materialStyle as uiMaterial.ImmersiveStyle,
-          applyShadow: false
+        this.materialObj = GlassMaterial.createWithStyle({
+          style: this.materialStyle as uiMaterial.ImmersiveStyle, shadow: false
         });
         return;
       } catch (_) {

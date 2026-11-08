@@ -5,6 +5,10 @@ import { http } from '@kit.NetworkKit';
 import { fileIo } from '@kit.CoreFileKit';
 import { image } from '@kit.ImageKit';
 
+export function clampWallpaperScrim(value: number): number {
+  return Number.isFinite(value) ? Math.max(0, Math.min(60, Math.round(value))) : 0;
+}
+
 export function wallpaperEndpoint(source: string, portrait: boolean): string {
   if (source === 'picsum') return portrait ? 'https://picsum.photos/1080/1920' : 'https://picsum.photos/1920/1080';
   if (source === 'pipw') return portrait ? 'https://img-api.pipw.top/?phone=true' : 'https://img-api.pipw.top';
@@ -91,6 +95,8 @@ export class PageWallpaperService {
     AppStorage.setOrCreate('pageWallpaperSource', ['pipw', 'picsum', 'local'].includes(source) ? source : 'none');
     const opacity = await this.pref.get('opacity', 0.7) as number;
     AppStorage.setOrCreate('pageWallpaperOpacity', Number.isFinite(opacity) ? Math.max(0.2, Math.min(1, opacity)) : 0.7);
+    const scrim = await this.pref.get('scrim', 0) as number;
+    AppStorage.setOrCreate('pageWallpaperScrim', clampWallpaperScrim(scrim));
     AppStorage.setOrCreate('pageWallpaperEnabled', false);
     if (source === 'local') {
       try { fileIo.statSync(local); await this.prepareImage(local); this.publish('local', local, local); } catch (_) {}
@@ -151,6 +157,13 @@ export class PageWallpaperService {
     if (!this.pref) return;
     await this.pref.put('opacity', value); await this.pref.flush();
     AppStorage.setOrCreate('pageWallpaperOpacity', value);
+  }
+  /** 壁纸遮罩强度（0–60），深浅色共用；持久化在 page_wallpaper 的 scrim 键。 */
+  async setScrim(value: number): Promise<void> {
+    const scrim = clampWallpaperScrim(value);
+    AppStorage.setOrCreate('pageWallpaperScrim', scrim);
+    if (!this.pref) return;
+    await this.pref.put('scrim', scrim); await this.pref.flush();
   }
   localWallpapers(): LocalWallpaper[] { return this.library.slice(); }
   private ownsLocal(path: string): boolean {

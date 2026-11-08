@@ -1,5 +1,5 @@
 import { uiMaterial } from '@kit.ArkUI';
-import { deviceInfo } from '@kit.BasicServicesKit';
+import { GlassMaterial } from '../utils/GlassMaterial';
 
 /** Each surface owns its material and keeps touch targets inside the native title scope. */
 @Component
@@ -16,13 +16,8 @@ export struct CommentMenuSurface {
   private touchMaterial: uiMaterial.ImmersiveMaterial | null = null;
 
   aboutToAppear(): void {
-    try {
-      this.supported = deviceInfo.apiAvailable('26.0.0') && uiMaterial.isImmersiveMaterialSupported();
-    } catch (_) { this.supported = false; }
-    if (this.supported && this.followTouchLight) this.touchMaterial = new uiMaterial.ImmersiveMaterial({
-      style: uiMaterial.ImmersiveStyle.ULTRA_THIN, applyShadow: false,
-      interactive: false, lightEffect: { color: Color.White }
-    });
+    this.supported = GlassMaterial.supported();
+    if (this.supported && this.followTouchLight) this.touchMaterial = GlassMaterial.create('touch', this.dark);
   }
 
   @Builder
@@ -32,13 +27,7 @@ export struct CommentMenuSurface {
         .width(this.surfaceWidth).height(this.surfaceHeight + this.bottomExtension)
         .position({ x: 16, y: 16 }).borderRadius(this.radius)
         .id(this.interactive ? 'comment-menu-button-material' : 'comment-menu-panel-material')
-        .systemMaterial(new uiMaterial.ImmersiveMaterial({
-          style: this.interactive ? uiMaterial.ImmersiveStyle.ULTRA_THIN : uiMaterial.ImmersiveStyle.THICK,
-          materialColor: this.interactive ? (this.dark ? '#301C2022' : '#30FFFFFF') :
-            (this.dark ? '#661C2022' : '#88F2F3F5'),
-          applyShadow: false, interactive: this.interactive,
-          lightEffect: this.interactive ? { color: Color.White } : null
-        }))
+        .systemMaterial(GlassMaterial.create(this.interactive ? 'control' : 'panel', this.dark))
       if (this.followTouchLight) {
         // A fixed, native touch frame shares events with the scroll and controls.
         // Its optical output is hidden; the menu materials receive its light.
@@ -63,8 +52,8 @@ export struct CommentMenuSurface {
       } else {
         Stack({ alignContent: this.interactive ? Alignment.Center : Alignment.TopStart }) { this.content() }
           .width(this.surfaceWidth).height(this.surfaceHeight + this.bottomExtension).borderRadius(this.radius)
-          .backgroundBlurStyle(this.interactive ? BlurStyle.COMPONENT_ULTRA_THIN : BlurStyle.COMPONENT_THICK)
-          .backgroundColor(this.interactive ? (this.dark ? '#80202528' : '#80FFFFFF') : (this.dark ? '#E6202528' : '#E6F2F3F5'))
+          .backgroundBlurStyle(GlassMaterial.fallbackBlur(this.interactive ? 'control' : 'panel'))
+          .backgroundColor(GlassMaterial.fallbackColor(this.interactive ? 'control' : 'panel', this.dark))
       }
     }.width(this.surfaceWidth).height(this.surfaceHeight + this.bottomExtension).clip(false)
   }

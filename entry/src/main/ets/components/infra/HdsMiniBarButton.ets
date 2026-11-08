@@ -1,4 +1,5 @@
 import { hdsMaterial, HdsTabs } from '@kit.UIDesignKit';
+import { GlassMaterial } from '../../utils/GlassMaterial';
 
 /**
  * HdsMiniBarButton 浮动迷你栏按钮组件
@@ -73,13 +74,13 @@ export struct HdsMiniBarButton {
    * 材质类型（沉浸式效果）
    * @default hdsMaterial.MaterialType.IMMERSIVE
    */
-  @Param materialType: hdsMaterial.MaterialType = hdsMaterial.MaterialType.IMMERSIVE;
+  @Param materialType: hdsMaterial.MaterialType = GlassMaterial.hdsType();
 
   /**
    * 材质级别
    * @default hdsMaterial.MaterialLevel.ADAPTIVE
    */
-  @Param materialLevel: hdsMaterial.MaterialLevel = hdsMaterial.MaterialLevel.ADAPTIVE;
+  @Param materialLevel: hdsMaterial.MaterialLevel = GlassMaterial.hdsLevel();
 
   // ==================== 布局参数 ====================
 

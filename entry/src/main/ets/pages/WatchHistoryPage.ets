@@ -1,4 +1,5 @@
 import { HeaderGlassControl } from '../components/HeaderGlassControl';
+import { GlassMaterial } from '../utils/GlassMaterial';
 import { HeaderBackButton } from '../components/HeaderBackButton';
 import { gradientTitleBarStyle } from '../utils/HeaderStyle';
 import { PageWallpaper } from '../components/PageWallpaper';
@@ -911,8 +912,8 @@ struct WatchHistoryPage {
             },
             barBottomMargin: 0,
             systemMaterialEffect: {
-              materialType: hdsMaterial.MaterialType.IMMERSIVE,
-              materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE
+              materialType: GlassMaterial.hdsType(),
+              materialLevel: GlassMaterial.hdsLevel()
             }
           })
           .scrollable(false)

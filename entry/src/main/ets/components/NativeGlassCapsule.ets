@@ -1,5 +1,4 @@
-import { uiMaterial } from '@kit.ArkUI';
-import { deviceInfo } from '@kit.BasicServicesKit';
+import { GlassMaterial } from '../utils/GlassMaterial';
 
 /** Keep controls inside the material's title scope so native touch effects reach it. */
 @Component
@@ -18,9 +17,7 @@ export struct NativeGlassCapsule {
   @State private supported: boolean = false;
 
   aboutToAppear(): void {
-    try {
-      this.supported = deviceInfo.apiAvailable('26.0.0') && uiMaterial.isImmersiveMaterialSupported();
-    } catch (_) { this.supported = false; }
+    this.supported = GlassMaterial.supported();
   }
 
   @Builder
@@ -38,11 +35,7 @@ export struct NativeGlassCapsule {
         .padding(0).backgroundColor(Color.Transparent)
         .position({ x: titleInset ? 16 : 0, y: titleInset ? 16 : 0 })
         .borderRadius(this.cornerRadius >= 0 ? this.cornerRadius : this.capsuleHeight / 2)
-        .systemMaterial(new uiMaterial.ImmersiveMaterial({
-          style: uiMaterial.ImmersiveStyle.ULTRA_THIN,
-          colorInvert: true, applyShadow: true, interactive: true,
-          lightEffect: { color: Color.White }
-        }))
+        .systemMaterial(GlassMaterial.create('capsule', true))
         .hitTestBehavior(this.allowAncestorGestures ? HitTestMode.Default : HitTestMode.BLOCK_HIERARCHY)
         .onTouch((_event: TouchEvent) => {})
         .onClick(() => this.onActivate?.())

@@ -1,4 +1,5 @@
 import { HeaderGlassControl } from '../components/HeaderGlassControl';
+import { GlassMaterial } from '../utils/GlassMaterial';
 import { pageBackgroundColor } from '../utils/SurfaceColors';
 import { PageWallpaper } from '../components/PageWallpaper';
 import { NativeHeaderGlass } from '../components/NativeHeaderGlass';
@@ -98,13 +99,13 @@ struct Index {
     try {
       this.immersiveHeader = deviceInfo.apiAvailable('26.0.0') && hdsMaterial.getSystemMaterialTypes().length > 0;
       if (this.immersiveHeader) {
-        this.darkHeaderMaterial = new uiMaterial.ImmersiveMaterial({
-          style: uiMaterial.ImmersiveStyle.THIN, interactive: true, lightEffect: { color: undefined },
-          materialColor: '#18000000', applyShadow: false
+        this.darkHeaderMaterial = GlassMaterial.createWithStyle({
+          style: uiMaterial.ImmersiveStyle.THIN, interactive: true,
+          light: { color: undefined }, tint: '#18000000', shadow: false
         });
-        this.lightHeaderMaterial = new uiMaterial.ImmersiveMaterial({
-          style: uiMaterial.ImmersiveStyle.THIN, interactive: true, lightEffect: { color: undefined },
-          materialColor: '#18FFFFFF', applyShadow: false
+        this.lightHeaderMaterial = GlassMaterial.createWithStyle({
+          style: uiMaterial.ImmersiveStyle.THIN, interactive: true,
+          light: { color: undefined }, tint: '#18FFFFFF', shadow: false
         });
       }
     } catch (error) {

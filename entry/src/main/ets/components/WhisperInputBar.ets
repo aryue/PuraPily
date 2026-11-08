@@ -11,6 +11,7 @@ import { fileIo } from '@kit.CoreFileKit';
 import { photoAccessHelper } from '@kit.MediaLibraryKit';
 import { logInfo, logError, errMsg } from '../utils/Logger';
 import { MaterialUtil } from '../utils/MaterialUtil';
+import { GlassMaterial } from '../utils/GlassMaterial';
 import { VibrateUtils } from '../utils/VibrateUtils';
 import { ImGrpcService } from '../services/ImGrpcService';
 
@@ -453,8 +454,8 @@ export struct WhisperInputBar {
       },
       barBottomMargin: 0,
       systemMaterialEffect: {
-        materialType: hdsMaterial.MaterialType.IMMERSIVE,
-        materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE
+        materialType: GlassMaterial.hdsType(),
+        materialLevel: GlassMaterial.hdsLevel()
       }
     })
     .scrollable(false)
@@ -701,8 +702,8 @@ export struct WhisperInputBar {
           },
           barBottomMargin: 0,
           systemMaterialEffect: {
-            materialType: hdsMaterial.MaterialType.IMMERSIVE,
-            materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE
+            materialType: GlassMaterial.hdsType(),
+            materialLevel: GlassMaterial.hdsLevel()
           }
         })
         .scrollable(false)
@@ -728,8 +729,8 @@ export struct WhisperInputBar {
           },
           barBottomMargin: 0,
           systemMaterialEffect: {
-            materialType: hdsMaterial.MaterialType.IMMERSIVE,
-            materialLevel: hdsMaterial.MaterialLevel.ADAPTIVE
+            materialType: GlassMaterial.hdsType(),
+            materialLevel: GlassMaterial.hdsLevel()
           }
         })
         .scrollable(false)

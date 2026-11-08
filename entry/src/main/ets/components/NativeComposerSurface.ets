@@ -1,5 +1,4 @@
-import { uiMaterial } from '@kit.ArkUI';
-import { deviceInfo } from '@kit.BasicServicesKit';
+import { GlassMaterial } from '../utils/GlassMaterial';
 
 /** Same static material recipe as the comment action menu; input behavior stays in the content. */
 @Component
@@ -15,9 +14,7 @@ export struct NativeComposerSurface {
   @State private surfaceHeight: number = 0;
 
   aboutToAppear(): void {
-    try {
-      this.supported = deviceInfo.apiAvailable('26.0.0') && uiMaterial.isImmersiveMaterialSupported();
-    } catch (_) { this.supported = false; }
+    this.supported = GlassMaterial.supported();
   }
 
   @Builder
@@ -26,11 +23,7 @@ export struct NativeComposerSurface {
       Column().width(this.surfaceWidth).height(this.surfaceHeight)
         .position({ x: 16, y: 16 }).borderRadius(this.allCorners ? this.rounding : {
           topLeft: this.rounding, topRight: this.rounding, bottomLeft: this.lowerRounding, bottomRight: this.lowerRounding })
-        .systemMaterial(new uiMaterial.ImmersiveMaterial({
-          style: uiMaterial.ImmersiveStyle.THICK,
-          materialColor: this.dark ? '#661C2022' : '#88F2F3F5',
-          applyShadow: false, interactive: false, lightEffect: null
-        }))
+        .systemMaterial(GlassMaterial.create('panel', this.dark))
     }.width(this.surfaceWidth + 32).height(this.surfaceHeight + 32)
   }
 

@@ -8,6 +8,7 @@ import { VibrateUtils } from '../utils/VibrateUtils';
 import { pasteboard } from '@kit.BasicServicesKit';
 import { logWarn } from '../utils/Logger';
 import { MaterialUtil } from '../utils/MaterialUtil';
+import { GlassMaterial } from '../utils/GlassMaterial';
 
 @Component
 export struct TextSelectionDialog {
@@ -456,7 +457,7 @@ export struct TextSelectionDialog {
       Column() {
         this.dlgContent()
       }
-      .backgroundBlurStyle(BlurStyle.COMPONENT_THICK)
+      .backgroundBlurStyle(GlassMaterial.fallbackBlur('panel'))
       .borderRadius(20)
       .clip(true)
     }

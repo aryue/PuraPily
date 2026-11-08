@@ -1,4 +1,5 @@
 import { PageSurface } from '../components/PageSurface';
+import { GlassMaterial } from '../utils/GlassMaterial';
 import { formatMessageTime } from '../utils/MessageData';
 // WhisperPage.ets — 私聊会话列表页（消息页）
 import { router, mediaquery, display } from '@kit.ArkUI';
@@ -586,8 +587,8 @@ export struct WhisperPage {
                         barWidth: 40,
                         barHeight: 40,
                         contentPadding: 4,
-                        materialType: hdsMaterial.MaterialType.IMMERSIVE,
-                        materialLevel: hdsMaterial.MaterialLevel.EXQUISITE,
+                        materialType: GlassMaterial.hdsType(),
+                        materialLevel: GlassMaterial.hdsLevel(true),
                         barOverlap: true,
                         barPosition: BarPosition.End,
                         // ⚠️ 必须走组件自带 onTabBarClick：HdsTabs 会消费图标区域的点击事件，

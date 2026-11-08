@@ -2,6 +2,7 @@ import { uiMaterial } from '@kit.ArkUI';
 import deviceInfo from '@ohos.deviceInfo';
 import { hdsMaterial } from '@kit.UIDesignKit';
 import { logInfo, logWarn } from './Logger';
+import { GlassMaterial } from './GlassMaterial';
 
 /**
  * 沉浸光感（ImmersiveMaterial）能力判断 + 材质对象工厂。
@@ -46,17 +47,8 @@ export class MaterialUtil {
     MaterialUtil.checked_ = true;
     try {
       if (MaterialUtil.available()) {
-        MaterialUtil.sheetMat_ = new uiMaterial.ImmersiveMaterial({
-          style: uiMaterial.ImmersiveStyle.THICK,
-          // ⭐ interactive: false = 静态玻璃（2026-09-23 用户要求：播放页面板只保留玻璃磨砂，
-          //   去掉按压时出现的光斑/形变）。之前 true 是跟随按压出"光感"，用户不要。
-          //   胶囊（pillMaterial）仍为 true——用户已验收它的效果，勿联动改。
-          interactive: false,
-          // ⭐ lightEffect: null = 彻底关闭光效层（interactive:false 后真机仍有点按光，
-          //   2026-09-23 用户实测确认，光源在这层；官方签名允许 LightEffectOptions | null）
-          lightEffect: null
-        });
-        logInfo('[MaterialUtil] 已挂沉浸光感材质（THICK, 静态玻璃无光效）');
+        MaterialUtil.sheetMat_ = GlassMaterial.create('sheet', true);
+        logInfo('[MaterialUtil] 已挂沉浸光感材质（THICK, 静态玻璃无光效, 统一反色开启）');
       } else {
         logInfo('[MaterialUtil] 设备不支持沉浸光感，半模态面板走降级底色');
       }
@@ -85,13 +77,8 @@ export class MaterialUtil {
     MaterialUtil.pillChecked_ = true;
     try {
       if (MaterialUtil.available()) {
-        MaterialUtil.pillMat_ = new uiMaterial.ImmersiveMaterial({
-          style: uiMaterial.ImmersiveStyle.REGULAR,
-          interactive: true,
-          lightEffect: { color: undefined },
-          materialColor: '#66000000'   // 40% 黑固定染色：玻璃质感优先（用户逐级下调 80→60→40）
-        });
-        logInfo('[MaterialUtil] 胶囊专用材质已创建（REGULAR + materialColor 40% 黑）');
+        MaterialUtil.pillMat_ = GlassMaterial.create('hint', true);
+        logInfo('[MaterialUtil] 胶囊专用材质已创建（REGULAR + materialColor 40% 黑 + 统一反色开启）');
       }
     } catch (e) {
       logWarn('[MaterialUtil] 创建胶囊专用材质失败: ' + e);
@@ -114,12 +101,8 @@ export class MaterialUtil {
     MaterialUtil.emoteChecked_ = true;
     try {
       if (MaterialUtil.available()) {
-        MaterialUtil.emoteMat_ = new uiMaterial.ImmersiveMaterial({
-          style: uiMaterial.ImmersiveStyle.THICK,
-          interactive: false,
-          lightEffect: null
-        });
-        logInfo('[MaterialUtil] 表情面板专用材质已创建（THICK 静态玻璃，独立实例）');
+        MaterialUtil.emoteMat_ = GlassMaterial.create('sheet', true);
+        logInfo('[MaterialUtil] 表情面板专用材质已创建（THICK 静态玻璃，独立实例，统一反色开启）');
       }
     } catch (e) {
       logWarn('[MaterialUtil] 创建表情面板专用材质失败: ' + e);

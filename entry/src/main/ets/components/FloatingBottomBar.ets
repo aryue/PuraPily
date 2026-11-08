@@ -1,6 +1,7 @@
 import deviceInfo from '@ohos.deviceInfo';
 import { motion } from '@kit.MultimodalAwarenessKit';
-import { curves, CommonModifier, uiMaterial } from '@kit.ArkUI';
+import { curves, CommonModifier } from '@kit.ArkUI';
+import { GlassMaterial } from '../utils/GlassMaterial';
 
 /** Keep the material and its contents on the same animated surface. */
 @Component
@@ -23,11 +24,7 @@ export struct FloatingBottomBar {
   onSelect: (index: number) => void = () => {};
 
   aboutToAppear(): void {
-    try {
-      this.immersive = deviceInfo.apiAvailable('26.0.0') && uiMaterial.isImmersiveMaterialSupported();
-    } catch (_) {
-      this.immersive = false;
-    }
+    this.immersive = GlassMaterial.supported();
     this.mounted = true;
     this.updateGripSubscription();
   }
@@ -84,11 +81,7 @@ export struct FloatingBottomBar {
   private barMaterial(): CommonModifier {
     const modifier = new CommonModifier().borderRadius(28).clip(false).backgroundColor(Color.Transparent);
     if (this.immersive && deviceInfo.apiAvailable('26.0.0')) {
-      return modifier.systemMaterial(new uiMaterial.ImmersiveMaterial({
-        style: uiMaterial.ImmersiveStyle.ULTRA_THIN,
-        // Let the native ultra-thin material sample the backdrop without an added tint.
-        colorInvert: true, applyShadow: true, interactive: true, lightEffect: { color: Color.White }
-      }));
+      return modifier.systemMaterial(GlassMaterial.create('capsule', true));
     }
     return modifier.backgroundBlurStyle(BlurStyle.COMPONENT_THICK);
   }
