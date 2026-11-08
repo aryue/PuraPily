@@ -5,6 +5,12 @@ import { common } from '@kit.AbilityKit';
 import { image } from '@kit.ImageKit';
 import { PageWallpaperService } from '../services/PageWallpaperService';
 
+/**
+ * 深色模式壁纸压暗遮罩（浅色不加）。当前临时置 0，用于对比无遮罩观感。
+ * 恢复默认请改回 '#88000000'（53% 黑）。
+ */
+const WALLPAPER_DARK_SCRIM: string = '#00000000';
+
 @Component
 export struct PageWallpaper {
   @Prop @Watch('reload') orientation: string = 'auto';
@@ -62,7 +68,7 @@ export struct PageWallpaper {
         // Light mode uses the selected image opacity without an extra white veil.
         // Content surfaces provide their own readable theme tint.
         if (this.dark) {
-          Column().width('100%').height('100%').backgroundColor('#88000000')
+          Column().width('100%').height('100%').backgroundColor(WALLPAPER_DARK_SCRIM)
         }
       }
     }.width('100%').height('100%')

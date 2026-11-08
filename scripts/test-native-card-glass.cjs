@@ -67,12 +67,29 @@ for(const [otherThickness,expected] of [['ultra-thin',0],['thin',1],['regular',2
   }
   }
 }
+// Each card group owns its own color-invert switch; both material layers follow it.
+for (const [otherCards, field] of [[false, 'invertEnabled'], [true, 'otherInvertEnabled']]) {
+  const card = new Subject(null,{surfaceWidth:260,surfaceHeight:120,radius:12,otherCards});
+  card.thickness='ultra-thin';card.otherThickness='ultra-thin';card.externalLightActive=true;card.aboutToAppear();
+  for (const on of [false,true,false]) {
+    card[field]=on;calls.length=0;card.initialRender();
+    const layers=calls.filter(x=>x.key==='systemMaterial');
+    assert.equal(layers.length,2);
+    for(const layer of layers)assert.equal(layer.args[0].options.colorInvert,on,'base and rim follow the same group switch');
+  }
+}
+const mixed=new Subject(null,{surfaceWidth:200,surfaceHeight:100,otherCards:true});
+mixed.invertEnabled=true;mixed.otherInvertEnabled=false;mixed.externalLightActive=true;mixed.aboutToAppear();
+calls.length=0;mixed.initialRender();
+for(const layer of calls.filter(x=>x.key==='systemMaterial'))
+  assert.equal(layer.args[0].options.colorInvert,false,'other-card switch ignores the video switch');
 const capsule=new Subject(null,{surfaceWidth:104,surfaceHeight:46,radius:24,clearGlass:true,otherCards:true});
 capsule.thickness='regular';capsule.tintEnabled=true;capsule.dark=true;capsule.externalLightActive=true;
 capsule.aboutToAppear();calls.length=0;capsule.initialRender();
 for(const layer of calls.filter(x=>x.key==='systemMaterial')) {
   assert.equal(layer.args[0].options.style,0,'clear capsule stays ultra-thin independently of card settings');
   assert.equal(layer.args[0].options.materialColor,0,'clear capsule has no dark tint in either layer');
+  assert.equal(layer.args[0].options.colorInvert,true,'clear capsule forces inversion regardless of switches');
 }
 const empty=new Subject(null,{});empty.aboutToAppear();calls.length=0;empty.initialRender();assert.ok(!calls.some(x=>x.name==='Navigation'));
 supports=false;const fallback=new Subject(null,{surfaceWidth:200,surfaceHeight:100});fallback.aboutToAppear();calls.length=0;fallback.initialRender();
@@ -118,4 +135,4 @@ for(const enabled of [true,false]) {
   assert.ok(calls.some(x=>x.name==='Stack'&&x.key==='height'&&x.args[0]==='100%'),'bounded panels fill their existing slot');
 }
 assert.equal(contentRenders,2,'bypassing glass preserves real content and lists');
-console.log('PASS: compiled native glass: five thicknesses, independent video/other styles and tints, shared ProfilePage ordinary recipe and other-card enable/disable without wallpaper, native rim-only light, resize, input pass-through and fallback.');
+console.log('PASS: compiled native glass: five thicknesses, independent video/other styles, tints and inversion switches, shared ProfilePage ordinary recipe and other-card enable/disable without wallpaper, native rim-only light, resize, input pass-through and fallback.');

@@ -1,4 +1,5 @@
 import { common, ConfigurationConstant } from '@kit.AbilityKit';
+import { uiAppearance } from '@kit.ArkUI';
 import { resourceManager } from '@kit.LocalizationKit';
 import { preferences } from '@kit.ArkData';
 import { initializeLoginCredentials } from './CredentialStore';
@@ -9,10 +10,12 @@ export async function initializeReferenceAppearance(context: common.UIAbilityCon
   const pref = await preferences.getPreferences(context, 'my_app_settings');
   AppStorage.setOrCreate('videoCardEdgeLight', await pref.get('videoCardEdgeLight', false) as boolean);
   AppStorage.setOrCreate('videoCardGlassTint', await pref.get('videoCardGlassTint', true) as boolean);
+  AppStorage.setOrCreate('videoCardGlassInvert', await pref.get('videoCardGlassInvert', false) as boolean);
   const thickness = await pref.get('videoCardGlassThickness', 'thin') as string;
   AppStorage.setOrCreate('videoCardGlassThickness', ['ultra-thin', 'thin', 'regular', 'thick', 'ultra-thick'].includes(thickness) ? thickness : 'thin');
   AppStorage.setOrCreate('otherCardGlassEnabled', await pref.get('otherCardGlassEnabled', true) as boolean);
   AppStorage.setOrCreate('otherCardGlassTint', await pref.get('otherCardGlassTint', true) as boolean);
+  AppStorage.setOrCreate('otherCardGlassInvert', await pref.get('otherCardGlassInvert', false) as boolean);
   const otherThickness = await pref.get('otherCardGlassThickness', 'thick') as string;
   AppStorage.setOrCreate('otherCardGlassThickness', ['ultra-thin', 'thin', 'regular', 'thick', 'ultra-thick'].includes(otherThickness) ? otherThickness : 'thick');
   AppStorage.setOrCreate('floatingBottomBar', await pref.get('floatingBottomBar', true) as boolean);
@@ -144,16 +147,48 @@ export async function initializeReferenceAppearance(context: common.UIAbilityCon
   if (!AppStorage.has('homeChannelIndex')) AppStorage.setOrCreate('homeChannelIndex', 2);
 }
 
-/** Keep the preference distinct from the effective colors used by existing pages. */
-export function applyThemeMode(context: common.UIAbilityContext, mode: string): void {
-  AppStorage.setOrCreate('themeMode', mode);
-  context.getApplicationContext().setColorMode(mode === 'system' ? ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET :
-    mode === 'dark' ? ConfigurationConstant.ColorMode.COLOR_MODE_DARK : ConfigurationConstant.ColorMode.COLOR_MODE_LIGHT);
-  let dark = mode === 'dark';
-  if (mode === 'system') {
-    dark = resourceManager.getSystemResourceManager().getConfigurationSync().colorMode === resourceManager.ColorMode.DARK;
+/**
+ * 设备真实的深色模式（与 App 自己设置的 COLOR_MODE 覆盖无关）。
+ *
+ * ⚠️ 不能用 `resourceManager.getSystemResourceManager().getConfigurationSync().colorMode`：
+ *    该对象的 Configuration 是固定默认值（SDK 写明 `colorMode: 1`），拿它判断会把「跟随系统」
+ *    恒定算成浅色；而 $r('app.color.*')、dark 资源、系统组件仍按真实系统解析，
+ *    于是出现既不等于浅色也不等于深色的第三套混搭外观。
+ */
+function systemDarkMode(context: common.UIAbilityContext): boolean {
+  try {
+    return uiAppearance.getDarkMode() === uiAppearance.DarkMode.ALWAYS_DARK;
+  } catch (error) {
+    logWarn(`读取系统深色模式失败，退回应用配置: ${error}`);
   }
+  try {
+    const colorMode = context.resourceManager.getConfigurationSync().colorMode;
+    if (colorMode === resourceManager.ColorMode.DARK) return true;
+    if (colorMode === resourceManager.ColorMode.LIGHT) return false;
+  } catch (error) {
+    logWarn(`读取应用配色配置失败: ${error}`);
+  }
+  return AppStorage.get<boolean>('isDarkMode') ?? false;
+}
+
+/**
+ * 应用主题。`system` 只做“取消 App 级覆盖”，配色一律取浅色/深色两套中的一套，
+ * 不产生第三套外观。返回实际生效的深色状态，供状态栏等地方立即复用。
+ */
+export function applyThemeMode(context: common.UIAbilityContext, mode: string): boolean {
+  AppStorage.setOrCreate('themeMode', mode);
+  const app = context.getApplicationContext();
+  if (mode !== 'system') {
+    const forcedDark = mode === 'dark';
+    app.setColorMode(forcedDark ? ConfigurationConstant.ColorMode.COLOR_MODE_DARK :
+      ConfigurationConstant.ColorMode.COLOR_MODE_LIGHT);
+    AppStorage.setOrCreate('isDarkMode', forcedDark);
+    return forcedDark;
+  }
+  app.setColorMode(ConfigurationConstant.ColorMode.COLOR_MODE_NOT_SET);
+  const dark = systemDarkMode(context);
   AppStorage.setOrCreate('isDarkMode', dark);
+  return dark;
 }
 
 export function syncThemeConfiguration(colorMode: number | undefined): void {

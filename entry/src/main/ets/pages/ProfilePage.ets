@@ -47,8 +47,10 @@ export struct ProfilePage {
   @StorageLink('videoCardGlassThickness') videoCardGlassThickness: string = 'thin';
   @StorageLink('videoCardEdgeLight') videoCardEdgeLight: boolean = false;
   @StorageLink('videoCardGlassTint') videoCardGlassTint: boolean = true;
+  @StorageLink('videoCardGlassInvert') videoCardGlassInvert: boolean = false;
   @StorageLink('otherCardGlassEnabled') otherCardGlassEnabled: boolean = true;
   @StorageLink('otherCardGlassTint') otherCardGlassTint: boolean = true;
+  @StorageLink('otherCardGlassInvert') otherCardGlassInvert: boolean = false;
   @StorageLink('otherCardGlassThickness') otherCardGlassThickness: string = 'thick';
   @StorageLink('hideNavigationIndicator') hideNavigationIndicator: boolean = false;
   @StorageLink('floatingBottomBar') floatingBottomBar: boolean = true;
@@ -211,8 +213,8 @@ export struct ProfilePage {
       const pref = await preferences.getPreferences(context, 'my_app_settings');
       await pref.put('themeMode', mode);
       await pref.flush();
-      applyThemeMode(context, mode);
-      await StatusBarUtils.updateStatusBarColor(context, this.isDarkMode);
+      const dark = applyThemeMode(context, mode);
+      await StatusBarUtils.updateStatusBarColor(context, dark);
     } catch (error) {
       logError('保存主题失败', error);
       this.getUIContext().getPromptAction().showToast({ message: '保存失败，请重试' });
@@ -814,6 +816,14 @@ export struct ProfilePage {
                 .id('setting-video-card-glass-tint').accessibilityText('卡片玻璃染色')
                 .onChange((value: boolean) => this.referenceSaveBoolean('videoCardGlassTint', value))
               }.width('100%').constraintSize({ minHeight: 56 }).padding({ left: 16, right: 16, top: 12, bottom: 12 })
+              Row({ space: 12 }) {
+                Column({ space: 4 }) {
+                  Text('材质反色').fontSize(15).fontColor(this.isDarkMode ? '#E7E9EB' : '#18191C')
+                }.layoutWeight(1).alignItems(HorizontalAlign.Start)
+                Toggle({ type: ToggleType.Switch, isOn: this.videoCardGlassInvert }).selectedColor('#D34E7E')
+                  .id('setting-video-card-glass-invert').accessibilityText('视频卡片材质反色')
+                  .onChange((value: boolean) => this.referenceSaveBoolean('videoCardGlassInvert', value))
+              }.width('100%').constraintSize({ minHeight: 56 }).padding({ left: 16, right: 16, top: 12, bottom: 12 })
               Row() {
                 Text('材质厚度').fontSize(15).fontColor(this.isDarkMode ? '#E7E9EB' : '#18191C').layoutWeight(1)
                 Text(this.glassThicknessLabel() + ' ›').fontSize(13)
@@ -847,6 +857,14 @@ export struct ProfilePage {
                 Toggle({ type: ToggleType.Switch, isOn: this.otherCardGlassTint }).selectedColor('#D34E7E')
                   .id('setting-other-card-glass-tint').accessibilityText('其它卡片玻璃染色')
                   .onChange((value: boolean) => this.referenceSaveBoolean('otherCardGlassTint', value))
+              }.width('100%').constraintSize({ minHeight: 56 }).padding({ left: 16, right: 16, top: 12, bottom: 12 })
+              Row({ space: 12 }) {
+                Column({ space: 4 }) {
+                  Text('材质反色').fontSize(15).fontColor(this.isDarkMode ? '#E7E9EB' : '#18191C')
+                }.layoutWeight(1).alignItems(HorizontalAlign.Start)
+                Toggle({ type: ToggleType.Switch, isOn: this.otherCardGlassInvert }).selectedColor('#D34E7E')
+                  .id('setting-other-card-glass-invert').accessibilityText('其它卡片材质反色')
+                  .onChange((value: boolean) => this.referenceSaveBoolean('otherCardGlassInvert', value))
               }.width('100%').constraintSize({ minHeight: 56 }).padding({ left: 16, right: 16, top: 12, bottom: 12 })
               Row() {
                 Text('材质厚度').fontSize(15).fontColor(this.isDarkMode ? '#E7E9EB' : '#18191C').layoutWeight(1)

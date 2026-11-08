@@ -12,8 +12,10 @@ export struct NativeCardGlass {
   @StorageLink('isDarkMode') dark: boolean = true;
   @StorageLink('videoCardGlassThickness') thickness: string = 'thin';
   @StorageLink('videoCardGlassTint') tintEnabled: boolean = true;
+  @StorageLink('videoCardGlassInvert') invertEnabled: boolean = false;
   @StorageLink('otherCardGlassThickness') otherThickness: string = 'thick';
   @StorageLink('otherCardGlassTint') otherTintEnabled: boolean = true;
+  @StorageLink('otherCardGlassInvert') otherInvertEnabled: boolean = false;
   @StorageLink('nativeCardLightActive') externalLightActive: boolean = false;
   @State private supported: boolean = false;
 
@@ -21,6 +23,12 @@ export struct NativeCardGlass {
     try {
       if (deviceInfo.apiAvailable('26.0.0')) this.supported = uiMaterial.isImmersiveMaterialSupported();
     } catch (_) { this.supported = false; }
+  }
+
+  /** "clear" forces inversion; otherwise each card group owns its own switch. */
+  private inverted(): boolean {
+    if (this.clearGlass) return true;
+    return this.otherCards ? this.otherInvertEnabled : this.invertEnabled;
   }
 
   private materialStyle(): uiMaterial.ImmersiveStyle {
@@ -50,7 +58,7 @@ export struct NativeCardGlass {
         .position({ x: 16, y: 16 }).borderRadius(this.radius)
         .systemMaterial(new uiMaterial.ImmersiveMaterial({
           style: this.materialStyle(),
-          colorInvert: this.clearGlass,
+          colorInvert: this.inverted(),
           materialColor: !this.clearGlass && (this.otherCards ? this.otherTintEnabled : this.tintEnabled) ? (this.dark ? '#2017181A' : '#20FFFFFF') : Color.Transparent,
           applyShadow: false, interactive: false, lightEffect: null
         }))
@@ -62,7 +70,7 @@ export struct NativeCardGlass {
           .position({ x: 16, y: 16 }).borderRadius(this.radius)
           .systemMaterial(new uiMaterial.ImmersiveMaterial({
             style: this.materialStyle(),
-            colorInvert: this.clearGlass,
+            colorInvert: this.inverted(),
             materialColor: !this.clearGlass && (this.otherCards ? this.otherTintEnabled : this.tintEnabled) ? (this.dark ? '#2017181A' : '#20FFFFFF') : Color.Transparent,
             applyShadow: false, interactive: false, lightEffect: { color: Color.White }
           }))
