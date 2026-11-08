@@ -16,6 +16,12 @@ int ijk_lab_register_dual(void);
 int purapily_prewarm_async(const char *url, const char *agent, const char *referer, const char *cookie, int bytes, int seek_ms);
 }
 
+// ff_ffplay_options.h 中 max-fps 的取值上界；121 以下的内核默认值 31 会把
+// 60/120fps 源当成「过高帧率」并在软解路径丢弃非参考帧。
+#ifndef PURA_MAX_FPS
+#define PURA_MAX_FPS 121
+#endif
+
 namespace {
 struct Event { int what; int first; int second; };
 
@@ -54,9 +60,12 @@ struct Player {
             if (rc != 0) return rc;
             windows.emplace(surface, next);
         }
-        // Buffer output keeps the hardware decoder independent of the render
-        // window. SDL switches its EGL target while the decoder keeps running.
-        ijkmp_android_set_surface(native, next, false);
+        // Hand the window to the pipeline as a real surface: the OH decoder then
+        // configures itself with output_to_window and renders decoded frames
+        // straight to it (AV_PIX_FMT_OHCODEC). With isSurface=false the pipeline
+        // gets NULL, the decoder falls back to NV12 buffers, and every frame is
+        // copied through swscale + GLES - which caps 4K at ~40 fps.
+        ijkmp_android_set_surface(native, next, true);
         window = next;
         // A previously-current EGLSurface can still reference its native window
         // until the render thread applies this handoff.
@@ -159,7 +168,13 @@ napi_value Create(napi_env env, napi_callback_info info)
     ijkmp_set_option_int(player->native, 4, "min-frames", 200);
     // 视频渲染落后时必须丢弃过期帧，否则视频积压会再次挤停两轨取包、拖住音频。
     ijkmp_set_option_int(player->native, 4, "framedrop", PURA_PROBE_FRAMEDROP);
-    OH_LOG_Print(LOG_APP, LOG_INFO, 0, "IjkBackend", "playback config queue_mib=%{public}d framedrop=%{public}d min_packets=200", PURA_PROBE_QUEUE_MIB, PURA_PROBE_FRAMEDROP);
+    // 内核默认 max-fps=31：高于 31fps 的源会被标记 is_video_high_fps，进而给软解
+    // 打开 skip_frame/skip_loop_filter/skip_idct（非参考帧直接丢）。60/120fps 源在
+    // 软解回退时因此掉帧，这里放宽到选项表上限，只在真正异常的 >121fps 时才降级。
+    ijkmp_set_option_int(player->native, 4, "max-fps", PURA_MAX_FPS);
+    OH_LOG_Print(LOG_APP, LOG_INFO, 0, "IjkBackend",
+        "playback config queue_mib=%{public}d framedrop=%{public}d max_fps=%{public}d min_packets=200",
+        PURA_PROBE_QUEUE_MIB, PURA_PROBE_FRAMEDROP, PURA_MAX_FPS);
     int id = nextId++;
     std::string identity = "purapily-" + std::to_string(id);
     ijkmp_set_id(player->native, identity.data());
@@ -217,6 +232,8 @@ napi_value Control(napi_env env, napi_callback_info info)
         case 6: return Number(env, ijkmp_get_current_position(player->native));
         case 7: return Number(env, ijkmp_get_duration(player->native));
         case 8: return Number(env, ijkmp_get_property_float(player->native, FFP_PROP_FLOAT_VIDEO_OUTPUT_FRAMES_PER_SECOND, 0));
+        case 13: return Number(env, ijkmp_get_property_float(player->native, FFP_PROP_FLOAT_VIDEO_DECODE_FRAMES_PER_SECOND, 0));
+        case 14: return Number(env, ijkmp_get_property_float(player->native, FFP_PROP_FLOAT_DROP_FRAME_RATE, 0));
         case 9: return Number(env, ijkmp_get_property_float(player->native, FFP_PROP_FLOAT_AVDIFF, 0));
         case 10: return Number(env, ijkmp_get_property_int64(player->native, FFP_PROP_INT64_AUDIO_CACHED_DURATION, 0));
         case 11: return Number(env, ijkmp_get_property_int64(player->native, FFP_PROP_INT64_VIDEO_CACHED_DURATION, 0));

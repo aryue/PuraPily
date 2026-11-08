@@ -14,6 +14,8 @@ export class HighRefreshService {
   private listening: boolean = false;
   private selected: number = 0;
   private applied: number = 0;
+  /** 正在播放的播放器实例：跟随系统时由它们把面板撑在最高可用档。 */
+  private playing: Set<number> = new Set();
   private displayChanged: (id: number) => void = (_id: number): void => {
     if (this.foreground) this.setForeground(true);
   };
@@ -78,11 +80,31 @@ export class HighRefreshService {
     try { this.apply(); } catch (error) { logError('应用高刷请求失败', error); }
   }
 
+  /**
+   * 播放器登记「正在播放」。跟随系统时系统会在无触摸时把面板降回 60Hz，
+   * 所以播放期间必须由应用自己撑住最高可用档；用户手动选了 90/120/144 时档位已常驻，不参与合并。
+   * owner 为播放器实例号：连刷/预览多实例各自登记，退出只移除自己那条。
+   */
+  setPlaybackActive(active: boolean, owner: number): void {
+    const wasActive = this.playing.has(owner);
+    if (active) this.playing.add(owner); else this.playing.delete(owner);
+    // Feed previews start/stop constantly; only a real change is worth a line.
+    if (wasActive !== active) {
+      logInfo(`[HighRefresh] playback active=${active}, owners=${this.playing.size}`);
+    }
+    try { this.apply(); } catch (error) { logError('应用播放高刷失败', error); }
+  }
+
   private apply(): void {
     const supported = this.foreground ? this.supportedRates() : [];
-    const rate = this.foreground && supported.includes(this.selected) ? this.selected : 0;
+    // 跟随系统（0）且正在播放 → 自己请求最高可用档，避免无触摸时掉回 60Hz。
+    const content = this.selected === 0 && this.playing.size > 0 && supported.length > 0
+      ? supported[supported.length - 1] : 0;
+    const wanted = Math.max(this.selected, content);
+    const rate = this.foreground && supported.includes(wanted) ? wanted : 0;
     AppStorage.setOrCreate('highRefreshAvailable', this.selected === 0 || supported.includes(this.selected));
     if (rate === this.applied) return;
+    logInfo(`[HighRefresh] apply selected=${this.selected} playing=${this.playing.size} supported=[${supported.join(',')}] rate=${rate}`);
     const result = highRefresh.setRate(rate);
     // Native failures release the connection; do not retain stale applied state.
     this.applied = result === 0 ? rate : 0;
@@ -92,6 +114,7 @@ export class HighRefreshService {
 
   destroy(): void {
     this.setForeground(false);
+    this.playing.clear();
     if (this.listening) {
       try { display.off('change', this.displayChanged); }
       catch (error) { logError('移除屏幕刷新率监听失败', error); }

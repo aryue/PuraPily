@@ -1,0 +1,18 @@
+--- a/ijkplayer/ff_ffplay.c
++++ b/ijkplayer/ff_ffplay.c
+@@ -1693,6 +1693,15 @@
+             if (delay > 0 && time - is->frame_timer > AV_SYNC_THRESHOLD_MAX)
+                 is->frame_timer = time;
+ 
++            /*
++             * The upstream loop sleeps a whole REFRESH_RATE (10 ms) tick after
++             * every rendered frame, so 120 fps content (8.33 ms per frame) is
++             * serialised to ~10 ms and tops out near 90 fps. Wake exactly on
++             * the next presentation deadline instead; REFRESH_RATE stays as the
++             * idle tick whenever no frame is scheduled.
++             */
++            *remaining_time = FFMIN(*remaining_time, FFMAX(is->frame_timer - time, 0.0));
++
+             SDL_LockMutex(is->pictq.mutex);
+             if (!isnan(vp->pts))
+                 update_video_pts(is, vp->pts, vp->pos, vp->serial);

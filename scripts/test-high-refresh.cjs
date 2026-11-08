@@ -90,6 +90,39 @@ for (const fail of ['native', 'persistence']) {
   t.service.destroy();
 }
 
+// Playback keeps the panel high while "follow system" would otherwise idle at 60Hz.
+{
+  const t = setup(0, [60, 90, 120, 144]);
+  t.service.setForeground(true);
+  assert.deepEqual(t.calls, [], 'follow-system must not request while idle');
+  t.service.setPlaybackActive(true, 1);
+  assert.deepEqual(t.calls, [144], 'playback must hold the highest supported mode');
+  t.service.setPlaybackActive(false, 2);
+  assert.deepEqual(t.calls, [144], 'another player must not release the active playback');
+  t.service.setPlaybackActive(false, 1);
+  assert.deepEqual(t.calls, [144, 0], 'pause must fall back to the system default');
+  t.service.setPlaybackActive(true, 1);
+  assert.deepEqual(t.calls, [144, 0, 144], 'resume must re-hold the mode');
+  t.service.setForeground(false);
+  assert.deepEqual(t.calls, [144, 0, 144, 0], 'background must release');
+  t.service.setForeground(true);
+  assert.deepEqual(t.calls, [144, 0, 144, 0, 144], 'foreground must restore playback');
+  t.service.destroy();
+}
+{
+  const t = setup(90, [60, 90, 120, 144]);
+  t.service.setForeground(true);
+  t.service.setPlaybackActive(true, 1);
+  assert.deepEqual(t.calls, [90], 'an explicit user mode wins over playback');
+  t.service.destroy();
+}
+for (const support of [[60], []]) {
+  const t = setup(0, support);
+  t.service.setForeground(true);
+  t.service.setPlaybackActive(true, 1);
+  assert.deepEqual(t.calls, [], 'playback must not invent a mode the panel lacks');
+  t.service.destroy();
+}
 // Exercise the menu method emitted by CompileArkTS, including dynamic tuples and cancel.
 const compiled = fs.readFileSync(path.join(root, 'entry/build/default/cache/default/default@CompileArkTS/esmodule/debug/entry/src/main/ets/pages/ProfilePage.ts'), 'utf8');
 const start = compiled.indexOf('    private async selectSetting(');

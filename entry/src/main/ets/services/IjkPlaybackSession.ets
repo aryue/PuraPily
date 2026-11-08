@@ -62,6 +62,8 @@ export class IjkPlaybackSession {
       player.native_setup(VideoCodecMode.SURFACE);
       player.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, 'iformat', 'puradual');
       player.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, 'mediacodec-all-videos', '1');
+      // 内核默认 max-fps=31，会把 60/120fps 源按「过高帧率」处理并在软解时丢非参考帧。
+      player.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, 'max-fps', '121');
       player.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, 'enable-accurate-seek', '1');
       player.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, 'start-on-prepared', '0');
       player.setOption(IjkMediaPlayer.OPT_CATEGORY_PLAYER, 'seek-at-start', String(this.resumeMs));

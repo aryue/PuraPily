@@ -8,6 +8,7 @@ import { PlaybackEventBus } from './PlaybackEventBus';
 import { PlayUrlResult } from '../api/BilibiliApi';
 import { selectDashVideo } from '../utils/DashQuality';
 import { PlayerService } from './PlayerService';
+import { HighRefreshService } from './HighRefreshService';
 import { logInfo, logWarn } from '../utils/Logger';
 import native from 'libpurapily_ijk.so';
 
@@ -79,6 +80,19 @@ export class IjkPlaybackPlayer implements PlaybackPlayer {
     this.state = state;
     logInfo('[IJK] state=' + state + ' position=' + this.position);
     this.events.emit('stateChange', state, 1);
+    this.syncRefresh();
+  }
+
+  /**
+   * 播放/暂停时登记到 HighRefreshService：跟随系统时系统会在无触摸时把面板降回 60Hz，
+   * 播放期间由播放器自己撑住最高可用档；用户手动选了档位时以用户设置为准。
+   */
+  private syncRefresh(): void {
+    try {
+      HighRefreshService.getInstance().setPlaybackActive(this.state === 'playing', this.instanceNo);
+    } catch (error) {
+      logWarn('[IJK] 申请播放高刷失败: ' + String(error));
+    }
   }
 
   /** 取第一个可用的备用源；B站 backup_url 通常是同文件的其它 CDN 域名。 */
@@ -215,8 +229,9 @@ export class IjkPlaybackPlayer implements PlaybackPlayer {
       const now = Date.now();
       if (this.state === 'playing' && this.handle && now - lastStats >= 2000) {
         lastStats = now;
-        hilog.info(0, 'PlaybackTraffic', 'playback position=%{public}d raw=%{public}d output_fps=%{public}s avdiff=%{public}s audio_ms=%{public}d video_ms=%{public}d',
+        hilog.info(0, 'PlaybackTraffic', 'playback position=%{public}d raw=%{public}d output_fps=%{public}s decode_fps=%{public}s drop_rate=%{public}s avdiff=%{public}s audio_ms=%{public}d video_ms=%{public}d',
           this.currentTime, native.controlPlayer(this.handle, 6, 0), native.controlPlayer(this.handle, 8, 0).toFixed(2),
+          native.controlPlayer(this.handle, 13, 0).toFixed(2), native.controlPlayer(this.handle, 14, 0).toFixed(3),
           native.controlPlayer(this.handle, 9, 0).toFixed(3), native.controlPlayer(this.handle, 10, 0), native.controlPlayer(this.handle, 11, 0));
       }
     }, 200);
