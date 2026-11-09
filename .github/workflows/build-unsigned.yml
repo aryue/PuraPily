@@ -50,6 +50,10 @@ on:
         description: "构建后创建 / 更新 Release（推送 tag 时总会发布）"
         type: boolean
         default: false
+      notes:
+        description: "Release 说明（留空则用 tag 的 message，再没有就自动生成）"
+        type: string
+        required: false
 
 concurrency:
   group: unsigned-${{ github.ref }}
@@ -357,6 +361,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/') || inputs.publish == true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MANUAL_NOTES: ${{ inputs.notes }}
         run: |
           set -euo pipefail
           VERSION_NAME="${{ steps.collect.outputs.version_name }}"
@@ -369,23 +374,49 @@ jobs:
           fi
           TITLE="PuraPily ${VERSION_NAME} (${VERSION_CODE}) 未签名包"
 
+          # 说明来源优先级：手动输入 > annotated tag 的 message > 空
+          TAG_NOTES=""
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            git fetch --tags --force --quiet origin 2>/dev/null || true
+            if [ "$(git cat-file -t "refs/tags/${TAG}" 2>/dev/null || echo none)" = "tag" ]; then
+              # 直接读 tag 对象再跳过 object/type/tag/tagger 那段头部，
+              # 比 for-each-ref 的 %(contents) 更少踩格式细节。
+              TAG_NOTES="$(git cat-file -p "refs/tags/${TAG}" | sed '1,/^$/d')"
+            else
+              echo "::warning::${TAG} 是轻量 tag，没有说明。用 git tag -a --cleanup=verbatim 才会把 message 带到 Release"
+            fi
+          fi
+
+          BODY="${MANUAL_NOTES}"
+          if [ -z "${BODY}" ]; then BODY="${TAG_NOTES}"; fi
+
           {
-            echo "## PuraPily ${VERSION_NAME} (${VERSION_CODE})"
-            echo ""
-            echo "- 构建模式：\`${BUILD_MODE}\`"
-            echo "- 提交：\`${GITHUB_SHA:0:7}\`"
-            echo "- 目标 SDK：\`26.0.0\`"
+            if [ -n "${BODY}" ]; then
+              printf '%s\n\n' "${BODY}"
+              echo "---"
+              echo ""
+            fi
+            echo "| 项 | 值 |"
+            echo "| --- | --- |"
+            echo "| 版本 | ${VERSION_NAME} (${VERSION_CODE}) |"
+            echo "| 构建模式 | \`${BUILD_MODE}\` |"
+            echo "| 产物 | \`${{ steps.collect.outputs.hap_name }}\` |"
+            echo "| 提交 | \`${GITHUB_SHA:0:7}\` |"
             echo ""
             echo "> ⚠️ 本包**未签名**，仅供调试与自签名流程使用，无法直接安装到设备。"
             echo ""
-            echo "### 最近提交"
+            echo "<details><summary>最近提交</summary>"
             echo ""
             git log --oneline -10
+            echo ""
+            echo "</details>"
           } > /tmp/release-notes.md
 
           if gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
-            echo "Release ${TAG} 已存在，覆盖上传"
+            echo "Release ${TAG} 已存在，覆盖产物并刷新说明"
             gh release upload "${TAG}" dist/* --repo "${GITHUB_REPOSITORY}" --clobber
+            gh release edit "${TAG}" --repo "${GITHUB_REPOSITORY}" \
+              --title "${TITLE}" --notes-file /tmp/release-notes.md
           else
             gh release create "${TAG}" dist/* \
               --repo "${GITHUB_REPOSITORY}" \
