@@ -8,7 +8,8 @@
  * ③ 弹幕样式「A」在 TextInput 之后（右侧），id 与设置面板不丢；
  * ④ 占位色改走评论页同款 color_player_text_secondary 资源；
  * ⑤ 其它播放布局的弹幕输入入口不再用 refractive:false 平涂底；
- * ⑥ 输入态外面不再套一层圆角玻璃面板：宿主材质只在「A」展开设置时挂载。
+ * ⑥ 原生玻璃保留：宿主 NativeComposerSurface 只在「A」展开设置时挂载，收起态没有外框；
+ * ⑦ 字号/位置选项走独立组件 + @Prop selected，@State 变化能刷新选中态。
  */
 const fs = require('node:fs');
 const path = require('node:path');
@@ -84,14 +85,36 @@ assert.equal((playerSrc.match(/NativeGlassInput\(\{ inputHeight: (28|34) \}\)/g)
 assert.ok(playerSrc.includes(".fontColor($r('app.color.color_player_text_secondary'))"),
   'portrait tab entry uses the same secondary foreground');
 
-// ---- ⑥ 收起态不套外层玻璃面板 ----
+// ---- ⑥ 原生玻璃保留，收起态不挂外层面板 ----
+// Navigation title 作用域是本项目挂 systemMaterial 的通道，不能删；
+// 用 active 条件挂载即可做到「收起只有胶囊、展开才有玻璃面板」。
 const playerCompiled = compiled('pages/VideoPlayerPage');
 assert.ok(/allCorners: true, active: this\.dmComposerSettings/.test(playerCompiled),
-  'host panel material must only mount while style settings are expanded');
+  'native glass panel mounts only while style settings are expanded');
+assert.ok(!playerSrc.includes('danmakuComposerBackdrop'),
+  'glass must not be replaced by a flat opaque backdrop');
 assert.ok(/Column\.clip\(this\.dmComposerSettings\)/.test(playerCompiled) &&
   /Scroll\.clip\(this\.dmComposerSettings\)/.test(playerCompiled),
-  'closed capsule must not be clipped by an outer frame');
+  'closed capsule is not clipped by an outer frame');
 assert.ok(barSrc.includes('NativeComposerSurface({ active: this.materialEnabled && this.settings })'),
-  'editor component also drops its own panel while collapsed');
+  'editor keeps its own optional glass scope for reuse');
 
-console.log('PASS: danmaku input matches the comment capsule (40vp, no send button, A on the right, no outer frame); all player entries share the capsule material.');
+// ---- ⑦ 设置选项用 @Prop 刷新选中态 ----
+assert.ok(/@Prop selected: boolean = false/.test(barSrc) &&
+  /struct DanmakuOption/.test(barSrc), 'style options are a component with @Prop selected');
+assert.ok(!/@Builder\s+option\(/.test(barSrc),
+  '@Builder value params do not refresh when @State changes');
+assert.ok(/selected: this\.fontSize === 25/.test(barSrc) &&
+  /selected: this\.fontSize === 18/.test(barSrc) &&
+  /selected: this\.mode === mode/.test(barSrc),
+  'font size and position options read @State directly');
+assert.ok(barSrc.includes("this.selected ? ' 已选中' : ' 未选中'"),
+  'accessibility text exposes the selected state');
+assert.ok(/class DanmakuOption extends ViewPU/.test(bar) &&
+  /this\.__selected\.reset\(params\.selected\)/.test(bar),
+  'compiled @Prop is re-synced when the parent state changes');
+assert.ok(/Button\.fontColor\(this\.selected \? '#FB7299' : '#92969D'\)/.test(bar) &&
+  /Button\.border\(\{ width: 1, color: this\.selected \? '#FB7299' : '#646970' \}\)/.test(bar),
+  'compiled component re-applies the selected colour on @Prop change');
+
+console.log('PASS: danmaku input matches the comment capsule (40vp, no send button, A on the right, no outer frame); style options refresh via @Prop; all player entries share the capsule material.');

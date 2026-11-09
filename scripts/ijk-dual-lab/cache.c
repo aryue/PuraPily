@@ -64,6 +64,8 @@ typedef struct {
     int slow_source;
     int64_t net_pos;
     int net_fresh;               // 刚从预热接管、还没成功读过：首次读到 0 要重开一次
+    int short_block;             // 正在修复的短块索引（-1 无）
+    int short_retries;           // 该短块连续修复次数，封顶 2 次避免反复回源
     char *url;                  // 当前生效的源（base 或 failover 后的 backup）
     char *backup_url;           // 备用源，可为空
     int using_backup;           // 只切一次，避免来回抖动
@@ -476,7 +478,20 @@ static int read_net(CacheCtx *ctx, uint8_t *buf, int size)
         if (n > 0) { ctx->net_pos += n; ctx->net_fresh = 0; return n; }
         if (n == AVERROR_EXIT || (ctx->ic.callback && ctx->ic.callback(ctx->ic.opaque))) return AVERROR_EXIT;
         int premature_eof = (n == 0 || n == AVERROR_EOF) && ctx->total > 0 && ctx->net_pos < ctx->total;
-        if ((n == 0 || n == AVERROR_EOF) && !premature_eof) return n;
+        if ((n == 0 || n == AVERROR_EOF) && !premature_eof) {
+            // 预热接管的连接第一次读到 0 不能当真 EOF：它可能只带到了预热
+            // 切片的位置。原位置重开一次真实回源再判定，最多一次，避免循环。
+            if (ctx->net_fresh && attempt == 0) {
+                int64_t at = ctx->net_pos;
+                ctx->net_fresh = 0;
+                OH_LOG_Print(LOG_APP, LOG_WARN, 0, "Cache",
+                    "adopted connection EOF at=%{public}lld, reopen once", (long long)at);
+                avio_closep(&ctx->net);
+                if (ensure_net(ctx, at)) continue;
+                return AVERROR(EIO);
+            }
+            return n;
+        }
         if (attempt >= 2) return premature_eof ? AVERROR(EIO) : n;
         int64_t at = ctx->net_pos;
         OH_LOG_Print(LOG_APP, LOG_WARN, 0, "Cache",
@@ -619,6 +634,36 @@ static int cache_read(void *opaque, uint8_t *buf, int size)
             if (have == 0) return filled > 0 ? filled : AVERROR_EOF;
         }
         if (off >= (int)have) {
+            // 短块只有正好落在流尾才是真 EOF。断流或旧 total 留下的半块会被
+            // 段表长期保存，直接报 EOF 会让视频轨先结束而音频继续（有声无画），
+            // 且下一次打开同一缓存仍复发。作废该块、复核长度后回源补齐。
+            int64_t block_start = (int64_t)block * CACHE_BLOCK;
+            int64_t block_end = block_start + (int64_t)have;
+            int short_block = have > 0 && (int)have < CACHE_BLOCK;
+            if (short_block && (ctx->total <= 0 || ctx->total > block_end)) {
+                if (ctx->short_block != block) {
+                    ctx->short_block = block;
+                    ctx->short_retries = 0;
+                }
+                if (ctx->short_retries < 2) {
+                    ctx->short_retries++;
+                    // 强制重开连接：ensure_net 会用播放期响应的 Content-Range
+                    // 纠正段表里偏小的 total，fetch_block 才能读满这一块。
+                    if (ctx->net) avio_closep(&ctx->net);
+                    AVIOContext *net = ensure_net(ctx, block_start);
+                    if (net && ctx->total > block_end) {
+                        OH_LOG_Print(LOG_APP, LOG_WARN, 0, "Cache",
+                            "short block=%{public}d have=%{public}u total=%{public}lld, refetch",
+                            block, have, (long long)ctx->total);
+                        ctx->lens[block] = 0;
+                        ctx->checksums[block] = 0;
+                        ctx->dirty = 1;
+                        continue;
+                    }
+                }
+            }
+            // 修复次数用尽后保留 short_block 标记：demuxer 若在同一位置重试，
+            // 直接判 EOF，不要每轮都重开连接。
             // 已到该块的有效末尾（通常是文件尾）。
             return filled > 0 ? filled : AVERROR_EOF;
         }
@@ -637,8 +682,15 @@ static int cache_read(void *opaque, uint8_t *buf, int size)
             checked = pread(ctx->fd, ctx->block_buf, have, (off_t)block * CACHE_BLOCK);
             if (checked != have || block_checksum(ctx->block_buf, have) != ctx->checksums[block])
                 return filled > 0 ? filled : AVERROR(EIO);
-            if (off >= (int)have) return filled > 0 ? filled : AVERROR_EOF;
+            if (off >= (int)have) {
+                // 补块仍是半块：交回主循环的统一短块修复路径，别在这里报 EOF。
+                ctx->lens[block] = 0;
+                ctx->checksums[block] = 0;
+                ctx->dirty = 1;
+                continue;
+            }
         }
+        ctx->short_block = -1;
         int want = (int)have - off;
         if (want > size - filled) want = size - filled;
         memcpy(buf + filled, ctx->block_buf + off, (size_t)want);
@@ -701,6 +753,7 @@ AVIOContext *purapily_cache_open(const char *url, const char *backup, const char
         if (!ctx->block_buf) { close(fd); close(idx_fd); av_free(ctx); return NULL; }
     }
     ctx->total = -1;
+    ctx->short_block = -1;
     if (ic) ctx->ic = *ic;
     copy_str(&ctx->url, url);
     copy_str(&ctx->backup_url, backup);

@@ -1,0 +1,83 @@
+diff --git a/ijkplayer/ff_ffplay.c b/ijkplayer/ff_ffplay.c
+--- a/ijkplayer/ff_ffplay.c
++++ b/ijkplayer/ff_ffplay.c
+@@ -3328,6 +3328,25 @@
+     return strstr(codec->name, "_ohcodec") != NULL;
+ }
+ 
++/* Fallback only: the x86_64 emulator has no hardware video decoder, so
++ * OH_AVCodec_GetCapabilityByCategory(HARDWARE) fails and the forced
++ * *_ohcodec decoder cannot open. Prefer FFmpeg's built-in decoder by its
++ * canonical name, then any non-ohcodec decoder with the same id. Never used
++ * when the hardware path opens successfully. */
++static const AVCodec *ffp_find_sw_vdec(enum AVCodecID codec_id)
++{
++    const AVCodec *codec = avcodec_find_decoder_by_name(avcodec_get_name(codec_id));
++    if (codec && !ff_codec_is_ohcodec_vdec(codec))
++        return codec;
++    void *iter = NULL;
++    while ((codec = av_codec_iterate(&iter))) {
++        if (av_codec_is_decoder(codec) && codec->id == codec_id &&
++            !ff_codec_is_ohcodec_vdec(codec))
++            return codec;
++    }
++    return NULL;
++}
++
+ typedef struct {
+     int ff_val;
+     int oh_val;
+@@ -3602,9 +3621,50 @@
+                 goto fail;
+         }
+     if ((ret = avcodec_open2(avctx, codec, &opts)) < 0) {
+-        av_log(ffp, AV_LOG_ERROR, "stream_component_open: avcodec_open2 failed for codec %s, ret=%d\n",
+-               avcodec_get_name(avctx->codec_id), ret);
+-        goto fail;
++        /* Video component open failure is tolerated by read_thread (only a
++         * total audio+video failure is fatal), so without a retry the user
++         * gets audio with a permanently black screen. Rebuild a clean context:
++         * ff_ohcodec_try_setup_surface_hw_device attached hw_device_ctx and
++         * get_format, both of which must not leak into the software path. */
++        enum AVCodecID failed_id = avctx->codec_id;
++        if (avctx->codec_type == AVMEDIA_TYPE_VIDEO && ff_codec_is_ohcodec_vdec(codec)) {
++            int hw_ret = ret;
++            const AVCodec *sw = ffp_find_sw_vdec(failed_id);
++            av_log(ffp, AV_LOG_WARNING,
++                   "stream_component_open: %s failed (%d), software fallback %s\n",
++                   codec->name, hw_ret, sw ? sw->name : "unavailable");
++            if (sw) {
++                av_dict_free(&opts);
++                opts = NULL;
++                avcodec_free_context(&avctx);
++                avctx = avcodec_alloc_context3(NULL);
++                if (!avctx) { ret = AVERROR(ENOMEM); goto fail; }
++                ret = avcodec_parameters_to_context(avctx, ic->streams[stream_index]->codecpar);
++                if (ret < 0) goto fail;
++                avctx->pkt_timebase = ic->streams[stream_index]->time_base;
++                avctx->codec_id = sw->id;
++                avctx->lowres = stream_lowres;
++                if (ffp->fast)
++                    avctx->flags2 |= AV_CODEC_FLAG2_FAST;
++                codec = sw;
++                opts = filter_codec_opts(ffp->codec_opts, avctx->codec_id, ic,
++                                         ic->streams[stream_index], codec);
++                if (!av_dict_get(opts, "threads", NULL, 0))
++                    av_dict_set(&opts, "threads", "auto", 0);
++                if (stream_lowres)
++                    av_dict_set_int(&opts, "lowres", stream_lowres, 0);
++                av_dict_set(&opts, "refcounted_frames", "1", 0);
++                ret = avcodec_open2(avctx, codec, &opts);
++            } else {
++                ret = hw_ret;
++            }
++        }
++        if (ret < 0) {
++            av_log(ffp, AV_LOG_ERROR,
++                   "stream_component_open: avcodec_open2 failed for codec %s, ret=%d\n",
++                   avcodec_get_name(failed_id), ret);
++            goto fail;
++        }
+     }
+     av_log(ffp, AV_LOG_INFO, "stream_component_open: avcodec_open2 success, codec=%s, width=%d, height=%d, "
+            "sample_rate=%d\n", avcodec_get_name(avctx->codec_id),

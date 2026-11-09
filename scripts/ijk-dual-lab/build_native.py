@@ -27,17 +27,26 @@ def run(*args, cwd=None):
 
 
 def apply_kernel_patches(cpp_root):
-    """Apply kernel/patches/*.{patch,diff} to the ijkplayer sources; skip applied ones."""
+    """Apply kernel/patches/*.{patch,diff} to the ijkplayer sources; skip applied ones.
+
+    Patch paths are relative to cpp_root (e.g. ijkplayer/ff_ffplay.c), while
+    git apply resolves them against the repository root and silently skips any
+    path outside the current subdirectory. Invoke it at the repo root with
+    --directory pointing at cpp_root, otherwise every patch is a silent no-op.
+    """
+    repo_root = subprocess.check_output(
+        ['git', 'rev-parse', '--show-toplevel'], cwd=cpp_root, text=True).strip()
+    prefix = cpp_root.resolve().relative_to(Path(repo_root).resolve()).as_posix()
     patches = sorted((SOURCE / 'kernel/patches').glob('*.patch'))
     patches += sorted((SOURCE / 'kernel/patches').glob('*.diff'))
     for patch in patches:
         applied = subprocess.run(
-            ['git', 'apply', '--reverse', '--check', '-p1', str(patch)],
-            cwd=cpp_root, capture_output=True)
+            ['git', 'apply', '--directory', prefix, '--reverse', '--check',
+             '-p1', str(patch)], cwd=repo_root, capture_output=True)
         if applied.returncode == 0:
             print(f'patch already applied: {patch.name}')
             continue
-        run('git', 'apply', '-p1', patch, cwd=cpp_root)
+        run('git', 'apply', '--directory', prefix, '-p1', patch, cwd=repo_root)
         print(f'patch applied: {patch.name}')
 
 

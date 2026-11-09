@@ -2,6 +2,27 @@ import { NativeComposerSurface } from './NativeComposerSurface';
 import { NativeGlassInput } from './NativeGlassInput';
 import { CommentInputBarCtrl } from './CommentInputBar';
 
+/**
+ * 样式选项必须走独立组件 + @Prop。
+ * 用 @Builder 的普通值参数传 selected 时，@State 变化不会让 Builder 重新求值，
+ * 点击有回调但选中态（文字/边框色）不刷新，表现成「选不了」（2026-11-09 实测）。
+ */
+@Component
+struct DanmakuOption {
+  @Prop label: string = '';
+  @Prop selected: boolean = false;
+  action: () => void = () => {};
+
+  build() {
+    Button(this.label).fontSize(14).height(34).padding({ left: 12, right: 12 })
+      .fontColor(this.selected ? '#FB7299' : '#92969D')
+      .backgroundColor(Color.Transparent).borderRadius(6)
+      .border({ width: 1, color: this.selected ? '#FB7299' : '#646970' })
+      .accessibilityText(this.label + (this.selected ? ' 已选中' : ' 未选中'))
+      .onClick(() => this.action())
+  }
+}
+
 /** 弹幕输入与样式选择共用一份草稿，切换键盘不会重建输入框。 */
 @Component
 export struct DanmakuInputBar {
@@ -61,17 +82,9 @@ export struct DanmakuInputBar {
     }
   }
 
-  @Builder
-  option(label: string, selected: boolean, action: () => void) {
-    Button(label).fontSize(14).height(34).padding({ left: 12, right: 12 })
-      .fontColor(selected ? '#FB7299' : '#92969D')
-      .backgroundColor(Color.Transparent).borderRadius(6)
-      .border({ width: 1, color: selected ? '#FB7299' : '#646970' })
-      .onClick(action)
-  }
-
   build() {
-    // 收起态是单层胶囊，不额外套面板；设置展开才需要底板承载选项。
+    // 组件被独立复用时仍可挂原生玻璃底板；播放页由宿主提供，传 materialEnabled:false。
+    // 收起态不挂，避免胶囊外面多一层框。
     NativeComposerSurface({ active: this.materialEnabled && this.settings }) {
     Column() {
       // 与评论页「发条评论吧」输入胶囊同款：单层 capsule 原生玻璃、40vp 全圆角，
@@ -104,15 +117,17 @@ export struct DanmakuInputBar {
       Column({ space: 22 }) {
         Row({ space: 18 }) {
           Text('字体大小').width(64).fontSize(13).fontColor('#92969D')
-          this.option('A 默认', this.fontSize === 25, () => { this.fontSize = 25; })
-          this.option('A 较小', this.fontSize === 18, () => { this.fontSize = 18; })
+          DanmakuOption({ label: 'A 默认', selected: this.fontSize === 25,
+            action: () => { this.fontSize = 25; } })
+          DanmakuOption({ label: 'A 较小', selected: this.fontSize === 18,
+            action: () => { this.fontSize = 18; } })
         }.width('100%')
         Row({ space: 18 }) {
           Text('弹幕位置').width(64).fontSize(13).fontColor('#92969D')
           ForEach([1, 5, 4], (mode: number) => {
-            this.option(mode === 1 ? '滚动' : mode === 5 ? '顶部' : '底部', this.mode === mode,
-              () => { this.mode = mode; })
-          })
+            DanmakuOption({ label: mode === 1 ? '滚动' : mode === 5 ? '顶部' : '底部',
+              selected: this.mode === mode, action: () => { this.mode = mode; } })
+          }, (mode: number) => mode.toString())
         }.width('100%')
         Row({ space: 18 }) {
           Text('弹幕颜色').width(64).fontSize(13).fontColor('#92969D')

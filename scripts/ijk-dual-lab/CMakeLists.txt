@@ -61,4 +61,4 @@ target_include_directories(ijksdl PRIVATE "${IJK_SOURCE}/ijksdl" "${IJK_SOURCE}/
 target_compile_definitions(ijksdl PRIVATE OHOS_PLATFORM)
 target_compile_options(ijksdl PRIVATE -Wno-incompatible-pointer-types -Wno-int-conversion -Wno-unused-variable)
 target_link_directories(ijksdl PRIVATE "${SDL_BASE}" "${ORIGINAL_LIBS}")
-target_link_libraries(ijksdl PRIVATE EGL GLESv3 hilog_ndk.z native_window deviceinfo_ndk.z ohaudio avcodec avformat avutil swscale swresample z m)
+target_link_libraries(ijksdl PRIVATE EGL GLESv3 hilog_ndk.z native_window native_media_vdec deviceinfo_ndk.z ohaudio avcodec avformat avutil swscale swresample z m)

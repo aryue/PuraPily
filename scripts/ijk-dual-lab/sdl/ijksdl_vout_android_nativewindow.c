@@ -35,11 +35,64 @@
 #include <syslog.h>
 #include "ijksdl_vout_overlay_ohos_avcodec.h"
 #include "libavcodec/ohdec_external.h"
+#include <stddef.h>
+/* ijksdl headers pull in <syslog.h>, whose LOG_DEBUG/LOG_INFO macros collide
+ * with the LogLevel enum in hilog/log.h. Undefine them locally before including
+ * the OH logging header. */
+#ifdef LOG_DEBUG
+#undef LOG_DEBUG
+#endif
+#ifdef LOG_INFO
+#undef LOG_INFO
+#endif
+#ifdef LOG_WARN
+#undef LOG_WARN
+#endif
+#ifdef LOG_ERROR
+#undef LOG_ERROR
+#endif
+#ifdef LOG_FATAL
+#undef LOG_FATAL
+#endif
+#include <hilog/log.h>
+#include <multimedia/player_framework/native_avcodec_videodecoder.h>
+
+/* ijksdl's LOGI/ALOGW go through ohos_log_print(), which is gated by
+ * OHOS_LOG_ON (false in shipped builds). These two lines must stay observable
+ * to tell a real surface rebind from a lucky cold start. */
+#define PURA_REBIND_LOG(level, msg) \
+    OH_LOG_Print(LOG_APP, level, 0, "PuraRebind", msg)
 
 #ifndef AMCTRACE
 #define AMCTRACE(...)
 #endif
 
+/*
+ * PuraPily: mirror the two private prefix layouts needed to reach the live
+ * OH_AVCodec handle. ohdec.c binds its output surface exactly once, in
+ * oh_decode_set_format() at avcodec_open2(); ijkmp_android_set_surface()
+ * afterwards only swaps the vout/pipeline pointers, so the decoder keeps
+ * presenting into the old (often hidden warm-pool) window while audio plays.
+ * OH_VideoDecoder_SetSurface() is legal in the executing state, so we mirror
+ * the current vout window onto the decoder right before each rendered frame.
+ *
+ * OHCodecBuffer/AVBufferRef prefixes come from libavcodec/ohcodec.h in the
+ * pinned ohos-ffmpeg revision (build_native.py). Verified against the shipped
+ * libavcodec.so: av_ohcodec_release_buffer() reads dec_ref at +0x10 and
+ * dec_ref->data at +0x8. Keep the asserts so a source/ABI mismatch fails the
+ * build instead of handing a bogus pointer to the codec.
+ */
+typedef struct PuraOHCodecBufferHead {
+    uint32_t index;
+    void    *buffer;
+    void    *dec_ref;
+} PuraOHCodecBufferHead;
+typedef struct PuraAVBufferRefHead {
+    void    *buffer;
+    void    *data;
+} PuraAVBufferRefHead;
+_Static_assert(offsetof(PuraOHCodecBufferHead, dec_ref) == 16, "OHCodecBuffer prefix mismatch");
+_Static_assert(offsetof(PuraAVBufferRefHead, data) == 8, "AVBufferRef prefix mismatch");
 
 typedef struct SDL_Vout_Opaque {
     EGLNativeWindowType   * native_window;
@@ -52,6 +105,13 @@ typedef struct SDL_Vout_Opaque {
 
     IJK_EGL         * egl;
     SDL_VoutOhos_ReleaseOutputFunc ohos_release_output;
+    /* Last (decoder, window) pair seen on the render path. */
+    void            *bound_ohcodec_dec;
+    void            *bound_ohcodec_window;
+    /* Set when the window is handed off to a different surface. */
+    int              window_set_count;
+    int              surface_rebind_pending;
+    int              rebind_warned;
 } SDL_Vout_Opaque;
 
 struct SDL_OhosAVCodecBufferProxy {
@@ -215,6 +275,10 @@ SDL_Vout * SDL_VoutAndroid_CreateForANativeWindow()
 
     SDL_Vout_Opaque * opaque = vout->opaque;
     opaque->native_window = NULL;
+    opaque->bound_ohcodec_dec = NULL;
+    opaque->bound_ohcodec_window = NULL;
+    opaque->window_set_count = 0;
+    opaque->surface_rebind_pending = 0;
     if (ISDL_Array__init(&opaque->overlay_manager, 32))
         goto fail;
     if (ISDL_Array__init(&opaque->overlay_pool, 32))
@@ -256,6 +320,15 @@ static void SDL_VoutAndroid_SetNativeWindow_l(SDL_Vout * vout, struct EGLNativeW
 //    if (native_window)
 //    //ANativeWindow_acquire(native_window);
 //        NativeLayerHandle(native_window, ACQUIRE_REF);
+    /* Window handoff (warm-pool adoption, second feed surface, PiP restore).
+     * The OH decoder is still bound to the previous window; flag the render
+     * thread to mirror it before the next frame is presented. The first
+     * assignment happens before avcodec_open2 on a cold start, so it needs no
+     * rebind; every later non-null assignment does (including A->NULL->B). */
+    if (native_window && (void *)opaque->native_window != (void *)native_window) {
+        opaque->window_set_count++;
+        if (opaque->window_set_count > 1) opaque->surface_rebind_pending = 1;
+    }
     opaque->native_window = native_window;
     opaque->null_native_window_warned = 0;
 }
@@ -311,6 +384,54 @@ SDL_OhosAVCodecBufferProxy *SDL_VoutOhos_obtainOhCodecBufferProxy(AVOHCodecBuffe
     return proxy;
 }
 
+/*
+ * Called with vout->mutex held, on the render thread, immediately before the
+ * frame is presented (OH_VideoDecoder_RenderOutputBuffer). A failed rebind is
+ * not fatal: keep the old binding and retry on the next frame.
+ */
+static void SDL_VoutOhos_rebindSurface_l(SDL_Vout *vout, AVOHCodecBuffer *buf)
+{
+    SDL_Vout_Opaque *opaque = vout ? vout->opaque : NULL;
+    PuraOHCodecBufferHead *head;
+    PuraAVBufferRefHead *ref;
+    void *dec;
+    void *window;
+
+    if (!opaque || !buf || !opaque->native_window) return;
+    head = (PuraOHCodecBufferHead *)buf;
+    ref = (PuraAVBufferRefHead *)head->dec_ref;
+    if (!ref || !ref->data) return;
+    dec = ref->data;
+    window = (void *)opaque->native_window;
+    if (!opaque->surface_rebind_pending) {
+        /* Cold start: ohdec already called SetSurface at avcodec_open2 with
+         * this exact window. Only remember the decoder; leave the original
+         * render path completely untouched (no extra API call per frame). */
+        opaque->bound_ohcodec_dec = dec;
+        opaque->bound_ohcodec_window = window;
+        return;
+    }
+    if (opaque->bound_ohcodec_dec == dec &&
+        opaque->bound_ohcodec_window == window) {
+        opaque->surface_rebind_pending = 0;
+        return;
+    }
+    /* AV_ERR_OK == 0. A failure keeps pending set so the next frame retries. */
+    if (OH_VideoDecoder_SetSurface((OH_AVCodec *)dec,
+                                   (OHNativeWindow *)window) != 0) {
+        if (!opaque->rebind_warned) {
+            opaque->rebind_warned = 1;
+            PURA_REBIND_LOG(LOG_WARN, "OH_VideoDecoder_SetSurface failed, retry next frame");
+        }
+        return;
+    }
+    opaque->bound_ohcodec_dec = dec;
+    opaque->bound_ohcodec_window = window;
+    opaque->surface_rebind_pending = 0;
+    opaque->rebind_warned = 0;
+    PURA_REBIND_LOG(LOG_INFO, "ohcodec output surface rebound");
+}
+
 int SDL_VoutOhos_releaseBufferProxyP_l(SDL_Vout *vout, SDL_OhosAVCodecBufferProxy **proxy, bool render)
 {
     SDL_Vout_Opaque *opaque;
@@ -321,6 +442,7 @@ int SDL_VoutOhos_releaseBufferProxyP_l(SDL_Vout *vout, SDL_OhosAVCodecBufferProx
     }
     opaque = vout->opaque;
     if ((*proxy)->ohcodec_buf) {
+        if (render) SDL_VoutOhos_rebindSurface_l(vout, (*proxy)->ohcodec_buf);
         ret = av_ohcodec_release_buffer((*proxy)->ohcodec_buf, render ? 1 : 0);
     } else if (opaque->ohos_release_output) {
         ret = opaque->ohos_release_output((*proxy)->decoder, (*proxy)->buffer_index, render ? 1 : 0);

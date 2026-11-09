@@ -2749,8 +2749,8 @@ struct VideoPlayerPage {
       Column().width('100%').height('100%').backgroundColor('#66000000')
         .onClick(() => { this.showDanmakuSheet = false; })
       Column() {
-        // 输入态只保留评论页同款的一枚胶囊，外面不再套圆角玻璃框；
-        // 只有「A」展开样式设置时才需要这块面板承载字号/位置/颜色。
+        // 玻璃底板仍走 NativeComposerSurface 的原生 Navigation 作用域（panel 配方）。
+        // 只在「A」展开样式设置时挂载：收起态就只剩评论页同款的一枚胶囊，外面没有框。
         NativeComposerSurface({ allCorners: true, active: this.dmComposerSettings }) {
           Scroll() { this.dmSheetContent() }
             .width('100%').height(this.landscapeDanmakuComposerHeight())
@@ -11564,6 +11564,9 @@ struct VideoPlayerPage {
   }
 
   private referenceDetailAreaHeight(): number {
+    // ⚠️ 这个下限不能拆：它保证播放区高度 >= 16:9 区域高度，
+    //    从而 referenceMediaWidth = min(cw, areaH*ar) 对 16:9 恒等于 cw。
+    //    拆掉后 16:9 会被算成窄画面，出现「两侧黑边」的稳态（真机反馈）。
     return Math.max(this.cw * 9 / 16, this.referenceDetailBaseHeight() + this.referencePanelOffset);
   }
 
@@ -12575,16 +12578,20 @@ struct VideoPlayerPage {
       }
     }
     if (!this.referencePanelBodyCanDrag) return;
-    if (e.type === TouchType.Move && Math.abs(dy) > 10) {
+    // ⭐ 唯一保留的修复：方向判定的 |dy|>10 死区不再套到写入阶段。
+    //    按住正文区来回移动、边界回到触摸前高度 x 时 |dy| 会落回 10 以内，
+    //    旧逻辑那几帧不写 offset，穿过死区后一次性写 startOffset+dy → 跳变。
+    //    方向已由 referencePanelBodyDirection 锁定，之后每帧按绝对映射写入。
+    if (e.type === TouchType.Move) {
       const proposed = this.referencePanelBodyStartOffset + dy;
       // 评论只从当前尺寸向上收缩，反向可跟手回到起点，触顶下拉保留刷新。
       this.referencePanelOffset = this.referencePanelDragOffset(comments
         ? Math.min(this.referencePanelBodyStartOffset, proposed) : proposed);
     } else if (e.type === TouchType.Up) {
       if (!comments && dy > 90 && this.referencePanelBodyStartOffset >= -20) this.referenceSetFeed(true);
-      else {
-        const target = this.referencePanelOffset < -40 || dy < -45 ? this.referenceMinimumPanelOffset() : 0;
-        this.getUIContext().animateTo({ duration: 240, curve: Curve.EaseOut }, () => { this.referencePanelOffset = target; });
+      else if (this.referencePanelOffset > 0) {
+        // 与把手 onActionEnd 同口径：下拉回起点，上推保持无级。
+        this.getUIContext().animateTo({ duration: 240, curve: Curve.EaseOut }, () => { this.referencePanelOffset = 0; });
       }
       this.referencePanelBodyCanDrag = false;
     } else if (e.type === TouchType.Cancel) {
@@ -13677,11 +13684,15 @@ struct VideoPlayerPage {
                     if (event.offsetY > 80 || (event.offsetY > 30 && event.velocityY > 850)) this.referenceSetFeedComments(false);
                     return;
                   }
-                  if (this.referencePanelOffset > 90 || (event.offsetY > 45 && event.velocityY > 850)) { this.referenceSetFeed(true); }
-                  else {
-                    const target = this.referencePanelOffset < -40 || (event.offsetY < -30 && event.velocityY < -850) ? this.referenceMinimumPanelOffset() : 0;
-                    this.getUIContext().animateTo({ duration: 240, curve: Curve.EaseOut }, () => { this.referencePanelOffset = target; });
+                  if (this.referencePanelOffset > 90 || (event.offsetY > 45 && event.velocityY > 850)) {
+                    this.referenceSetFeed(true);
+                  } else if (this.referencePanelOffset > 0) {
+                    // 下拉是「进连刷」手势通道，没到阈值就回起点；否则 16:9 会停在
+                    // 「区域变高、画面不放大」的大黑边中间态。
+                    this.getUIContext().animateTo({ duration: 240, curve: Curve.EaseOut }, () => { this.referencePanelOffset = 0; });
                   }
+                  // 上推方向保持手指松开时的比例（无级），不再吸附到 0 / 最小两档。
+                  // 进连刷由 referenceSetFeed 收尾归零，取消手势仍回 referencePanelStart。
                 })
                 .onActionCancel(() => {
                   if (this.isLs) return;
