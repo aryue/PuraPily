@@ -10,7 +10,8 @@ function method(name) {
 }
 const context = { Visibility: { Visible: 0, Hidden: 1 }, Curve: { EaseOut: 0 } };
 vm.runInNewContext(ts.transpileModule('class Subject {' + method('referenceAnimateMenu') +
-  method('referenceMenuVisibility') + '} globalThis.subject = new Subject();', {
+  method('referenceMenuVisibility') + method('referenceRestoreProgressUi') +
+  '} globalThis.subject = new Subject();', {
   compilerOptions: { target: ts.ScriptTarget.ES2020 }
 }).outputText, context);
 const s = context.subject, finishes = [];

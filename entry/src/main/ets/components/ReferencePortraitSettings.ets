@@ -187,7 +187,9 @@ export struct ReferencePortraitSettings {
 
   private showSettings(show: boolean): void {
     this.choiceMenuVisible = false;
-    this.getUIContext().animateTo({ duration: 220, curve: Curve.EaseOut }, () => { this.settingsPage = show; });
+    // 二级页推拉和抽屉同一套材质，同样要按设备上限要帧，否则 120Hz 上这段位移会一顿一顿。
+    this.getUIContext().animateTo({ duration: 220, curve: Curve.EaseOut,
+      expectedFrameRateRange: { min: 60, max: 120, expected: 120 } }, () => { this.settingsPage = show; });
   }
 
   @Builder

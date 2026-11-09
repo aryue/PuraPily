@@ -664,7 +664,7 @@ export struct DynamicsPage {
 
   private onTabsAnimationStart(fromIndex: number, toIndex: number): void {
     this.highlightType = toIndex === 0 ? 'video' : 'all';
-    this.getUIContext().animateTo({ duration: 340, curve: Curve.Ease }, () => {
+    this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 340, curve: Curve.Ease }, () => {
       this.feedTabPosition = toIndex;
     });
   }

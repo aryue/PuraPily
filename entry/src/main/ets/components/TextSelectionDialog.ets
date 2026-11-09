@@ -149,9 +149,9 @@ export struct TextSelectionDialog {
   private btnSwapTransition(): TransitionEffect {
     return TransitionEffect.asymmetric(
       TransitionEffect.translate({ x: 12 }).combine(TransitionEffect.opacity(0))
-        .animation({ duration: 200, curve: Curve.EaseOut }),
+        .animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 200, curve: Curve.EaseOut }),
       TransitionEffect.translate({ x: -12 }).combine(TransitionEffect.opacity(0))
-        .animation({ duration: 150, curve: Curve.EaseIn })
+        .animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 150, curve: Curve.EaseIn })
     );
   }
 
@@ -239,8 +239,8 @@ export struct TextSelectionDialog {
                     .margin({ left: 8 })
                     .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.85 })
                     .transition(
-                      TransitionEffect.OPACITY.animation({ duration: 150, curve: Curve.EaseOut })
-                        .combine(TransitionEffect.translate({ x: 6 }).animation({ duration: 150, curve: Curve.EaseOut }))
+                      TransitionEffect.OPACITY.animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 150, curve: Curve.EaseOut })
+                        .combine(TransitionEffect.translate({ x: 6 }).animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 150, curve: Curve.EaseOut }))
                     )
                     .onClick(() => {
                       this.vibrate();
@@ -254,8 +254,8 @@ export struct TextSelectionDialog {
                     .margin({ left: 14 })
                     .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.85 })
                     .transition(
-                      TransitionEffect.OPACITY.animation({ duration: 150, curve: Curve.EaseOut })
-                        .combine(TransitionEffect.translate({ x: 6 }).animation({ duration: 150, curve: Curve.EaseOut }))
+                      TransitionEffect.OPACITY.animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 150, curve: Curve.EaseOut })
+                        .combine(TransitionEffect.translate({ x: 6 }).animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 150, curve: Curve.EaseOut }))
                     )
                     .onClick(() => {
                       this.vibrate();
@@ -437,7 +437,7 @@ export struct TextSelectionDialog {
     }
     .padding(16)
     .opacity(this.fading ? 0 : 1)
-    .animation({ duration: 220, curve: Curve.EaseInOut })
+    .animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 220, curve: Curve.EaseInOut })
     .borderRadius(20)
     .clip(true)
     .shadow({ radius: 24, color: 'rgba(0,0,0,0.35)', offsetY: 6 })

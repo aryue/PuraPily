@@ -303,7 +303,7 @@ struct UpSpacePage {
       this.loadError = '资料加载失败，点击重试';
       return;
     }
-    this.getUIContext().animateTo({ duration: 180, curve: Curve.EaseOut }, () => {
+    this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 180, curve: Curve.EaseOut }, () => {
       this.initialSpaceReady = true;
     });
   }
@@ -483,7 +483,7 @@ struct UpSpacePage {
   private openSpaceSearch(): void {
     this.resetSpaceSearch();
     this.spaceSearchText = '';
-    this.getUIContext().animateTo({ duration: this.spaceDisableAnimations ? 0 : 300,
+    this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: this.spaceDisableAnimations ? 0 : 300,
       curve: Curve.FastOutSlowIn }, () => { this.spaceSearchOpen = true; });
   }
 
@@ -491,7 +491,7 @@ struct UpSpacePage {
     this.spaceSearchInputController.stopEditing();
     this.spaceSearchVersion++;
     this.spaceSearchLoading = false;
-    this.getUIContext().animateTo({ duration: this.spaceDisableAnimations ? 0 : 300,
+    this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: this.spaceDisableAnimations ? 0 : 300,
       curve: Curve.FastOutSlowIn }, () => { this.spaceSearchOpen = false; });
   }
 

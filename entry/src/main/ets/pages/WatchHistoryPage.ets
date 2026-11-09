@@ -567,7 +567,7 @@ struct WatchHistoryPage {
   private showSearchBarWithAnimation() {
     if (this.showSearchBar) return;
     this.showSearchBar = true;
-    animateTo({ duration: this.da ? 0 : 250, curve: Curve.FastOutSlowIn }, () => {
+    animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: this.da ? 0 : 250, curve: Curve.FastOutSlowIn }, () => {
       this.searchBarOpacity = 1;
       this.searchBarTranslateY = 0;
     });
@@ -683,7 +683,7 @@ struct WatchHistoryPage {
       if (!this.showSearchBar) {
         // 显示搜索栏：先设置显示，再执行入场动画
         this.showSearchBar = true;
-        animateTo({ duration: this.da ? 0 : 250, curve: Curve.FastOutSlowIn }, () => {
+        animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: this.da ? 0 : 250, curve: Curve.FastOutSlowIn }, () => {
           this.searchBarOpacity = 1;
           this.searchBarTranslateY = 0;
         });
@@ -693,7 +693,7 @@ struct WatchHistoryPage {
         }, 280);
       } else {
         // 隐藏搜索栏：先执行退场动画，再设置隐藏
-        animateTo({ duration: this.da ? 0 : 200, curve: Curve.FastOutSlowIn }, () => {
+        animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: this.da ? 0 : 200, curve: Curve.FastOutSlowIn }, () => {
           this.searchBarOpacity = 0;
           this.searchBarTranslateY = -20;
         });

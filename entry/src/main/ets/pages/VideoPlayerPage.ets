@@ -259,6 +259,8 @@ struct VideoPlayerPage {
   private referenceSubtitleCues: ReferenceSubtitleCue[] = []
   private referenceShareController: systemShare.ShareController | null = null
   private referencePortraitMotionToken: number = 0
+  /** 上一次实际下发给窗口的系统栏状态（status|navigation），相同则不再调用窗口 API。 */
+  private sysBarKey_: string = ''
   @State @Watch('onPlaybackViewportChanged') referenceFeed: boolean = false
   @State referenceFeedProgress: number = 0
   @State private referenceTabProgress: number = 0
@@ -475,7 +477,7 @@ struct VideoPlayerPage {
     this.contentVisible = true;
     this.floatingReady = true;
     AppStorage.set('videoMinimized', false);
-    animateTo({ duration: this.da ? 0 : (FloatingVideoTransition.restoreExpanded ? 32 : FloatingVideoTransition.DURATION), curve: Curve.EaseOut,
+    animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: this.da ? 0 : (FloatingVideoTransition.restoreExpanded ? 32 : FloatingVideoTransition.DURATION), curve: Curve.EaseOut,
       onFinish: () => {
         const surface = (this.referenceSecondSurfaceActive ? this.referencePreviewXc : this.xc).getXComponentSurfaceId();
         if (surface && this.av) this.av.surfaceId = surface;
@@ -1195,7 +1197,7 @@ struct VideoPlayerPage {
     };
     try {
       this.getUIContext().animateTo(
-        { duration: this.SHRINK_ANIM_DURATION, curve: Curve.EaseOut, onFinish: finish },
+        { expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: this.SHRINK_ANIM_DURATION, curve: Curve.EaseOut, onFinish: finish },
         () => { this.vidShrink = to; });
     } catch (_) {
       finish();
@@ -1260,7 +1262,7 @@ struct VideoPlayerPage {
       this.coverGlowTimer = setInterval(() => { this.coverGlowAngle = (this.coverGlowAngle + 3) % 360; }, 16);
     }
     setTimeout(() => {
-      this.getUIContext().animateTo({ duration: 300, curve: Curve.EaseOut }, () => {
+      this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.EaseOut }, () => {
         this.commentFade = 1;
       });
     }, 0);
@@ -1639,6 +1641,10 @@ struct VideoPlayerPage {
   private seasonScroller_: Scroller = new Scroller()
   @State seasonSectionIndex: number = 0  // 当前合集分区索引
   @State seasonSheetInitialIndex: number = 0;
+  /** 合集切集序号：只认最后一次切换的详情回包，避免连点/退出后旧响应覆盖当前集 */
+  private seasonSwitchSeq_: number = 0;
+  /** 当前 `vd` 属于哪条视频（bvid）。aid 入口时 `vi.bvid` 是数字串，不能直接拿它比 */
+  private vdBvid_: string = '';
 
   // ⭐ 屏幕旋转模式状态
   @State rotationMode: string = 'system'  // 'system' | 'auto' | 'portrait' | 'landscape'
@@ -1824,6 +1830,7 @@ struct VideoPlayerPage {
     action: 'add' | 'cancel', multiply: number = 1): Promise<void> {
     if (!this.vd || this.interactionPending.has(this.vi.bvid)) return;
     const bvid = this.vi.bvid;
+    const detailAid: number = this.vd.aid;
     const generation = this.referenceSwitchGeneration;
     const cookie = AppStorage.get<string>('biliCookie') || '';
     const prevLiked = this.isLiked;
@@ -1854,7 +1861,8 @@ struct VideoPlayerPage {
     this.interactionPending.add(bvid);
     let result: VideoInteractionResult;
     try {
-      result = await UserBehaviorService.performInteraction({ bvid: bvid, aid: this.vd.aid,
+      result = await UserBehaviorService.performInteraction({ bvid: bvid,
+        aid: this.detailIsCurrentVideo() ? detailAid : (this.aidFromParams_ || detailAid),
         type: type, action: action, multiply: multiply });
     } catch (_) {
       result = { success: false, message: '操作未完成，请刷新状态后重试' };
@@ -1960,7 +1968,7 @@ struct VideoPlayerPage {
       mute: this.mute,
       isLandscapeVertical: this.isLandscapeVertical,  // ⭐ 保存横屏竖屏视频模式
       videoAspectRatio: this.ar,                       // ⭐ 保存视频宽高比
-      aid: this.vd?.aid ?? this.aidFromParams_,        // ⭐ 分集 aid（PGC 评论 oid）
+      aid: this.detailIsCurrentVideo() ? (this.vd?.aid ?? this.aidFromParams_) : this.aidFromParams_,  // ⭐ 分集 aid（PGC 评论 oid）
       epId: this.epId_,                                // ⭐ PGC 分集 id
       seasonId: this.seasonId_,                        // ⭐ PGC 季 id
     };
@@ -2220,7 +2228,7 @@ struct VideoPlayerPage {
           this.contentVisible = true;
         });
         if (this.pageEnterAnim !== 'none') {
-          animateTo({
+          animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 },
             // ⭐ 页面加载回弹动画（固定参数）
             duration: this.PE_ENTER_DURATION,
             curve: curves.springCurve(this.PE_ENTER_VELOCITY, 1, Math.round(this.FS_SPRING_STIFFNESS * 2.1), this.PE_ENTER_DAMPING),
@@ -2618,7 +2626,7 @@ struct VideoPlayerPage {
       return false;
     }
     try {
-      const result = await sendDanmakuVideo(this.vi.cid, this.vd?.bvid ?? '', text, Math.floor(this.ct * 1000), mode, color, fontSize);
+      const result = await sendDanmakuVideo(this.vi.cid, this.vi.bvid || (this.vd?.bvid ?? ''), text, Math.floor(this.ct * 1000), mode, color, fontSize);
       logInfo(`[sendDanmaku] ${result.ok ? '成功' : '失败'} code=${result.code}, dmid=${result.dmid}`);
       if (result.ok) {
         // 本地注入，立即上屏
@@ -2741,15 +2749,17 @@ struct VideoPlayerPage {
       Column().width('100%').height('100%').backgroundColor('#66000000')
         .onClick(() => { this.showDanmakuSheet = false; })
       Column() {
-        NativeComposerSurface({ allCorners: true }) {
+        // 输入态只保留评论页同款的一枚胶囊，外面不再套圆角玻璃框；
+        // 只有「A」展开样式设置时才需要这块面板承载字号/位置/颜色。
+        NativeComposerSurface({ allCorners: true, active: this.dmComposerSettings }) {
           Scroll() { this.dmSheetContent() }
             .width('100%').height(this.landscapeDanmakuComposerHeight())
-            .scrollBar(BarState.Off).clip(true).id('landscape-danmaku-scroll')
+            .scrollBar(BarState.Off).clip(this.dmComposerSettings).id('landscape-danmaku-scroll')
         }
       }.width(Math.max(120, (this.isLs && !this.fs ? this.referenceLandscapeViewportWidth() : this.cw) - 24))
         .height(this.landscapeDanmakuComposerHeight()).borderRadius(12)
         .backgroundColor(Color.Transparent)
-        .clip(true)
+        .clip(this.dmComposerSettings)
         .position({ x: (this.isLs && !this.fs ? this.referenceLandscapePlayerX() : 0) + 12, y: Math.max(this.referenceSafeTop(),
           this.ch - this.danmakuKeyboardHeight - this.landscapeDanmakuComposerHeight() - 8) })
         .id('landscape-danmaku-composer')
@@ -3028,6 +3038,9 @@ struct VideoPlayerPage {
     // ⭐ seek/sk_ 期间不参与同步：那时 currentTime 还没稳定，读到的旧值会让这里把音频
     //   seek 回上一个位置（既是可听见的跳变，也会和 seek 的音频对齐互相打架）。
     if (!this.av || !this.avAudio || !this.play || this.sg_ || this.sk_) return;
+    // 抽屉开合只有 200ms 级，这两次 currentTime 读取 + 可能的音频 seek 会让动画掉帧，
+    // 推迟到动画结束后的下一拍即可。
+    if (this.referencePortraitSettingsAnimating) return;
     // ⭐ 播完收尾与 300ms 定时器有一次交叉：completed 之后读到的 currentTime 是旧值，
     //   继续同步会把音频 seek 到片尾/旧位置，表现就是“播完了声音又动起来”。
     if (this.av.state === 'completed' || this.avAudio.state === 'completed') return;
@@ -4476,7 +4489,8 @@ struct VideoPlayerPage {
 
     // 获取aid（从VideoDetail中获取，或从bvid转换）
     // 注意：B站API需要aid而不是bvid
-    let aid = this.vd?.aid || 0;
+    // ⭐ 合集切集途中 vd 还是上一条视频的 aid，必须用切集时记下的 aid
+    let aid = this.detailIsCurrentVideo() ? (this.vd?.aid || 0) : (this.aidFromParams_ || 0);
     if (!aid && this.vi.bvid) {
       // 如果没有aid，尝试从bvid转换（简化处理，实际应该调用API转换）
       logWarn('[saveWatchHistory] 缺少aid，无法上报到B站');
@@ -4635,7 +4649,7 @@ struct VideoPlayerPage {
     //   且与开灯动画同帧启动（不要在触摸被取消那一刻提前收，见 onTC）
     this.clearGestureHint_();
     this.clearLightBtnTimer();
-    animateTo({ duration: 300, curve: Curve.Ease }, () => {
+    animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.Ease }, () => {
       this.isLightsOff = false;
       this.loBgScale = 1;
       this.loBgBlur = 0;
@@ -4762,6 +4776,7 @@ struct VideoPlayerPage {
         requestedCookie !== (AppStorage.get<string>('biliCookie') || '')) return;
       if (d) {
         this.vd = d;
+        this.vdBvid_ = d.bvid || '';
         if (this.referenceLayout && !this.referenceFeed && !this.isPgc_) this.loadReferenceIntroExtras();
         this.applyDetailDimension(d);
         // ⭐ 预解码 up 主头像
@@ -5070,14 +5085,14 @@ struct VideoPlayerPage {
       this.expandCommentAndLoadFirstPage(comment);
       return;
     }
-    this.getUIContext().animateTo({ duration: 280, curve: Curve.EaseOut }, () => {
+    this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 280, curve: Curve.EaseOut }, () => {
       this.commentDialog = null;
       this.commentThread = comment;
     });
   }
 
   private closeCommentThread(): void {
-    this.getUIContext().animateTo({ duration: 280, curve: Curve.EaseOut }, () => {
+    this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 280, curve: Curve.EaseOut }, () => {
       if (this.commentDialog) this.commentDialog = null;
       else this.commentThread = null;
     });
@@ -5092,7 +5107,7 @@ struct VideoPlayerPage {
           refreshVersion: this.commentThreadRefresh,
           onClose: () => { this.closeCommentThread(); },
           onViewConversation: (reply: ObservableComment) => {
-            this.getUIContext().animateTo({ duration: 280, curve: Curve.EaseOut }, () => { this.commentDialog = reply; });
+            this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 280, curve: Curve.EaseOut }, () => { this.commentDialog = reply; });
           },
           onReply: (root: number, parent: number, name: string) => {
             this.openCommentSheet('reply', root, parent, name);
@@ -5106,10 +5121,10 @@ struct VideoPlayerPage {
             onReply: (root: number, parent: number, name: string) => {
               this.openCommentSheet('reply', root, parent, name);
             } })
-            .transition(TransitionEffect.move(TransitionEdge.BOTTOM).animation({ duration: 280, curve: Curve.EaseOut }))
+            .transition(TransitionEffect.move(TransitionEdge.BOTTOM).animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 280, curve: Curve.EaseOut }))
         }
       }.width('100%').height('100%')
-        .transition(TransitionEffect.move(TransitionEdge.BOTTOM).animation({ duration: 280, curve: Curve.EaseOut }))
+        .transition(TransitionEffect.move(TransitionEdge.BOTTOM).animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 280, curve: Curve.EaseOut }))
     }
   }
 
@@ -5273,7 +5288,7 @@ struct VideoPlayerPage {
     // 先更新tabSelIdx — SegmentButton用自己的内置动画驱动指示器过渡
     // 不要放入animateTo，否则组件会跳过内置动画导致指示器跳变
     this.tabSelIdx = [i];
-    this.getUIContext()?.animateTo({ duration: 350, curve: Curve.FastOutSlowIn }, () => {
+    this.getUIContext()?.animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 350, curve: Curve.FastOutSlowIn }, () => {
       this.at = i;
     });
     // 切换到非评论tab时，动画恢复视频大小
@@ -5523,7 +5538,7 @@ struct VideoPlayerPage {
    * - 查不到时不改 `pm`（沿用上一张），避免网络/解码期间缩略图闪白。
    */
   private updateSeekThumb_(sec: number): void {
-    const bvid: string = this.vd?.bvid ?? '';
+    const bvid: string = this.vi.bvid || (this.vd?.bvid ?? '');
     const cid: number = this.vi.cid;
     if (!bvid || !cid || cid <= 0) return;
     const token: number = ++this.shotToken_;
@@ -5561,7 +5576,7 @@ struct VideoPlayerPage {
    * 延迟是为了避开起播阶段的解码/网络竞争；精灵图不在此时下载，等真正拖动时再按需取。
    */
   private prefetchVideoShot_(): void {
-    const bvid: string = this.vd?.bvid ?? '';
+    const bvid: string = this.vi.bvid || (this.vd?.bvid ?? '');
     const cid: number = this.vi.cid;
     if (!bvid || !cid || cid <= 0) return;
     // 换集/换视频：先松开上一集的位图引用，再整体释放缓存
@@ -5607,6 +5622,11 @@ struct VideoPlayerPage {
     const visible = !this.fs && (this.referenceLayout || !this.isLs) &&
       (feed ? !this.referenceInfoHidden : !this.sh_ && !this.isLightsOff);
     // 横屏播放独立隐藏导航条，顶部状态栏继续遵循原有显隐逻辑。
+    // 目标状态没变就不要下发窗口指令：每次调用都会让窗口服务重算 avoidArea，
+    // 菜单这种「打开前顺手刷新一次」的操作会白等一轮系统栏布局，动画首帧就掉。
+    const key = `${visible}|${visible && !this.isLs}`;
+    if (!force && key === this.sysBarKey_) return;
+    this.sysBarKey_ = key;
     StatusBarUtils.setSystemBars(this.mw, visible, visible && !this.isLs);
   }
 
@@ -6227,7 +6247,7 @@ struct VideoPlayerPage {
         this.contentVisible = true;
       });
       if (this.pageEnterAnim !== 'none') {
-        animateTo({
+        animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 },
           // ⭐ 页面加载回弹动画（固定参数）
       duration: this.PE_ENTER_DURATION,
       curve: curves.springCurve(this.PE_ENTER_VELOCITY, 1, Math.round(this.FS_SPRING_STIFFNESS * 2.1), this.PE_ENTER_DAMPING),
@@ -6312,7 +6332,9 @@ struct VideoPlayerPage {
         this.confirmFirstFrame(player);
       }
       if (player.state === 'playing' && !this.userPaused_ && !this.ry_ && !this.err &&
-        !this.waitingForFirstFrame && !this.sg_ && !this.sk_ && !this.qs) {
+        !this.waitingForFirstFrame && !this.sg_ && !this.sk_ && !this.qs &&
+        // 菜单开合动画期间不发投机预取：一次预取就是一轮 IO/解码排队，会把动画切成几段。
+        !this.referencePortraitSettingsAnimating) {
         const bridge: DashServerHandle | null = this.dashBridge_ || this.dashHandle_;
         bridge?.prefetchForPlayback?.(position, this.rt);
       }
@@ -6464,9 +6486,12 @@ struct VideoPlayerPage {
     this.av.on('timeUpdate', (t: number) => {
       if (this.av !== player || (this.referenceFeed && generation !== this.referenceSwitchGeneration)) return;
       if (t > 0 && this.playbackProfile?.seen('frame')) this.playbackProfile.once('time-update', t);
+      // 抽屉开合动画期间进度条与字幕层都被盖住：不写这些 state，
+      // 否则每次 timeUpdate 都要带着整块不可见 UI 重新布局，动画就会被切成几段。
+      const uiFrozen = this.referencePortraitSettingsAnimating;
       if (this.referenceSubtitleEnabled) {
         const cue = this.referenceSubtitleCues.find((item: ReferenceSubtitleCue) => item.from <= t / 1000 && item.to >= t / 1000);
-        this.referenceSubtitleText = cue?.content || '';
+        if (!uiFrozen) this.referenceSubtitleText = cue?.content || '';
       }
       if (this.referenceFeedMainPresentResolve && t > this.referenceFeedMainPresentAfter) {
         this.referenceFeedMainPresentResolve();
@@ -6474,8 +6499,8 @@ struct VideoPlayerPage {
       }
       this.referenceCheckSleep();
       if (!this.sk_) {
-        this.ct = t / 1000;
-        if (this.seekProgressPending && !this.sg_ && Math.abs(this.ct - this.seekExpectedPosition) < 2) {
+        if (!uiFrozen) this.ct = t / 1000;
+        if (this.seekProgressPending && !this.sg_ && Math.abs(t / 1000 - this.seekExpectedPosition) < 2) {
           this.seekProgressPending = false;
           this.referencePlaybackCompleted = player.state === 'completed';
           this.saveWatchHistory();
@@ -6485,7 +6510,7 @@ struct VideoPlayerPage {
           this.saveLocalPlaybackProgress();
         }
         // ⭐ 实况窗：更新进度（每 5 秒节流一次）
-        if (this.lvTimer_ === -1) {
+        if (!uiFrozen && this.lvTimer_ === -1) {
           this.lvTimer_ = setTimeout(() => {
             this.lvTimer_ = -1;
             LiveViewHelper.updateProgress(this.ct);
@@ -6506,7 +6531,7 @@ struct VideoPlayerPage {
       this.vh = h;
       if (w > 0 && h > 0) {
         // 解码尺寸会修正初始 16:9 比例，视频和简介面板共同过渡，避免面板突然跳位。
-        this.getUIContext().animateTo({ duration: this.referenceLayout && !this.waitingForFirstFrame && !this.referenceFeedPreviewPinned && !this.fs && !this.isLs ? 220 : 0,
+        this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: this.referenceLayout && !this.waitingForFirstFrame && !this.referenceFeedPreviewPinned && !this.fs && !this.isLs ? 220 : 0,
           curve: Curve.EaseOut }, () => {
           this.ar = w / h;
           this.updateIsLandscapeVertical();
@@ -7230,7 +7255,7 @@ struct VideoPlayerPage {
       this.refreshSafeAreaLeft();
       if (this.mw) this.manageSB(true);
       logInfo(`[FSDBG] enter(gesture): fs=true P=${this.fsPanProgress} dir=${this.fsLerpDir} ovVideo=(${this.ovVideoW().toFixed(1)},${this.ovVideoH().toFixed(1)}) ovRect=(${this.ovRectW().toFixed(1)},${this.ovRectH().toFixed(1)}) animDur=${this.FS_ANIM_DURATION} da=${this.da}`);
-      animateTo({ duration: this.FS_ANIM_DURATION, curve: Curve.FastOutSlowIn }, () => {
+      animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: this.FS_ANIM_DURATION, curve: Curve.FastOutSlowIn }, () => {
         this.fsPanProgress = 1;
       });
       this.fsAnimTimer_ = setTimeout(() => {
@@ -7239,7 +7264,7 @@ struct VideoPlayerPage {
       }, this.FS_ANIM_DURATION);
       return;
     }
-    animateTo({
+    animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 },
       duration: 700,
       curve: curves.springCurve(0.08, 1.3, this.FS_SPRING_STIFFNESS, 10)
     }, () => {
@@ -7456,7 +7481,7 @@ struct VideoPlayerPage {
       return;
     }
 
-    animateTo({ duration: this.FS_ANIM_DURATION, curve: Curve.FastOutSlowIn }, () => {
+    animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: this.FS_ANIM_DURATION, curve: Curve.FastOutSlowIn }, () => {
       this.fsPanProgress = 1;
     });
 
@@ -7552,7 +7577,7 @@ struct VideoPlayerPage {
     if (this.da) {
       this.fsPanProgress = 0;
     } else {
-      animateTo({ duration: this.FS_ANIM_DURATION, curve: Curve.FastOutSlowIn }, () => {
+      animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: this.FS_ANIM_DURATION, curve: Curve.FastOutSlowIn }, () => {
         this.fsPanProgress = 0;
       });
     }
@@ -7980,8 +8005,19 @@ struct VideoPlayerPage {
 
   private onPlaybackViewportChanged(): void {
     if (!this.fullscreenVideoTransformAvailable()) this.resetFullscreenVideo();
+    // 抽屉开合动画期间不碰视频缩放：换缩放类型要重配渲染管线，
+    // 会与 translate 动画抢渲染线程，动画收尾时再统一生效。
+    if (this.referencePortraitSettingsAnimating) return;
+    this.applyPlaybackScaleType();
+  }
+
+  /** 缩放类型没变就不重设：IJK 每次赋值都要走一遍属性下发，没必要白跑。 */
+  private applyPlaybackScaleType(): void {
+    if (!this.av) return;
     try {
-      if (this.av) this.av.videoScaleType = this.getVideoScaleType();
+      const target = this.getVideoScaleType();
+      if (this.av.videoScaleType === target) return;
+      this.av.videoScaleType = target;
     } catch (_error) { }
   }
 
@@ -9180,7 +9216,7 @@ struct VideoPlayerPage {
   // ⭐ 松手触发关灯：卡片弹回的同时进入关灯
   private doLightsOff() {
     this.detailPullHintPhase = 0;
-    animateTo({ duration: 600, curve: curves.springMotion(0.6, 0.8) }, () => {
+    animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 600, curve: curves.springMotion(0.6, 0.8) }, () => {
       this.detailPullDrop = 0; // 卡片弹回的同时进入关灯
       this.isLightsOff = true;
       this.lightbulbRotation = 0; // 重置灯泡角度，从 180° 转回 0°
@@ -9198,7 +9234,7 @@ struct VideoPlayerPage {
   // ⭐ 卡片平滑弹回（未达阈值 / 上滑取消 / 触摸中断）
   private springBackDetailPull() {
     this.detailPullHintPhase = 0;
-    this.getUIContext()?.animateTo({ duration: 350, curve: curves.springMotion(0.3, 0.7) }, () => {
+    this.getUIContext()?.animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 350, curve: curves.springMotion(0.3, 0.7) }, () => {
       this.detailPullDrop = 0;
     });
   }
@@ -9498,7 +9534,7 @@ struct VideoPlayerPage {
         onEpisodePress: () => { this.cancelDelayHide(); this.triggerHaptic(); this.openEpisodeSheet(); },
         // ⭐ 全屏评论浮层开关：打开时 ip=true + cancelDelayHide 保控制栏不自动隐藏，关闭后恢复延迟隐藏
         onCommentPress: () => { this.cancelDelayHide(); this.cp = !this.cp; this.ip = this.cp; if (!this.cp && this.cv) { this.resetCT(); } this.cv = !this.cp; },
-        hasMultipleEpisodes: (this.vd?.pages?.length ?? 0) > 1,
+        hasMultipleEpisodes: this.pagesForCurrentVideo().length > 1,
         isBackgroundPlayback: $bgp,
         qualityLabel: this.ql,
         toggleBackgroundPlayback: () => { this.toggleBackgroundPlayback(); }
@@ -9586,16 +9622,16 @@ struct VideoPlayerPage {
           if (this.referencePortraitFeedActive()) return;
           if (this.fs || (!this.isLs && !this.isLandscapeVertical)) return;
           if (this.gm_ === 'seek') {
-            animateTo({ duration: 260, curve: Curve.EaseOut }, () => { this.fsPanProgress = 0; });
+            animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 260, curve: Curve.EaseOut }, () => { this.fsPanProgress = 0; });
             return;
           }
           if (this.fsPanProgress > 0.3) this.startFSAnimation();
-          else animateTo({ duration: 260, curve: Curve.EaseOut }, () => { this.fsPanProgress = 0; });
+          else animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 260, curve: Curve.EaseOut }, () => { this.fsPanProgress = 0; });
         })
         .onActionCancel(() => {
           if (this.referencePortraitFeedActive()) return;
           if (this.fs || (!this.isLs && !this.isLandscapeVertical)) return;
-          animateTo({ duration: 200, curve: Curve.EaseOut }, () => { this.fsPanProgress = 0; });
+          animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 200, curve: Curve.EaseOut }, () => { this.fsPanProgress = 0; });
           this.fireHaptic(18);
         })
     )
@@ -10007,10 +10043,10 @@ struct VideoPlayerPage {
     .height('100%')
     .transition(
       this.cw > this.ch
-        ? TransitionEffect.OPACITY.animation({ duration: 300, curve: Curve.EaseInOut })
-            .combine(TransitionEffect.translate({ x: this.mirrorPopup() ? '-100%' : '100%' }).animation({ duration: 300, curve: Curve.EaseInOut }))
-        : TransitionEffect.OPACITY.animation({ duration: 300, curve: Curve.EaseInOut })
-            .combine(TransitionEffect.translate({ y: '100%' }).animation({ duration: 300, curve: Curve.EaseInOut }))
+        ? TransitionEffect.OPACITY.animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.EaseInOut })
+            .combine(TransitionEffect.translate({ x: this.mirrorPopup() ? '-100%' : '100%' }).animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.EaseInOut }))
+        : TransitionEffect.OPACITY.animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.EaseInOut })
+            .combine(TransitionEffect.translate({ y: '100%' }).animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.EaseInOut }))
     )
   }
 
@@ -10649,7 +10685,7 @@ struct VideoPlayerPage {
     .opacity(1)
     .hitTestBehavior(this.floatingMorph ? HitTestMode.None : HitTestMode.Default)
     .bindSheet($$this.showEpisodeSheet, this.episodeSheetContent(), {
-      height: this.selectionSheetHeight(this.vd?.pages && this.vd.pages.length > 4 ? 400 : 280),
+      height: this.selectionSheetHeight(this.pagesForCurrentVideo().length > 4 ? 400 : 280),
       backgroundColor: Color.Transparent,
       systemMaterial: MaterialUtil.sheetMaterial(),
       dragBar: true,
@@ -10667,7 +10703,7 @@ struct VideoPlayerPage {
   }
 
   private openEpisodeSheet(): void {
-    const count = this.vd?.pages?.length || 0;
+    const count = this.pagesForCurrentVideo().length;
     if (count === 0) return;
     const selected = this.referenceEpisodeSelection >= 0 ? this.referenceEpisodeSelection : this.currentPageIndex;
     const index = Math.max(0, Math.min(count - 1, selected));
@@ -10679,18 +10715,20 @@ struct VideoPlayerPage {
   private openSeasonSheet(): void {
     const sections = this.vd?.ugc_season?.sections;
     if (!sections || sections.length === 0) return;
-    // 先按当前 cid 跨分区精确查找，再兼容缺少 cid 的合集条目。
+    // 先按 cid 跨分区精确匹配（同一合集里 cid 唯一），再退回 bvid/aid：
+    // 多P分集播放 P2 时 ep.cid 是 P1，只能靠 bvid 命中。
     let sectionIndex = 0;
     let episodeIndex = 0;
     let found = false;
     for (let pass = 0; pass < 2 && !found; pass++) {
-      for (let section = 0; section < sections.length && !found; section++) {
-        const episodes = sections[section].episodes || [];
-        for (let index = 0; index < episodes.length; index++) {
-          const ep = episodes[index];
-          if (pass === 0 ? (this.vi.cid > 0 && ep.cid === this.vi.cid) : this.isCurrentSeasonEpisode(ep)) {
-            sectionIndex = section;
-            episodeIndex = index;
+      for (let s = 0; s < sections.length && !found; s++) {
+        const episodes = sections[s].episodes || [];
+        for (let i = 0; i < episodes.length; i++) {
+          const ep = episodes[i];
+          const hit = pass === 0 ? (this.vi.cid > 0 && ep.cid === this.vi.cid) : this.isCurrentSeasonEpisode(ep);
+          if (hit) {
+            sectionIndex = s;
+            episodeIndex = i;
             found = true;
             break;
           }
@@ -10709,7 +10747,7 @@ struct VideoPlayerPage {
       Column().width('100%').height(8)
       Row() {
         // ⭐ 左侧分段快速定位（每 20 集一段：1-20 / 21-40 / 41-60...），集数多时方便跳段
-        if (this.vd?.pages && this.vd.pages.length > 20) {
+        if (this.pagesForCurrentVideo().length > 20) {
           List({ space: 6, initialIndex: this.episodeSegment }) {
               ForEach(this.episodeSegList(), (seg: number) => {
                 ListItem() {
@@ -10739,7 +10777,7 @@ struct VideoPlayerPage {
           .height('100%')
         }
         // 选集列表（⭐ 只渲染当前分段内的集数）
-        if (this.vd?.pages && this.vd.pages.length > 0) {
+        if (this.pagesForCurrentVideo().length > 0) {
           List({ scroller: this.episodeScroller_, initialIndex: this.episodeSheetInitialIndex }) {
           ForEach(this.episodeSegPages(), (page: VideoPageItem, localIndex: number) => {
             ListItem() {
@@ -10794,7 +10832,7 @@ struct VideoPlayerPage {
     .width('100%')
     // 手机底部 SheetPage 首轮按整屏测量，百分比会使 initialIndex 按过大的视口回填。
     // 与 bindSheet 共用确定高度，列表第一次布局就使用实际内容区尺寸。
-    .height(this.selectionSheetHeight(this.vd?.pages && this.vd.pages.length > 4 ? 400 : 280))
+    .height(this.selectionSheetHeight(this.pagesForCurrentVideo().length > 4 ? 400 : 280))
     .backgroundColor(this.sheetRootBg($r('app.color.color_comment_background')))
   }
 
@@ -10897,14 +10935,35 @@ struct VideoPlayerPage {
   }
 
   // ⭐ 切换分P
+  /**
+   * ⭐ 当前视频自己的分P/番剧选集。**与 ugc_season 合集的分界就在这里**：
+   *   合集切集后 `vi.bvid` 已指向新视频，而 `vd` 要等详情回包才替换；
+   *   这段时间若继续把旧 `vd.pages` 当分P 用，选集条就会拿上一条视频的 cid 配新集的 bvid 取流。
+   */
+  private pagesForCurrentVideo(): VideoPageItem[] {
+    if (this.isPgc_) return this.vd?.pages || [];
+    if (!this.vd || !this.vd.pages || !this.detailIsCurrentVideo()) return [];
+    return this.vd.pages;
+  }
+
+  /** `vd` 是否描述当前这条视频（合集切集途中为 false） */
+  private detailIsCurrentVideo(): boolean {
+    if (this.isPgc_) return true;
+    if (!this.vd) return false;
+    if (!this.vdBvid_) return true;
+    // aid 入口：vi.bvid 存的是数字 aid，用详情自己的 aid 兜底
+    if (this.vi.bvid && (this.vi.bvid === this.vdBvid_ || this.vi.bvid === String(this.vd.aid))) return true;
+    return false;
+  }
+
   /** ⭐ 是否有下一集（多P分P / 番剧分集） */
   private hasNextEpisode(): boolean {
-    return this.vd?.pages ? this.currentPageIndex + 1 < this.vd.pages.length : false;
+    return this.currentPageIndex + 1 < this.pagesForCurrentVideo().length;
   }
 
   /** ⭐ 选集分段数（每 20 集一段） */
   private episodeSegCount(): number {
-    return this.vd?.pages ? Math.ceil(this.vd.pages.length / 20) : 0;
+    return Math.ceil(this.pagesForCurrentVideo().length / 20);
   }
 
   // ⭐ 合集辅助方法
@@ -10917,54 +10976,148 @@ struct VideoPlayerPage {
     return section.episodes;
   }
 
-  /** 当前播放分集在合集中的索引 */
+  /** 合集总集数（跨分区）：接口的 ep_count 已在解析时归一到 epCount */
+  private seasonTotalEpisodeCount(): number {
+    const season = this.vd?.ugc_season;
+    if (!season) return 0;
+    if ((season.epCount || 0) > 0) return season.epCount || 0;
+    let total = 0;
+    for (const section of season.sections || []) {
+      total += (section.episodes || []).length;
+    }
+    return total;
+  }
+
+  /** 当前播放分集在合集里的全局序号（跨分区累计；找不到返回 0） */
   private seasonCurrentEpisodeIndex(): number {
-    const episodes = this.seasonCurrentEpisodes();
-    if (episodes.length === 0) return 0;
-    for (let i = 0; i < episodes.length; i++) {
-      const ep = episodes[i];
-      if (ep.cid && ep.cid === this.vi.cid) return i;
-      if (ep.bvid && ep.bvid === this.vi.bvid) return i;
-      if (ep.aid && ep.aid === this.vd?.aid) return i;
+    const sections = this.vd?.ugc_season?.sections;
+    if (!sections || sections.length === 0) return 0;
+    let base = 0;
+    for (let s = 0; s < sections.length; s++) {
+      const episodes = sections[s].episodes || [];
+      for (let i = 0; i < episodes.length; i++) {
+        if (this.isCurrentSeasonEpisode(episodes[i])) return base + i;
+      }
+      base += episodes.length;
     }
     return 0;
   }
 
-  /** 是否为当前播放分集 */
+  /**
+   * 是否为当前播放分集。
+   * ⭐ 先比 bvid（合集里每条分集是独立视频，bvid 才是稳定身份），再比 cid；
+   *   `vd.aid` 只作兜底，且要求 `vd` 已描述当前视频 —— 合集切集途中它还是上一条的 aid。
+   */
   private isCurrentSeasonEpisode(ep: SeasonEpisode): boolean {
-    if (ep.cid && ep.cid === this.vi.cid) return true;
-    if (ep.bvid && ep.bvid === this.vi.bvid) return true;
-    if (ep.aid && ep.aid === this.vd?.aid) return true;
+    if (ep.bvid && this.vi.bvid && ep.bvid === this.vi.bvid) return true;
+    if (ep.cid && this.vi.cid > 0 && ep.cid === this.vi.cid) return true;
+    if (ep.aid && this.detailIsCurrentVideo() && ep.aid === this.vd?.aid) return true;
     return false;
   }
 
-  /** 切换合集分集 */
+  /** 目标分集所在的分区索引 */
+  private seasonSectionIndexOfEpisode(target: SeasonEpisode): number {
+    const sections = this.vd?.ugc_season?.sections;
+    if (!sections) return 0;
+    for (let s = 0; s < sections.length; s++) {
+      const episodes = sections[s].episodes || [];
+      for (let i = 0; i < episodes.length; i++) {
+        const ep = episodes[i];
+        if ((target.bvid && ep.bvid === target.bvid) || (target.cid && ep.cid === target.cid) ||
+          (target.aid && ep.aid === target.aid)) return s;
+      }
+    }
+    return 0;
+  }
+
+  /** 切换合集分集。
+   * ⭐ 合集里每条分集是**另一条视频**（自己的 aid/bvid/简介/统计/分P），不是同一详情下的选集：
+   *   必须像连刷换片那样整份替换 `vd`。只改播放上下文会让简介、统计、BV 号、分P 全停在上一条，
+   *   而且旧分P 还能点，点下去就是「新 bvid + 旧 cid」取流。
+   */
   private async switchSeasonEpisode(ep: SeasonEpisode): Promise<void> {
-    this.release();
+    const bvid = ep.bvid || '';
+    // 没有 bvid 就没法换视频；宁可不切，也不能拿旧 cid 硬播
+    if (!this.referenceAlive || !bvid || bvid === this.vi.bvid) return;
+    // 先让进行中的分P 切换收尾，避免它随后用旧 page.cid 覆盖新集
+    if (this.episodeSwitchJob_) {
+      await this.episodeSwitchJob_.catch(() => {});
+    }
+    if (!this.referenceAlive) return;
+    const requestId = ++this.seasonSwitchSeq_;
+    await this.release();
+    if (!this.referenceAlive || requestId !== this.seasonSwitchSeq_) return;
+    // 分P 状态属于上一条视频：索引、高亮、分段全部归零
     this.currentPageIndex = 0;
-    if (ep.cid) this.setPlaybackCid(ep.cid);
-    if (ep.bvid) this.vi.bvid = ep.bvid;
-    if (ep.aid) {
-      if (this.vd) this.vd.aid = ep.aid;
-      this.aidFromParams_ = ep.aid;
-    }
+    this.referenceEpisodeSelection = -1;
+    this.episodeSegment = 0;
+    this.episodeSheetInitialIndex = 0;
+    this.pendingEpisodeIndex_ = -1;
+    // 播放上下文先指向新分集（详情还没回来时也能起播）
+    this.vi.bvid = bvid;
+    this.setPlaybackCid(ep.cid || 0);
+    this.aidFromParams_ = ep.aid || 0;
     if (ep.title) this.vi.title = ep.title;
-    if (ep.arc?.pic) this.vi.cover = ep.arc.pic;
-    if (ep.duration) {
-      this.vi.duration = ep.duration;
-    } else if (ep.arc?.duration) {
-      this.vi.duration = ep.arc.duration;
-    }
-    // 重置评论
+    const cover = ep.arc?.pic || ep.cover || '';
+    if (cover) this.vi.cover = cover;
+    const duration = ep.duration || ep.arc?.duration || 0;
+    if (duration > 0) this.vi.duration = duration;
+    const epView = ep.arc?.stat?.view;
+    if (epView !== undefined) this.vi.view = epView;
+    this.seasonSectionIndex = this.seasonSectionIndexOfEpisode(ep);
+    // 评论属于上一条视频：先清空，等新详情回来再按它的 aid 拉
     this.commentCursor = 0;
     this.commentDataSource.clear();
-    if (ep.aid) {
-      this.loadC(ep.aid);
-    }
-    // ⭐ 切集：清掉上一集的进度，改由新一集的 playurl 续播点恢复（否则会把上一集的位置带过来）
+    // ⭐ 切集：清掉上一集的进度，改由新一集的 playurl 续播点恢复
     this.initialProgress_ = 0;
-    // 重新加载视频
+    this.ct = 0;
+    this.lastHeartbeatTime = 0;
+    // 播放与详情并行：先按 ep 的 cid 起播，详情回来再整份提交这条视频的简介/统计/分P
+    const detailTask = this.loadSeasonEpisodeDetail(bvid, requestId);
+    // release() 只 cancel deadline，上一次 initP 要下一拍才清 initPInProgress_；
+    // 不等它清掉，新集的 initP 会在入口直接 return（表现就是切完一直转圈）。
+    const idle = await this.waitInitPIdle(requestId);
+    if (!idle && requestId !== this.seasonSwitchSeq_) return;
     await this.initP();
+    await detailTask;
+  }
+
+  /** 等上一次 initP 收尾；期间又被切换取代/退出页面则返回 false */
+  private async waitInitPIdle(requestId: number): Promise<boolean> {
+    for (let i = 0; i < 80; i++) {
+      if (!this.referenceAlive || requestId !== this.seasonSwitchSeq_) return false;
+      if (!this.initPInProgress_) return true;
+      await new Promise<void>((resolve: () => void) => setTimeout(resolve, 25));
+    }
+    return !this.initPInProgress_;
+  }
+
+  /** 拉取合集新分集的详情并整份提交（bvid 不匹配 / 已退出 / 被下一次切换取代时丢弃） */
+  private async loadSeasonEpisodeDetail(bvid: string, requestId: number): Promise<void> {
+    const detail = await getVideoDetail(bvid);
+    if (!detail || !this.referenceAlive || requestId !== this.seasonSwitchSeq_ || this.vi.bvid !== bvid) return;
+    this.vd = detail;
+    this.vdBvid_ = detail.bvid || bvid;
+    this.applyDetailDimension(detail);
+    this.predecodeKeyImages();
+    // 简介的 UP 卡片/标签是挂在页面上的，换视频后不会重新 onAppear，必须主动重取
+    if (this.referenceLayout && !this.referenceFeed && !this.isPgc_) this.loadReferenceIntroExtras();
+    const pages = detail.pages || [];
+    // 合集条目偶尔缺 cid：用详情补上，别让 initP 一直等 cid
+    if (this.vi.cid <= 0) {
+      const cid = detail.cid || (pages.length > 0 ? pages[0].cid : 0);
+      if (cid > 0) this.setPlaybackCid(cid);
+    }
+    const index = pages.findIndex((item: VideoPageItem) => item.cid === this.vi.cid);
+    this.currentPageIndex = index >= 0 ? index : 0;
+    if (detail.aid > 0) this.aidFromParams_ = detail.aid;
+    this.likeCount = detail.stat.like;
+    this.coinCount = detail.stat.coin;
+    this.favoriteCount = detail.stat.favorite;
+    this.loadInitialVideoInteractions(detail, bvid, this.referenceSwitchGeneration, this.interactionRevision);
+    if (detail.aid > 0) this.loadC(detail.aid);
+    this.fetchRelatedVideos(bvid);
+    logInfo(`[VideoPlayer] 合集切集详情: bvid=${bvid}, aid=${detail.aid}, 分P=${pages.length}, 选中=${this.currentPageIndex}`);
   }
 
   /** ⭐ 选集分段索引列表（0, 1, 2...） */
@@ -10979,12 +11132,13 @@ struct VideoPlayerPage {
 
   /** ⭐ 当前分段内的 pages 子集（List 只渲染本段，最多 20 集） */
   private episodeSegPages(): VideoPageItem[] {
-    if (!this.vd?.pages) return [];
+    const pages = this.pagesForCurrentVideo();
+    if (pages.length === 0) return [];
     const start = this.episodeSegStart(this.episodeSegment);
-    const end = Math.min(start + 20, this.vd.pages.length);
+    const end = Math.min(start + 20, pages.length);
     const list: VideoPageItem[] = [];
     for (let i = start; i < end; i++) {
-      list.push(this.vd.pages[i]);
+      list.push(pages[i]);
     }
     return list;
   }
@@ -11007,12 +11161,12 @@ struct VideoPlayerPage {
   /** ⭐ 分段标签（1-20 / 21-40 / 41-60...） */
   private episodeSegLabel(seg: number): string {
     const start = this.episodeSegStart(seg) + 1;
-    const end = Math.min(this.episodeSegStart(seg) + 20, this.vd?.pages?.length ?? 0);
+    const end = Math.min(this.episodeSegStart(seg) + 20, this.pagesForCurrentVideo().length);
     return `${start}-${end}`;
   }
 
   private switchEpisode(index: number): Promise<void> {
-    if (!this.vd?.pages?.[index] || !this.referenceAlive ||
+    if (!this.pagesForCurrentVideo()[index] || !this.referenceAlive ||
       (index === this.currentPageIndex && !this.episodeSwitchJob_)) return Promise.resolve();
     this.referenceEpisodeSelection = index;
     this.pendingEpisodeIndex_ = index;
@@ -11035,8 +11189,9 @@ struct VideoPlayerPage {
   }
 
   private async applyEpisodeSwitch(index: number): Promise<void> {
-    if (!this.vd?.pages || index === this.currentPageIndex) return;
-    const page = this.vd.pages[index];
+    const pages = this.pagesForCurrentVideo();
+    if (index === this.currentPageIndex || !pages[index]) return;
+    const page = pages[index];
     if (!page) return;
     this.resetFullscreenVideo();
 
@@ -11291,7 +11446,7 @@ struct VideoPlayerPage {
     hilog.info(0x0000, 'ResizeMetrics', '%{public}s', `[ResizeMetrics] ms=${elapsed} events=${this.resizeEventCount} layouts=${this.resizeLayoutCount} eventHz=${(this.resizeEventCount * 1000 / elapsed).toFixed(1)} layoutHz=${(this.resizeLayoutCount * 1000 / elapsed).toFixed(1)} maxGap=${this.resizeLayoutMaxGap}`);
     this.referenceLandscapeResizeActive = false;
     if (cancel) {
-      this.getUIContext().animateTo({ duration: 200, curve: Curve.EaseOut }, () => {
+      this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 200, curve: Curve.EaseOut }, () => {
         this.referenceLandscapePlayerRatio = this.referenceLandscapeResizeStart;
         this.referenceLandscapeExpandProgress = 0;
       });
@@ -12631,6 +12786,7 @@ struct VideoPlayerPage {
       // Publish identity and detail before exposing the current page's chrome.
       // FeedAvatarImage gives each identity its own synchronously loaded Image node.
       this.vd = detail;
+      this.vdBvid_ = detail.bvid || '';
       logInfo(`[ReferenceFeed] chrome commit ${this.vi.bvid} title=${this.vi.title} still=${presentationRatio} target=${targetRatio} previewMatch=${previewMatches}`);
       ContinuousRecommendationState.markVisited(this.vi.bvid, detail.aid);
       this.referenceSubtitleEnabled = false;
@@ -13266,7 +13422,8 @@ struct VideoPlayerPage {
         }.width('96%').height(20)
         Row() {
           Row() {
-            NativeGlassInput({ inputHeight: 34, refractive: false }) {
+            // 连刷预览浮层的弹幕输入入口：与评论页输入胶囊同款 capsule 材质、全圆角。
+            NativeGlassInput({ inputHeight: 34 }) {
               Row({ space: 10 }) {
                 Image($r('app.media.ref_danmaku_checked')).width(23).height(23)
                 Rect().width(0.5).height(13).fill('#888888')
@@ -13318,8 +13475,17 @@ struct VideoPlayerPage {
     });
   }
 
+  /** 简介统计：合集切集途中详情还没换成当前视频，不能继续显示上一条的数字 */
+  private referenceIntroStat(kind: string): string {
+    if (this.detailIsCurrentVideo() && this.vd) {
+      return this.fmtN(kind === 'danmaku' ? this.vd.stat.danmaku : this.vd.stat.view);
+    }
+    if (kind === 'view' && this.vi.view !== undefined) return this.fmtN(this.vi.view);
+    return '—';
+  }
+
   private referencePublishTime(): string {
-    const timestamp = this.vd?.pubdate || this.vi.pubdate || 0;
+    const timestamp = this.detailIsCurrentVideo() ? (this.vd?.pubdate || this.vi.pubdate || 0) : (this.vi.pubdate || 0);
     if (!timestamp) return '';
     const date = new Date(timestamp * 1000);
     return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日 ${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
@@ -13375,7 +13541,7 @@ struct VideoPlayerPage {
         }
         Column({ space: 7 }) {
           Row({ space: 8 }) {
-            Text(this.vd?.title || this.vi.title).fontSize(16).lineHeight(22)
+            Text((this.detailIsCurrentVideo() ? this.vd?.title : '') || this.vi.title || '').fontSize(16).lineHeight(22)
               .fontColor(this.isDarkMode ? '#E7E9EB' : '#18191C')
               .maxLines(this.referenceDescriptionExpanded ? 10 : 1)
               .textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
@@ -13383,11 +13549,11 @@ struct VideoPlayerPage {
               .rotate({ angle: this.referenceDescriptionExpanded ? 0 : 180 })
           }.width('100%').onClick(() => { this.referenceDescriptionExpanded = !this.referenceDescriptionExpanded; })
           Flex({ wrap: FlexWrap.Wrap, alignItems: ItemAlign.Center }) {
-            Row() { ReferenceIntroStat({ icon: $r('app.media.ref_play'), value: this.vd ? this.fmtN(this.vd.stat.view) : this.vi.view !== undefined ? this.fmtN(this.vi.view) : '—' }) }.margin({ right: 8 })
-            Row() { ReferenceIntroStat({ icon: $r('app.media.ref_danmaku'), value: this.vd ? this.fmtN(this.vd.stat.danmaku) : '—' }) }.margin({ right: 8 })
+            Row() { ReferenceIntroStat({ icon: $r('app.media.ref_play'), value: this.referenceIntroStat('view') }) }.margin({ right: 8 })
+            Row() { ReferenceIntroStat({ icon: $r('app.media.ref_danmaku'), value: this.referenceIntroStat('danmaku') }) }.margin({ right: 8 })
             Text(this.referencePublishTime()).fontSize(10).fontColor('#757A81').maxLines(1)
           }.width('100%')
-          if (this.vd?.argue_info?.argue_msg) {
+          if (this.detailIsCurrentVideo() && this.vd?.argue_info?.argue_msg) {
             Row({ space: 4 }) {
               Text('ⓘ').fontSize(13).fontColor('#757A81')
               Text(this.vd.argue_info.argue_msg).fontSize(11).fontColor('#757A81')
@@ -13395,14 +13561,16 @@ struct VideoPlayerPage {
           }
           if (this.referenceDescriptionExpanded) {
             Row({ space: 8 }) {
-              Text(this.isPgc_ ? `ep${this.epId_}` : (this.vd?.bvid || this.vi.bvid)).fontSize(10).fontColor('#757A81')
-              if (this.vd?.rights?.no_reprint === 1) {
+              Text(this.isPgc_ ? `ep${this.epId_}` : this.vi.bvid).fontSize(10).fontColor('#757A81')
+              if (this.detailIsCurrentVideo() && this.vd?.rights?.no_reprint === 1) {
                 Text('⊘ 未经作者授权禁止转载').fontSize(10).fontColor('#757A81')
                   .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
               }
             }.width('100%')
-            Text(this.vd?.desc || '').fontSize(12).lineHeight(19).fontColor('#757A81').width('100%')
-              .gesture(LongPressGesture().onAction(() => { this.showTextSelection('文本工具 · 简介', this.vd?.desc || ''); }))
+            Text(this.detailIsCurrentVideo() ? (this.vd?.desc || '') : '').fontSize(12).lineHeight(19).fontColor('#757A81').width('100%')
+              .gesture(LongPressGesture().onAction(() => {
+                this.showTextSelection('文本工具 · 简介', this.detailIsCurrentVideo() ? (this.vd?.desc || '') : '');
+              }))
             if (this.isPgc_ && !(this.vd?.owner.mid || 0) && this.vd?.owner.name &&
               !this.vd.desc.includes(this.vd.owner.name)) {
               Text(this.vd.owner.name).fontSize(12).lineHeight(19).fontColor('#757A81').width('100%')
@@ -13414,14 +13582,14 @@ struct VideoPlayerPage {
           ReferencePlayerAction({ icon: $r('app.media.ref_dislike'), label: this.isDisliked ? '取消不喜欢' : '不喜欢', selected: this.isDisliked, intro: true, onAction: () => this.referenceDislike() })
           ReferencePlayerAction({ icon: $r('app.media.ref_coin'), label: this.fmtN(this.coinCount), selected: this.isCoined, intro: true, onAction: () => this.toggleCoin(1) })
           ReferencePlayerAction({ icon: $r('app.media.ref_favorite'), label: this.fmtN(this.favoriteCount), selected: this.isFavorited, intro: true, onAction: () => this.toggleFavorite() })
-          ReferencePlayerAction({ icon: $r('app.media.ref_share_solid'), label: this.fmtN(this.vd?.stat.share || 0), intro: true, onAction: () => { this.referencePortraitAction('share:intro'); } })
+          ReferencePlayerAction({ icon: $r('app.media.ref_share_solid'), label: this.fmtN(this.detailIsCurrentVideo() ? (this.vd?.stat.share || 0) : 0), intro: true, onAction: () => { this.referencePortraitAction('share:intro'); } })
         }.width('100%').padding({ top: 4, bottom: 12 })
         if (this.vd?.ugc_season?.id) {
           Row({ space: 6 }) {
             Text(`合集 · ${this.vd.ugc_season.title || ''}`).fontSize(14)
               .fontColor(this.isDarkMode ? '#E7E9EB' : '#18191C').maxLines(1)
               .textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
-            Text(`${this.seasonCurrentEpisodeIndex() + 1}/${this.vd.ugc_season.epCount || this.seasonCurrentEpisodes().length}`)
+            Text(`${this.seasonCurrentEpisodeIndex() + 1}/${this.seasonTotalEpisodeCount()}`)
               .fontSize(11).fontColor('#757A81')
             Image($r('app.media.ref_chevron_right')).width(16).height(16).fillColor('#757A81')
           }.width('100%').height(34).padding({ left: 12, right: 10 }).borderRadius(4)
@@ -13429,8 +13597,8 @@ struct VideoPlayerPage {
             .onClick(() => { this.openSeasonSheet(); })
             .margin({ bottom: 12 })
         }
-        if ((this.vd?.pages?.length ?? 0) > (this.isPgc_ ? 0 : 1)) {
-          ReferenceEpisodeStrip({ pages: this.vd?.pages || [], isDarkMode: this.isDarkMode,
+        if (this.pagesForCurrentVideo().length > (this.isPgc_ ? 0 : 1)) {
+          ReferenceEpisodeStrip({ pages: this.pagesForCurrentVideo(), isDarkMode: this.isDarkMode,
             playing: this.play && !this.waitingForFirstFrame,
             selectedIndex: this.referenceEpisodeSelection >= 0 ? this.referenceEpisodeSelection : this.currentPageIndex,
             onSelect: (index: number) => { this.triggerHaptic(); this.switchEpisode(index); },
@@ -13541,9 +13709,10 @@ struct VideoPlayerPage {
                 })
                 Blank()
                 Row() {
+                  // 竖屏 Tab 栏弹幕输入入口：沿用评论页输入胶囊的 capsule 材质与次级前景色。
                   NativeGlassInput({ inputHeight: 28 }) {
                     Row({ space: 8 }) {
-                      Text('点我发弹幕').fontSize(11).fontColor('#757A81').height('100%')
+                      Text('点我发弹幕').fontSize(11).fontColor($r('app.color.color_player_text_secondary')).height('100%')
                         .onClick(() => { this.showDanmakuSheet = true; })
                       Rect().width(0.5).height(22).fill(this.isDarkMode ? '#303234' : '#E3E5E7')
                       Image(this.isDanmakuEnabled ? $r('app.media.ref_danmaku_checked') : $r('app.media.ref_apk_danmaku_off')).width(23).height(23)
@@ -13702,10 +13871,11 @@ struct VideoPlayerPage {
   private referenceToggleInfo(): void {
     if (this.fullscreenTransformTouch || Date.now() < this.fullscreenTransformClickUntil) return;
     if (this.referenceModeAnimating || this.referenceFeedComments || this.referenceVerticalSwipe || this.referenceFeedPanOwnsTouch || this.mp) return;
-    this.getUIContext().animateTo({ duration: 160, curve: Curve.EaseOut }, () => {
+    this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 160, curve: Curve.EaseOut }, () => {
       this.referenceInfoHidden = !this.referenceInfoHidden;
     });
-    this.manageSB(true);
+    // 目标系统栏状态变化才下发；单击显隐是高频操作，不该每次都重算一遍窗口 avoidArea。
+    this.manageSB();
     logInfo(`[ReferencePortrait] information hidden=${this.referenceInfoHidden}`);
   }
 
@@ -13771,7 +13941,8 @@ struct VideoPlayerPage {
 
   private referenceOpenPortraitSettings(): void {
     this.referenceInfoHidden = false;
-    this.manageSB(true);
+    // 目标系统栏状态没变就别再下发窗口指令，否则动画首帧要先等一轮 avoidArea 重算。
+    this.manageSB();
     this.referenceAnimateMenu(true);
     logInfo('[ReferencePortrait] settings open');
   }
@@ -13782,14 +13953,30 @@ struct VideoPlayerPage {
     logInfo('[ReferencePortrait] settings close');
   }
 
+  /**
+   * 抽屉开合：只有 translate 在动，必须让它跑满屏幕刷新率。
+   * 不声明 expectedFrameRateRange 时按 60Hz 出帧，120Hz 真机上这段位移只有十几帧，
+   * 观感就是「一顿一顿」。这里按设备上限要帧，并把动画窗口收紧一点，少掉几帧也不显。
+   */
   private referenceAnimateMenu(open: boolean): void {
     this.referencePortraitSettingsAnimating = true;
     const token = ++this.referencePortraitMotionToken;
-    this.getUIContext().animateTo({ duration: 280, curve: Curve.EaseOut,
+    this.getUIContext().animateTo({ duration: open ? 260 : 220, curve: Curve.EaseOut,
+      expectedFrameRateRange: { min: 60, max: 120, expected: 120 },
       onFinish: () => {
-        if (token === this.referencePortraitMotionToken) this.referencePortraitSettingsAnimating = false;
+        if (token !== this.referencePortraitMotionToken) return;
+        this.referencePortraitSettingsAnimating = false;
+        this.referenceRestoreProgressUi();
       }
     }, () => { this.mp = open; this.ip = open; });
+  }
+
+  /** 动画期间冻结了进度/字幕的 UI 写入，收尾时补一次真实进度。 */
+  private referenceRestoreProgressUi(): void {
+    if (!this.av || this.sk_ || this.sg_) return;
+    // 播完时 currentTime 可能已经回到 0，别把进度条从片尾拉回去。
+    if (this.av.state === 'completed') return;
+    this.ct = Math.max(0, this.av.currentTime / 1000);
   }
 
   private referenceMenuVisibility(): Visibility {
@@ -14202,7 +14389,8 @@ struct VideoPlayerPage {
           }).width('96%').height(20).id('feed-seek-bar')
         Row() {
           Row() {
-            NativeGlassInput({ inputHeight: 34, refractive: false }) {
+            // 连刷浮层弹幕输入入口：与评论页输入胶囊同款 capsule 材质、全圆角。
+            NativeGlassInput({ inputHeight: 34 }) {
               Row({ space: 10 }) {
                 Image($r('app.media.ref_danmaku_checked')).width(23).height(23)
                 Rect().width(0.5).height(13).fill('#888888')

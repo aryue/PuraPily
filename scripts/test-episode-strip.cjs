@@ -11,7 +11,7 @@ function between(source, start, end) {
 }
 const context = { exports: {}, MIN_HEARTBEAT_PROGRESS_SEC: 15, logInfo() {}, logError() {}, errMsg: String };
 vm.runInNewContext(ts.transpileModule(`export class Page {
-  ${between(page, '  private switchEpisode(', '  // ⭐ 格式化时长')}
+  ${between(page, '  private pagesForCurrentVideo(', '  // ⭐ 格式化时长')}
 }
 export class Strip {
   ${between(strip, '  private syncPages():', '  build() {')}

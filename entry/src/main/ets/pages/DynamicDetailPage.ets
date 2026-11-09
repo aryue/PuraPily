@@ -597,7 +597,7 @@ struct DynamicDetailPage {
         const newSide = this.floatBtnX() + 24 < this.viewportWidth / 2 ? 'left' : 'right';
         const bottom = Math.max(this.floatBtnMinBottom(), Math.min(this.floatBtnMaxBottom(),
           event.type === TouchType.Cancel ? this.dragStartY : this.dynDetailFloatBtnY));
-        animateTo({ duration: this.da ? 0 : 360, curve: curves.springMotion(0.35, 0.8) }, () => {
+        animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: this.da ? 0 : 360, curve: curves.springMotion(0.35, 0.8) }, () => {
           this.dynDetailFloatBtnY = bottom;
           if (snapSide && event.type !== TouchType.Cancel) this.dynDetailFloatBtnSide = newSide;
           this.isDragging = false;

@@ -450,7 +450,7 @@ export struct CommentInputBar {
           .width(18).height(18)
           .fillColor('#797D84').margin(6)
           .onClick(() => {
-            this.getUIContext().animateTo({ duration: 240, curve: Curve.EaseInOut }, () => {
+            this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 240, curve: Curve.EaseInOut }, () => {
               this.expanded = !this.expanded;
             });
           })

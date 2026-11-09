@@ -515,7 +515,7 @@ export struct VideoControls {
     }
     this.hintGrowStarted = true;
     const gen: number = this.hintCurtainGen;
-    animateTo({
+    animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 },
       duration: 220,
       curve: curves.springMotion(0.36, 0.9),
       // ⭐ 填充条的卷帘**播完之后**才让缩略图弹簧卷帘进来（用户 2026-09-24 要求
@@ -576,7 +576,7 @@ export struct VideoControls {
     if (this.isEdgePill()) return;
     // 长按胶囊的缩回在 syncHintPopups 的 hold 分支里（它走的是 holdPop，不是 hintGrow）
     if (this.gestureHintType === '') return;
-    animateTo({ duration: 180, curve: Curve.EaseIn }, () => {
+    animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 180, curve: Curve.EaseIn }, () => {
       // seek：整卡卷帘收回起点 + 缩略图槽一并收回（入场是"先填充条卷帘、再缩略图卷帘"，
       // 出场合成一段收回即可 —— 反正是同一块高度在缩）
       this.hintGrow = this.growStart();
@@ -1349,10 +1349,10 @@ export struct VideoControls {
           .opacity(0.85)
           .margin({ right: 2 })
           .scale({ x: this.speedPulse ? 1.1 : 1, y: this.speedPulse ? 1.1 : 1 })
-          .animation({ duration: 250, curve: Curve.Sharp })
+          .animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 250, curve: Curve.Sharp })
           .transition(this.gatedT(
-            TransitionEffect.OPACITY.animation({ duration: 250, curve: Curve.EaseInOut })
-              .combine(TransitionEffect.scale({ x: 0.92, y: 0.92 }).animation({ duration: 250, curve: Curve.EaseOut }))
+            TransitionEffect.OPACITY.animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 250, curve: Curve.EaseInOut })
+              .combine(TransitionEffect.scale({ x: 0.92, y: 0.92 }).animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 250, curve: Curve.EaseOut }))
           ))
         Text(this.speedText)
           .fontSize(14)
@@ -1362,8 +1362,8 @@ export struct VideoControls {
           .maxLines(1)
           .textAlign(TextAlign.End)
           .transition(this.gatedT(
-            TransitionEffect.OPACITY.animation({ duration: 250, curve: Curve.EaseInOut, delay: 40 })
-              .combine(TransitionEffect.translate({ y: 6 }).animation({ duration: 250, curve: Curve.EaseOut, delay: 40 }))
+            TransitionEffect.OPACITY.animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 250, curve: Curve.EaseInOut, delay: 40 })
+              .combine(TransitionEffect.translate({ y: 6 }).animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 250, curve: Curve.EaseOut, delay: 40 }))
           ))
       }
       .width(88)
@@ -1382,8 +1382,8 @@ export struct VideoControls {
         .maxLines(1)
         .textAlign(TextAlign.Center)
           .transition(this.gatedT(
-            TransitionEffect.OPACITY.animation({ duration: 250, curve: Curve.EaseInOut, delay: 40 })
-              .combine(TransitionEffect.translate({ y: 6 }).animation({ duration: 250, curve: Curve.EaseOut, delay: 40 }))
+            TransitionEffect.OPACITY.animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 250, curve: Curve.EaseInOut, delay: 40 })
+              .combine(TransitionEffect.translate({ y: 6 }).animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 250, curve: Curve.EaseOut, delay: 40 }))
           ))
 
       Text('·')
@@ -1402,8 +1402,8 @@ export struct VideoControls {
           .maxLines(1)
           .textAlign(TextAlign.Start)
           .transition(this.gatedT(
-            TransitionEffect.OPACITY.animation({ duration: 250, curve: Curve.EaseInOut, delay: 40 })
-              .combine(TransitionEffect.translate({ y: 6 }).animation({ duration: 250, curve: Curve.EaseOut, delay: 40 }))
+            TransitionEffect.OPACITY.animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 250, curve: Curve.EaseInOut, delay: 40 })
+              .combine(TransitionEffect.translate({ y: 6 }).animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 250, curve: Curve.EaseOut, delay: 40 }))
           ))
         Image($r(this.isCharging ? 'app.media.battery_charge14' : 'app.media.batteryfull_32'))
           .width(20)
@@ -1412,10 +1412,10 @@ export struct VideoControls {
           .opacity(this.isLowBattery ? (this.blinkPhase ? 0.4 : 1)
             : this.isCharging ? (this.blinkPhase ? 0.75 : 1) : 0.85)
           .margin({ left: 2 })
-          .animation({ duration: 500, curve: Curve.Linear })
+          .animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 500, curve: Curve.Linear })
           .transition(this.gatedT(
-            TransitionEffect.OPACITY.animation({ duration: 250, curve: Curve.EaseInOut })
-              .combine(TransitionEffect.scale({ x: 0.92, y: 0.92 }).animation({ duration: 250, curve: Curve.EaseOut }))
+            TransitionEffect.OPACITY.animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 250, curve: Curve.EaseInOut })
+              .combine(TransitionEffect.scale({ x: 0.92, y: 0.92 }).animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 250, curve: Curve.EaseOut }))
           ))
       }
       .width(88)
@@ -1437,8 +1437,8 @@ export struct VideoControls {
         .maxLines(1)
         .textAlign(TextAlign.Center)
         .transition(this.gatedT(
-          TransitionEffect.OPACITY.animation({ duration: 250, curve: Curve.EaseInOut, delay: 40 })
-            .combine(TransitionEffect.translate({ y: 6 }).animation({ duration: 250, curve: Curve.EaseOut, delay: 40 }))
+          TransitionEffect.OPACITY.animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 250, curve: Curve.EaseInOut, delay: 40 })
+            .combine(TransitionEffect.translate({ y: 6 }).animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 250, curve: Curve.EaseOut, delay: 40 }))
         ))
       Text('·')
         .fontSize(14)
@@ -1453,10 +1453,10 @@ export struct VideoControls {
         .opacity(0.85)
         .margin({ right: 2 })
         .scale({ x: this.speedPulse ? 1.1 : 1, y: this.speedPulse ? 1.1 : 1 })
-        .animation({ duration: 250, curve: Curve.Sharp })
+        .animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 250, curve: Curve.Sharp })
         .transition(this.gatedT(
-          TransitionEffect.OPACITY.animation({ duration: 250, curve: Curve.EaseInOut })
-            .combine(TransitionEffect.scale({ x: 0.92, y: 0.92 }).animation({ duration: 250, curve: Curve.EaseOut }))
+          TransitionEffect.OPACITY.animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 250, curve: Curve.EaseInOut })
+            .combine(TransitionEffect.scale({ x: 0.92, y: 0.92 }).animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 250, curve: Curve.EaseOut }))
         ))
       Text(this.speedText)
         .fontSize(14)
@@ -1466,8 +1466,8 @@ export struct VideoControls {
         .maxLines(1)
         .textAlign(TextAlign.End)
         .transition(this.gatedT(
-          TransitionEffect.OPACITY.animation({ duration: 250, curve: Curve.EaseInOut, delay: 40 })
-            .combine(TransitionEffect.translate({ y: 6 }).animation({ duration: 250, curve: Curve.EaseOut, delay: 40 }))
+          TransitionEffect.OPACITY.animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 250, curve: Curve.EaseInOut, delay: 40 })
+            .combine(TransitionEffect.translate({ y: 6 }).animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 250, curve: Curve.EaseOut, delay: 40 }))
         ))
     }
     .alignItems(VerticalAlign.Center)
@@ -1487,8 +1487,8 @@ export struct VideoControls {
         .maxLines(1)
         .textAlign(TextAlign.Start)
         .transition(this.gatedT(
-          TransitionEffect.OPACITY.animation({ duration: 250, curve: Curve.EaseInOut, delay: 40 })
-            .combine(TransitionEffect.translate({ y: 6 }).animation({ duration: 250, curve: Curve.EaseOut, delay: 40 }))
+          TransitionEffect.OPACITY.animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 250, curve: Curve.EaseInOut, delay: 40 })
+            .combine(TransitionEffect.translate({ y: 6 }).animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 250, curve: Curve.EaseOut, delay: 40 }))
         ))
         Image($r(this.isCharging ? 'app.media.battery_charge14' : 'app.media.batteryfull_32'))
         .width(20)
@@ -1497,10 +1497,10 @@ export struct VideoControls {
         .opacity(this.isLowBattery ? (this.blinkPhase ? 0.4 : 1)
           : this.isCharging ? (this.blinkPhase ? 0.75 : 1) : 0.85)
         .margin({ left: 2 })
-        .animation({ duration: 500, curve: Curve.Linear })
+        .animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 500, curve: Curve.Linear })
         .transition(this.gatedT(
-          TransitionEffect.OPACITY.animation({ duration: 250, curve: Curve.EaseInOut })
-            .combine(TransitionEffect.scale({ x: 0.92, y: 0.92 }).animation({ duration: 250, curve: Curve.EaseOut }))
+          TransitionEffect.OPACITY.animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 250, curve: Curve.EaseInOut })
+            .combine(TransitionEffect.scale({ x: 0.92, y: 0.92 }).animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 250, curve: Curve.EaseOut }))
         ))
     }
     .alignItems(VerticalAlign.Center)
@@ -1522,11 +1522,11 @@ export struct VideoControls {
 
   /** 标题变化：快速淡出后淡入（切集 crossfade） */
   private onVideoTitleChange() {
-    this.getUIContext().animateTo({ duration: 150, curve: Curve.EaseIn }, () => {
+    this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 150, curve: Curve.EaseIn }, () => {
       this.titleFade = 0;
     });
     setTimeout(() => {
-      this.getUIContext().animateTo({ duration: 280, curve: Curve.EaseInOut }, () => {
+      this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 280, curve: Curve.EaseInOut }, () => {
         this.titleFade = 1;
       });
     }, 160);
@@ -1563,8 +1563,8 @@ export struct VideoControls {
   private hintTransition(): TransitionEffect {
     return this.gatedT(
       TransitionEffect.asymmetric(
-        TransitionEffect.OPACITY.animation({ duration: 170, curve: curves.springMotion(0.3, 0.9) }),
-        TransitionEffect.OPACITY.animation({ duration: 200, curve: Curve.EaseIn })
+        TransitionEffect.OPACITY.animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 170, curve: curves.springMotion(0.3, 0.9) }),
+        TransitionEffect.OPACITY.animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 200, curve: Curve.EaseIn })
       )
     );
   }
@@ -1598,11 +1598,11 @@ export struct VideoControls {
     return this.gatedT(
       TransitionEffect.asymmetric(
         TransitionEffect.translate({ x: offset })
-          .animation({ duration: 300, curve: curves.springMotion(0.36, 0.62) })
-          .combine(TransitionEffect.OPACITY.animation({ duration: 300, curve: curves.springMotion(0.36, 0.9) })),
+          .animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: curves.springMotion(0.36, 0.62) })
+          .combine(TransitionEffect.OPACITY.animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: curves.springMotion(0.36, 0.9) })),
         TransitionEffect.translate({ x: offset })
-          .animation({ duration: 200, curve: Curve.EaseIn })
-          .combine(TransitionEffect.OPACITY.animation({ duration: 200, curve: Curve.EaseIn }))
+          .animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 200, curve: Curve.EaseIn })
+          .combine(TransitionEffect.OPACITY.animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 200, curve: Curve.EaseIn }))
       )
     );
   }
@@ -1838,10 +1838,11 @@ export struct VideoControls {
   }
 
   // ⭐ 发弹幕胶囊按钮（间距由胶囊单独承担：8+14+12=34vp 视觉间隙）
+  // 与评论页输入胶囊同款 capsule 材质，全圆角；视频上的前景保持白色保证可读。
   @Builder
   btnDanmakuSend() {
     Row() {
-      NativeGlassInput({ inputHeight: 32, refractive: false }) {
+      NativeGlassInput({ inputHeight: 32 }) {
         Row() {
           Image($r('app.media.danmfas')).width(18).height(18).fillColor('#FFFFFF').margin({ right: 5 })
           Text('发弹幕').fontSize(12).fontColor(Color.White)
@@ -1960,8 +1961,8 @@ export struct VideoControls {
       .padding({ left: 3, right: 6 })
       .alignItems(VerticalAlign.Center)
     .transition(this.gatedT(
-      TransitionEffect.OPACITY.animation({ duration: 300, curve: Curve.EaseInOut })
-        .combine(TransitionEffect.translate({ x: slideFrom }).animation({ duration: 300, curve: Curve.EaseInOut }))
+      TransitionEffect.OPACITY.animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.EaseInOut })
+        .combine(TransitionEffect.translate({ x: slideFrom }).animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.EaseInOut }))
     ))
 
     } else {
@@ -1990,8 +1991,8 @@ export struct VideoControls {
       // 9vp：使「更多」图标右缘/列心与底部「全屏」按钮列对齐（16+9+11=36）；镜像时补左侧 3vp 保持 22vp 边距
       .margin(this.isMirrorControls && this.isFullscreen && !this.liveMode ? { left: 6, right: 9 } : { right: 9 })
     .transition(this.gatedT(
-      TransitionEffect.OPACITY.animation({ duration: 300, curve: Curve.EaseInOut })
-        .combine(TransitionEffect.translate({ x: slideFrom }).animation({ duration: 300, curve: Curve.EaseInOut }))
+      TransitionEffect.OPACITY.animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.EaseInOut })
+        .combine(TransitionEffect.translate({ x: slideFrom }).animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.EaseInOut }))
     ))
 
     }
@@ -2024,8 +2025,8 @@ export struct VideoControls {
       // ⭐ 补偿图标矢量左侧空隙：图标左缘与时间/进度条对齐；镜像后改为补偿右侧
       .margin(this.isMirrorControls && this.isFullscreen && !this.liveMode ? { right: -6 } : { left: -6 })
     .transition(this.gatedT(
-      TransitionEffect.OPACITY.animation({ duration: 300, curve: Curve.EaseInOut })
-        .combine(TransitionEffect.translate({ x: slideFrom }).animation({ duration: 300, curve: Curve.EaseInOut }))
+      TransitionEffect.OPACITY.animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.EaseInOut })
+        .combine(TransitionEffect.translate({ x: slideFrom }).animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.EaseInOut }))
     ))
 
     }
@@ -2088,8 +2089,8 @@ export struct VideoControls {
       .height(42)
       .alignItems(VerticalAlign.Center)
     .transition(this.gatedT(
-      TransitionEffect.OPACITY.animation({ duration: 300, curve: Curve.EaseInOut })
-        .combine(TransitionEffect.translate({ x: slideFrom }).animation({ duration: 300, curve: Curve.EaseInOut }))
+      TransitionEffect.OPACITY.animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.EaseInOut })
+        .combine(TransitionEffect.translate({ x: slideFrom }).animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.EaseInOut }))
     ))
     } else {
       Row() {
@@ -2106,8 +2107,8 @@ export struct VideoControls {
       }
       .alignItems(VerticalAlign.Center)
     .transition(this.gatedT(
-      TransitionEffect.OPACITY.animation({ duration: 300, curve: Curve.EaseInOut })
-        .combine(TransitionEffect.translate({ x: slideFrom }).animation({ duration: 300, curve: Curve.EaseInOut }))
+      TransitionEffect.OPACITY.animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.EaseInOut })
+        .combine(TransitionEffect.translate({ x: slideFrom }).animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.EaseInOut }))
     ))
     }
   }
@@ -2134,8 +2135,8 @@ export struct VideoControls {
             .height(40)
             .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.85 })
             .transition(this.gatedT(
-      TransitionEffect.OPACITY.animation({ duration: 300, curve: Curve.EaseInOut })
-        .combine(TransitionEffect.scale({ x: 0.6, y: 0.6 }).animation({ duration: 300, curve: Curve.EaseInOut }))
+      TransitionEffect.OPACITY.animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.EaseInOut })
+        .combine(TransitionEffect.scale({ x: 0.6, y: 0.6 }).animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.EaseInOut }))
     ))
 
             .onClick(() => {
@@ -2171,8 +2172,8 @@ export struct VideoControls {
               .height(40)
               .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.85 })
               .transition(this.gatedT(
-      TransitionEffect.OPACITY.animation({ duration: 300, curve: Curve.EaseInOut, delay: 60 })
-        .combine(TransitionEffect.scale({ x: 0.6, y: 0.6 }).animation({ duration: 300, curve: Curve.EaseInOut, delay: 60 }))
+      TransitionEffect.OPACITY.animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.EaseInOut, delay: 60 })
+        .combine(TransitionEffect.scale({ x: 0.6, y: 0.6 }).animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.EaseInOut, delay: 60 }))
     ))
               .hitTestBehavior(HitTestMode.Default)
               .onClick(() => {
@@ -2196,14 +2197,14 @@ export struct VideoControls {
               .alignItems(HorizontalAlign.Center)
               .width(40)
               .height(40)
-              .animation({
+              .animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 },
                 duration: 400,
                 curve: Curve.Friction
               })
               .scale({ x: this.lockPulse, y: this.lockPulse })
               .transition(this.gatedT(
-      TransitionEffect.OPACITY.animation({ duration: 300, curve: Curve.EaseInOut, delay: 60 })
-        .combine(TransitionEffect.scale({ x: 0.6, y: 0.6 }).animation({ duration: 300, curve: Curve.EaseInOut, delay: 60 }))
+      TransitionEffect.OPACITY.animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.EaseInOut, delay: 60 })
+        .combine(TransitionEffect.scale({ x: 0.6, y: 0.6 }).animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.EaseInOut, delay: 60 }))
     ))
               .hitTestBehavior(HitTestMode.Default)
             }
@@ -2216,7 +2217,7 @@ export struct VideoControls {
         .hitTestBehavior(HitTestMode.Transparent)
       }
       .position({ x: side === 'left' ? 0 : '100%', y: '50%' })
-      .transition(this.gatedT(TransitionEffect.OPACITY.animation({ duration: 300, curve: Curve.EaseInOut })))
+      .transition(this.gatedT(TransitionEffect.OPACITY.animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.EaseInOut })))
       // 组合（92vp 高）中心对齐屏幕中心：y 上移自身一半高度；切换中心 50%-26、锁定中心 50%+26，间距 12
       // x：右侧 -76、左侧 +36，两边距屏幕边缘均 36vp（右侧 100%-76-40 → 36）
       .translate({ x: side === 'left' ? 36 : -76, y: '-50%' })
@@ -2390,7 +2391,8 @@ export struct VideoControls {
           }.alignItems(VerticalAlign.Center).flexShrink(0)
 
           Row() {
-            NativeGlassInput({ inputHeight: 34, refractive: false }) {
+            // 评论页输入胶囊同款 capsule 材质 + 全圆角，占位文字在左；点击后打开共用弹幕编辑器。
+            NativeGlassInput({ inputHeight: 34 }) {
               Row() {
                 Text('发个友善的弹幕见证当下').fontSize(13).fontColor(Color.White).maxLines(1)
                   .textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
@@ -2546,8 +2548,8 @@ export struct VideoControls {
               .justifyContent(FlexAlign.Center)
               .alignItems(HorizontalAlign.Center)
               .transition(this.gatedT(
-                TransitionEffect.OPACITY.animation({ duration: 300, curve: Curve.EaseInOut })
-                  .combine(TransitionEffect.translate({ x: 24 }).animation({ duration: 300, curve: Curve.EaseInOut }))
+                TransitionEffect.OPACITY.animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.EaseInOut })
+                  .combine(TransitionEffect.translate({ x: 24 }).animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.EaseInOut }))
               ))
               .onClick(() => {
                 this.onHomePress();
@@ -2564,8 +2566,8 @@ export struct VideoControls {
               .justifyContent(FlexAlign.Center)
               .alignItems(HorizontalAlign.Center)
               .transition(this.gatedT(
-                TransitionEffect.OPACITY.animation({ duration: 300, curve: Curve.EaseInOut })
-                  .combine(TransitionEffect.translate({ x: -24 }).animation({ duration: 300, curve: Curve.EaseInOut }))
+                TransitionEffect.OPACITY.animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.EaseInOut })
+                  .combine(TransitionEffect.translate({ x: -24 }).animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.EaseInOut }))
               ))
               .onClick(() => {
                 this.onMorePress();
@@ -2600,8 +2602,8 @@ export struct VideoControls {
                   .opacity(this.titleFade)
                   .marqueeOptions({ start: true, step: 4 })
                   .transition(this.gatedT(
-                    TransitionEffect.OPACITY.animation({ duration: 300, curve: Curve.EaseInOut })
-                      .combine(TransitionEffect.translate({ y: 8 }).animation({ duration: 300, curve: Curve.EaseInOut }))
+                    TransitionEffect.OPACITY.animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.EaseInOut })
+                      .combine(TransitionEffect.translate({ y: 8 }).animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.EaseInOut }))
                   ))
               }
 
@@ -2704,8 +2706,8 @@ export struct VideoControls {
               .alignItems(VerticalAlign.Center)
               .padding({ left: 16, right: 16 })
               .transition(this.gatedT(
-                TransitionEffect.OPACITY.animation({ duration: 300, curve: Curve.EaseInOut })
-                  .combine(TransitionEffect.translate({ y: 8 }).animation({ duration: 300, curve: Curve.EaseInOut }))
+                TransitionEffect.OPACITY.animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.EaseInOut })
+                  .combine(TransitionEffect.translate({ y: 8 }).animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.EaseInOut }))
               ))
               }
               .width('100%')
@@ -2738,7 +2740,7 @@ export struct VideoControls {
         .width('100%')
         .height('100%')
         .justifyContent(FlexAlign.SpaceBetween)
-        .transition(this.gatedT(TransitionEffect.OPACITY.animation({ duration: 300, curve: Curve.EaseInOut })))
+        .transition(this.gatedT(TransitionEffect.OPACITY.animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.EaseInOut })))
       }
 
         }

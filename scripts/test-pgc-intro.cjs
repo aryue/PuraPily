@@ -49,5 +49,5 @@ const panel = between('  ReferencePanel() {', '  ReferenceLandscapeResizeHandle(
 assert.ok(!panel.includes('this.bDetailCard()'), 'PGC must not fall back to the legacy intro');
 assert.ok(panel.includes('this.ReferenceIntro()'));
 const episodes = between('  episodeSheetContent() {', '  seasonSheetContent() {');
-assert.ok(episodes.includes('this.vd.pages.length > 0'), 'single-episode movies need a real episode row');
+assert.ok(episodes.includes('this.pagesForCurrentVideo().length > 0'), 'single-episode movies need a real episode row');
 console.log('PASS: unified PGC intro, episode links, and continuous list/panel scroll handoff');

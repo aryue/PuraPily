@@ -207,7 +207,7 @@ struct OfflineCachePage {
       this.collapsePlayer();
       return;
     }
-    animateTo({ duration: 300 }, () => {
+    animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300 }, () => {
       this.playingBvid = item.bvid;
       this.playingCid = item.cid;
     });
@@ -215,7 +215,7 @@ struct OfflineCachePage {
 
   /** 收起内嵌播放器（组件 aboutToDisappear 自动释放播放器与 fd） */
   private collapsePlayer(): void {
-    animateTo({ duration: 300 }, () => {
+    animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300 }, () => {
       this.playingBvid = '';
       this.playingCid = 0;
     });

@@ -153,7 +153,7 @@ export struct WhisperInputBar {
         //    按钮先收起 300ms，完成后再收占位 450ms 撑满胶囊）
         this.spaceNarrow = false;
         const token: number = ++this.capsuleAnimToken;
-        this.getUIContext().animateTo({ duration: 300, curve: Curve.FastOutSlowIn }, () => {
+        this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.FastOutSlowIn }, () => {
           this.showSend = false;
         });
         setTimeout(() => {
@@ -184,7 +184,7 @@ export struct WhisperInputBar {
       this.spaceNarrow = true;
       this.capsuleAnimToken++;
       this.animateButtonSpace(60, 450, () => {
-        this.getUIContext().animateTo({ duration: 300, curve: Curve.FastOutSlowIn }, () => {
+        this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.FastOutSlowIn }, () => {
           this.showSend = true;
         });
       });
@@ -528,14 +528,14 @@ export struct WhisperInputBar {
               this.spaceNarrow = true;
               this.capsuleAnimToken++;
               this.animateButtonSpace(60, 450, () => {
-                this.getUIContext().animateTo({ duration: 300, curve: Curve.FastOutSlowIn }, () => {
+                this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.FastOutSlowIn }, () => {
                   this.showSend = true;
                 });
               });
             } else {
               this.spaceNarrow = false;
               const token: number = ++this.capsuleAnimToken;
-              this.getUIContext().animateTo({ duration: 300, curve: Curve.FastOutSlowIn }, () => {
+              this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.FastOutSlowIn }, () => {
                 this.showSend = false;
               });
               setTimeout(() => {

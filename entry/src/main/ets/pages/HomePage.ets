@@ -501,7 +501,7 @@ export struct HomePage {
     }
     // 返回页面时渐显渐变网点（离开时可能为 0），首次加载跳过（由 refreshData 统一控制）
     if (this.banners.length > 0) {
-      this.getUIContext().animateTo({ duration: 800, curve: Curve.FastOutSlowIn }, () => {
+      this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 800, curve: Curve.FastOutSlowIn }, () => {
         this.dotsOpacity = 1;
       });
     }
@@ -889,7 +889,7 @@ export struct HomePage {
       this.lastCoverUrl = this.bgCoverUrl;
       this.bgCoverUrl = this.banners[Math.min(this.currentSwiperIndex, this.banners.length - 1)].coverUrl;
       this.bgFade = 0;
-      this.getUIContext().animateTo({ duration: 1000, curve: Curve.FastOutSlowIn }, () => {
+      this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 1000, curve: Curve.FastOutSlowIn }, () => {
         this.bgFade = 1;
       });
     }
@@ -1071,14 +1071,14 @@ export struct HomePage {
       if (this.showHomeCarouselPortrait && !this.isLandscape && this.banners.length > 0) {
         // 有旧轮播图 → 渐变网点先渐隐（200ms），再淡出旧内容（400ms），然后更新数据 + 淡入
         try {
-          this.getUIContext().animateTo({ duration: 200, curve: Curve.FastOutSlowIn }, () => {
+          this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 200, curve: Curve.FastOutSlowIn }, () => {
             this.dotsOpacity = 0;
           });
         } catch (_) {
           this.dotsOpacity = 0;
         }
         try {
-          this.getUIContext().animateTo({ duration: 400, curve: Curve.FastOutSlowIn }, () => {
+          this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 400, curve: Curve.FastOutSlowIn }, () => {
             this.carouselVisible = false;
           });
         } catch (_) {
@@ -1093,7 +1093,7 @@ export struct HomePage {
           //    弹回 1.0 时会略微冲过 1 再回落，这才是"弹回"的手感；线性缓动只会看到"慢慢变大"。
           //    曲线沿用本文件列表加载已经在用的 springCurve(0.15, 1, 80, 8)（8 比 12 更欠阻尼 = 更有弹性）。
           try {
-            this.getUIContext().animateTo({ duration: 800, curve: curves.springCurve(0.15, 1, 80, 8) }, () => {
+            this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 800, curve: curves.springCurve(0.15, 1, 80, 8) }, () => {
               this.carouselVisible = true;
             });
           } catch (_) {
@@ -1101,7 +1101,7 @@ export struct HomePage {
           }
           // 轮播图淡入完成后，渐显渐变网点
           setTimeout(() => {
-            this.getUIContext().animateTo({ duration: 800, curve: Curve.FastOutSlowIn }, () => {
+            this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 800, curve: Curve.FastOutSlowIn }, () => {
               this.dotsOpacity = 1;
             });
           }, 800);
@@ -1109,7 +1109,7 @@ export struct HomePage {
       } else if (this.isLandscape && this.showHomeCarouselLandscape && this.banners.length > 0) {
         // 横屏：左固定轮播图淡出→更新→淡入
         try {
-          this.getUIContext().animateTo({ duration: 400, curve: Curve.FastOutSlowIn }, () => {
+          this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 400, curve: Curve.FastOutSlowIn }, () => {
             this.landscapeCarouselVisible = false;
           });
         } catch (_) {
@@ -1121,7 +1121,7 @@ export struct HomePage {
             this.bgCoverUrl = this.banners[0].coverUrl;
           }
           try {
-            this.getUIContext().animateTo({ duration: 800, curve: Curve.FastOutSlowIn }, () => {
+            this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 800, curve: Curve.FastOutSlowIn }, () => {
               this.landscapeCarouselVisible = true;
             });
           } catch (_) {
@@ -1135,7 +1135,7 @@ export struct HomePage {
           this.bgCoverUrl = this.banners[0].coverUrl;
           // ⭐ bgCoverUrl 首次设置，从透明度 0 平滑淡入
           try {
-            this.getUIContext().animateTo({ duration: 1500, curve: Curve.FastOutSlowIn }, () => {
+            this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 1500, curve: Curve.FastOutSlowIn }, () => {
               this.bgFade = 1;
             });
           } catch (_) {
@@ -1148,7 +1148,7 @@ export struct HomePage {
           // 等待封面开始加载后再一起渐显，避免先显示边框和黑色背景
           setTimeout(() => {
             try {
-              this.getUIContext().animateTo({ duration: 600, curve: Curve.FastOutSlowIn }, () => {
+              this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 600, curve: Curve.FastOutSlowIn }, () => {
                 this.carouselVisible = true;
               });
             } catch (_) {
@@ -1157,14 +1157,14 @@ export struct HomePage {
           }, 400);
           // 首次加载：轮播淡入完成后渐显渐变网点
           setTimeout(() => {
-            this.getUIContext().animateTo({ duration: 800, curve: Curve.FastOutSlowIn }, () => {
+            this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 800, curve: Curve.FastOutSlowIn }, () => {
               this.dotsOpacity = 1;
             });
           }, 1500);
         } else if (this.isLandscape && this.showHomeCarouselLandscape && this.banners.length > 0) {
           // 横屏首次加载：淡入左侧固定轮播图
           try {
-            this.getUIContext().animateTo({ duration: 1500, curve: Curve.FastOutSlowIn }, () => {
+            this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 1500, curve: Curve.FastOutSlowIn }, () => {
               this.landscapeCarouselVisible = true;
             });
           } catch (_) {
@@ -1463,29 +1463,34 @@ export struct HomePage {
       (this.isLandscape && !this.showHomeCarouselLandscape ? 4 : 3);
   }
 
+  /**
+   * 双指缩放调整首页列数，语义与「缩放内容」保持一致：
+   * 张开（scale > 1）= 放大卡片 → 减少列数；捏合（scale < 1）= 缩小卡片 → 增加列数。
+   * 2026-11-09 用户反馈原实现方向相反，这里把三个分支整体翻转。
+   */
   private handlePinch(scale: number) {
     let changed = false;
     if (this.viewportWidth >= 600) {
-      const next = Math.max(2, Math.min(this.maximumColumns(), this.columnCount + (scale > 1.05 ? 1 : scale < 0.95 ? -1 : 0)));
+      const next = Math.max(2, Math.min(this.maximumColumns(), this.columnCount + (scale > 1.05 ? -1 : scale < 0.95 ? 1 : 0)));
       changed = next !== this.columnCount;
       this.columnCount = next;
     } else if (this.isLandscape) {
       // 轮播开启时横屏可选2-3列，关闭时3-4列
       const minCols = this.showHomeCarouselLandscape ? 2 : 3;
       const maxCols = this.showHomeCarouselLandscape ? 3 : 4;
-      if (scale > 1.05 && this.columnCount < maxCols) {
-        this.columnCount++;
-        changed = true;
-      } else if (scale < 0.95 && this.columnCount > minCols) {
+      if (scale > 1.05 && this.columnCount > minCols) {
         this.columnCount--;
+        changed = true;
+      } else if (scale < 0.95 && this.columnCount < maxCols) {
+        this.columnCount++;
         changed = true;
       }
     } else {
-      if (scale > 1.05 && this.columnCount < 3) {
-        this.columnCount = 3;
-        changed = true;
-      } else if (scale < 0.95 && this.columnCount > 2) {
+      if (scale > 1.05 && this.columnCount > 2) {
         this.columnCount = 2;
+        changed = true;
+      } else if (scale < 0.95 && this.columnCount < 3) {
+        this.columnCount = 3;
         changed = true;
       }
     }
@@ -1631,7 +1636,7 @@ export struct HomePage {
                     .position({ x: '17.5%', y: homeHeaderContentHeight(this.homeSearchRowHeight) })
                     .scale({ x: 1.55, y: 1.55 })
                     .opacity(this.dotsOpacity * this.carouselDotsFade)
-                    .animation({ duration: 800, curve: Curve.FastOutSlowIn })
+                    .animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 800, curve: Curve.FastOutSlowIn })
                     .hitTestBehavior(HitTestMode.Transparent)
                   Swiper(this.portraitSwiperController) {
                   ForEach(this.banners, (item: RecommendItem, index: number) => {
@@ -1686,7 +1691,7 @@ export struct HomePage {
                       .clip(false)
                       .margin({ top: 12 })
                       .opacity(index === this.currentSwiperIndex ? this.carouselTitleOpacity : 0)
-                      .animation({ duration: 800, curve: Curve.FastOutSlowIn })
+                      .animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 800, curve: Curve.FastOutSlowIn })
                     }
                     .width('100%')
                     .scale({
@@ -1694,7 +1699,7 @@ export struct HomePage {
                       y: index === this.animatedSwiperIndex ? 1.0 : 0.85
                     })
                     .opacity(index === this.animatedSwiperIndex ? 1.0 : 0.7)
-                    .animation({ curve: curves.springMotion(0.5, 0.85, 0) })
+                    .animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, curve: curves.springMotion(0.5, 0.85, 0) })
                     .clickEffect({ level: 0, scale: 0.9 })
                     .onClick(() => this.onCardClick(item))
                   }, (item: RecommendItem) => item.id)
@@ -1717,25 +1722,25 @@ export struct HomePage {
                   this.lastCoverUrl = this.bgCoverUrl;
                   this.bgCoverUrl = this.banners[targetIndex].coverUrl;
                   this.bgFade = 0;
-                  this.getUIContext().animateTo({ duration: 1000, curve: Curve.FastOutSlowIn }, () => {
+                  this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 1000, curve: Curve.FastOutSlowIn }, () => {
                     this.bgFade = 1;
                   });
                   // 轮播开始移动时渐隐网点，为切换后的渐显做准备
-                  this.getUIContext().animateTo({ duration: 600, curve: Curve.FastOutSlowIn }, () => {
+                  this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 600, curve: Curve.FastOutSlowIn }, () => {
                     this.dotsOpacity = 0;
                   });
                 })
                 .onChange((index: number) => {
                   this.currentSwiperIndex = index;
                   // 轮播到位后渐显网点
-                  this.getUIContext().animateTo({ duration: 800, curve: Curve.FastOutSlowIn }, () => {
+                  this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 800, curve: Curve.FastOutSlowIn }, () => {
                     this.dotsOpacity = 1;
                   });
                 })
                 // 手动触摸时立即渐隐网点
                 .onTouch((event: TouchEvent) => {
                   if (event.type === TouchType.Down) {
-                    this.getUIContext().animateTo({ duration: 400, curve: Curve.FastOutSlowIn }, () => {
+                    this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 400, curve: Curve.FastOutSlowIn }, () => {
                       this.dotsOpacity = 0;
                     });
                   }
@@ -1754,7 +1759,7 @@ export struct HomePage {
                   x: this.carouselVisible ? 1 : this.CAROUSEL_HIDDEN_SCALE,
                   y: this.carouselVisible ? 1 : this.CAROUSEL_HIDDEN_SCALE
                 })
-                .animation({ duration: 600, curve: Curve.FastOutSlowIn })
+                .animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 600, curve: Curve.FastOutSlowIn })
                 .translate({ y: this.carouselParallaxY })
                 .margin({ bottom: 15 })
               }   // if showHomeCarouselPortrait
@@ -1906,7 +1911,7 @@ export struct HomePage {
                   .fontWeight(FontWeight.Bolder)
                   .fontColor(this.isDarkMode ? '#FFFFFF' : '#FFFFFF')
                   .opacity(index === this.animatedSwiperIndex ? 0.85 : 0)
-                  .animation({ duration: 800, curve: Curve.FastOutSlowIn })
+                  .animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 800, curve: Curve.FastOutSlowIn })
                   .maxLines(1)
                   .textOverflow({ overflow: TextOverflow.Ellipsis })
                   .width('100%')
@@ -1919,7 +1924,7 @@ export struct HomePage {
                 y: index === this.animatedSwiperIndex ? 1.0 : 0.88
               })
               .opacity(index === this.animatedSwiperIndex ? 1.0 : 0.7)
-              .animation({ curve: curves.springMotion(0.5, 0.85, 0) })
+              .animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, curve: curves.springMotion(0.5, 0.85, 0) })
               .clickEffect({ level: 0, scale: 0.9 })
               .onClick(() => this.onCardClick(item))
             }, (item: RecommendItem) => item.id)
@@ -1941,7 +1946,7 @@ export struct HomePage {
             this.lastCoverUrl = this.bgCoverUrl;
             this.bgCoverUrl = this.banners[targetIndex].coverUrl;
             this.bgFade = 0;
-            this.getUIContext().animateTo({ duration: 1000, curve: Curve.FastOutSlowIn }, () => {
+            this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 1000, curve: Curve.FastOutSlowIn }, () => {
               this.bgFade = 1;
             });
           })
@@ -1965,7 +1970,7 @@ export struct HomePage {
           x: this.landscapeCarouselVisible ? 1 : this.CAROUSEL_HIDDEN_SCALE,
           y: this.landscapeCarouselVisible ? 1 : this.CAROUSEL_HIDDEN_SCALE
         })
-        .animation({ duration: 600, curve: Curve.FastOutSlowIn })
+        .animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 600, curve: Curve.FastOutSlowIn })
         .hitTestBehavior(HitTestMode.Default)
       }
     }

@@ -60,7 +60,7 @@ export struct DynamicBackToTopButton {
         .scale({ x: this.shown ? this.buttonScale * (this.pressed ? 0.96 : 1) : 0,
           y: this.shown ? this.buttonScale * (this.pressed ? 0.96 : 1) : 0 })
         .opacity(this.shown ? 1 : 0)
-        .animation({ duration: 160, curve: Curve.EaseOut })
+        .animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 160, curve: Curve.EaseOut })
         .hitTestBehavior(HitTestMode.None)
         .id('dynamic-backtop-light-source').accessibilityText('回到顶部')
       }.width(this.hostWidth).height(48).flexShrink(0)

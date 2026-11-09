@@ -323,7 +323,7 @@ struct SearchPage {
     if (this.searchCapsuleExpanded === expanded) return;
     this.triggerHaptic();
     if (expanded) {
-      this.getUIContext().animateTo({
+      this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 },
         duration: 450,
         curve: curves.springMotion(0.4, 0.8)
       }, () => {
@@ -332,7 +332,7 @@ struct SearchPage {
         this.searchOrderOpacity = 0;
       });
     } else {
-      this.getUIContext().animateTo({
+      this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 },
         duration: 280,
         curve: curves.springMotion(0.5, 0.85)
       }, () => {
@@ -535,7 +535,7 @@ struct SearchPage {
     this.contentTranslateY = 0;
     // Native insert/remove transitions move the landing and loading scenes together.
     if (firstSearch) {
-      this.getUIContext().animateTo({ duration: this.da ? 0 : 300, curve: Curve.FastOutSlowIn }, () => {
+      this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: this.da ? 0 : 300, curve: Curve.FastOutSlowIn }, () => {
         this.hasActiveSearch = true;
       });
     } else {
@@ -742,7 +742,7 @@ struct SearchPage {
     this.completedHistoryDust.push(word);
     if (this.completedHistoryDust.length !== this.visibleHistoryDust.length) return;
     const removed = this.dissolvingHistory.slice();
-    this.getUIContext().animateTo({ duration: 220, curve: Curve.EaseOut }, () => {
+    this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 220, curve: Curve.EaseOut }, () => {
       this.searchHistory = this.searchHistory.filter(item => !removed.includes(item));
       this.dissolvingHistory = [];
       this.completedHistoryDust = [];
@@ -851,7 +851,7 @@ struct SearchPage {
     this.suggestionWords = [];
     this.showBackToTop = false;
     if (this.suggestTimer > 0) { clearTimeout(this.suggestTimer); this.suggestTimer = 0; }
-    this.getUIContext().animateTo({ duration: this.da ? 0 : 300, curve: Curve.FastOutSlowIn,
+    this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: this.da ? 0 : 300, curve: Curve.FastOutSlowIn,
       onFinish: () => {
         if (scene !== this.sceneVersion || this.hasActiveSearch) return;
         this.activeResults = [];
@@ -886,7 +886,7 @@ struct SearchPage {
 
   // 向下渐隐清空搜索结果
   private animateClearResults(): void {
-    animateTo({ duration: this.da ? 0 : 300, curve: Curve.EaseIn }, () => {
+    animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: this.da ? 0 : 300, curve: Curve.EaseIn }, () => {
       this.contentOpacity = 0;
       this.contentTranslateY = 50; // 向下位移
       this.historyOpacity = 0;
@@ -911,7 +911,7 @@ struct SearchPage {
       // 回到初始态后若有历史记录，渐显
       if (this.showHistory) {
         setTimeout(() => {
-          animateTo({ duration: this.da ? 0 : 250, curve: Curve.EaseOut }, () => {
+          animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: this.da ? 0 : 250, curve: Curve.EaseOut }, () => {
             this.historyOpacity = 1;
             this.historyTranslateY = 0;
           });
@@ -926,7 +926,7 @@ struct SearchPage {
     this.historyOpacity = 0;
     this.historyTranslateY = -20;
     setTimeout(() => {
-      animateTo({ duration: this.da ? 0 : 250, curve: Curve.EaseOut }, () => {
+      animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: this.da ? 0 : 250, curve: Curve.EaseOut }, () => {
         this.historyOpacity = 1;
         this.historyTranslateY = 0;
       });
@@ -936,7 +936,7 @@ struct SearchPage {
   // 带动画隐藏搜索历史
   private hideHistoryWithAnimation(): void {
     if (!this.showHistory) return;
-    animateTo({ duration: this.da ? 0 : 200, curve: Curve.EaseIn }, () => {
+    animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: this.da ? 0 : 200, curve: Curve.EaseIn }, () => {
       this.historyOpacity = 0;
       this.historyTranslateY = -20;
     });
@@ -1095,7 +1095,7 @@ struct SearchPage {
     const height = hidden ? 0 : (this.activeTab === 'video' ? 88 : 44);
     if (this.resultOptionsHidden === hidden && this.resultOptionsHeight === height) return;
     this.resultOptionsHidden = hidden;
-    this.getUIContext().animateTo({ duration: this.da ? 0 : 280, curve: Curve.FastOutSlowIn }, () => {
+    this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: this.da ? 0 : 280, curve: Curve.FastOutSlowIn }, () => {
       this.resultOptionsHeight = height;
     });
   }
@@ -1708,9 +1708,9 @@ struct SearchPage {
         .hitTestBehavior(HitTestMode.Transparent)
         .transition(this.da ? TransitionEffect.OPACITY : TransitionEffect.asymmetric(
             TransitionEffect.translate({ y: -12 }).combine(TransitionEffect.opacity(0))
-              .animation({ duration: 200, curve: Curve.FastOutSlowIn }),
+              .animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 200, curve: Curve.FastOutSlowIn }),
             TransitionEffect.translate({ y: -12 }).combine(TransitionEffect.opacity(0))
-              .animation({ duration: 150, curve: Curve.FastOutSlowIn })
+              .animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 150, curve: Curve.FastOutSlowIn })
           )
         )
 

@@ -26,7 +26,7 @@ export struct CommentActionMenu {
     } catch (_) { this.actionRowHeight = 86; }
     setTimeout(() => {
       if (this.alive && !this.closing) {
-        this.getUIContext().animateTo({ duration: 320, curve: Curve.EaseOut }, () => { this.offsetY = 0; });
+        this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 320, curve: Curve.EaseOut }, () => { this.offsetY = 0; });
       }
     }, 32);
   }
@@ -36,7 +36,7 @@ export struct CommentActionMenu {
   private close(action: string = ''): void {
     if (this.closing) return;
     this.closing = true;
-    this.getUIContext().animateTo({ duration: 280, curve: Curve.EaseIn, onFinish: () => {
+    this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 280, curve: Curve.EaseIn, onFinish: () => {
       if (!this.alive) return;
       // Capture target data before the host closes the dialog.
       const target = this.comment;
@@ -74,7 +74,7 @@ export struct CommentActionMenu {
 
   private settle(offset: number, velocity: number): void {
     if (offset > 88 || (offset > 16 && velocity > 900)) { this.close(); return; }
-    this.getUIContext().animateTo({ duration: 300, curve: curves.springMotion(0.32, 0.86) }, () => { this.offsetY = 0; });
+    this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: curves.springMotion(0.32, 0.86) }, () => { this.offsetY = 0; });
   }
 
   private actionWidth(label: string): number {

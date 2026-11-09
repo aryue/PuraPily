@@ -527,6 +527,8 @@ export interface UgcSeason {
   sections?: Array<SeasonSection>;
   stat?: SeasonStat;
   epCount?: number;
+  /** view 接口原始字段（snake_case）；解析时必须归一到 epCount，否则运行时永远是 undefined */
+  ep_count?: number;
   seasonType?: number;
   isPaySeason?: boolean;
   enableVt?: number;
@@ -3121,21 +3123,13 @@ async function fetchVideoDetail(bvid: string): Promise<VideoDetail | null> {
       }
       detail.pages = mappedPages;
     }
-    // ⭐ undefined 归一为 null（函数返回类型要求 VideoDetail | null）
     // ⭐ UGC 合集解析
     if (detail && detail.ugc_season) {
       const rawSeason = detail.ugc_season as UgcSeason;
-      // 规范化 sections/episodes
-      if (rawSeason.sections && rawSeason.sections.length > 0) {
-        for (const section of rawSeason.sections) {
-          if (section.episodes && section.episodes.length > 0) {
-            for (const ep of section.episodes) {
-              if (!ep.bvid && ep.aid) {
-                // 补 bvid：如果分集没有 bvid，后续可能需要从 aid 转换
-              }
-            }
-          }
-        }
+      // ⭐ view 接口返回的是 snake_case（ep_count / season_type / is_pay_season），
+      //   接口类型写的是 camelCase，不做归一运行时全是 undefined（合集行 x/y 的分母会退化成当前分区集数）。
+      if (rawSeason.epCount === undefined && typeof rawSeason.ep_count === 'number') {
+        rawSeason.epCount = rawSeason.ep_count;
       }
       logInfo(`[getVideoDetail] UGC合集: id=${rawSeason.id}, title=${rawSeason.title}, sections=${rawSeason.sections?.length ?? 0}, epCount=${rawSeason.epCount}`);
     }

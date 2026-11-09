@@ -154,7 +154,7 @@ struct Index {
     // Keep the native title large enough for the exiting surface until it has slid out.
     // On entry restore that scope first, then animate the visible glass and content.
     if (!hidden) this.titleContentHeight = HOME_SEARCH_ROW_HEIGHT + HOME_CHANNEL_ROW_HEIGHT;
-    this.getUIContext().animateTo({
+    this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 },
       duration: 280, curve: Curve.FastOutSlowIn,
       onFinish: (): void => {
         if (generation !== this.searchAnimationGeneration) return;

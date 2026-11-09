@@ -574,7 +574,7 @@ struct FavoritesPage {
                 if (this.pagerWidth > 0) this.tabPosition = Math.max(0, Math.min(1, index - event.currentOffset / this.pagerWidth));
               })
               .onAnimationStart((_from: number, to: number) => {
-                this.getUIContext().animateTo({ duration: this.da ? 0 : 200, curve: Curve.Ease }, () => { this.tabPosition = to; });
+                this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: this.da ? 0 : 200, curve: Curve.Ease }, () => { this.tabPosition = to; });
               })
               .onChange((index: number) => this.onTabChange(index))
               .onAnimationEnd((index: number) => this.onTabChange(index))

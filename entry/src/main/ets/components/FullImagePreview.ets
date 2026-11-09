@@ -82,6 +82,7 @@ export struct FullImagePreview {
     this.oldNumOffsetY = 0;
     this.oldNumOpacity = 1;
     animateTo({
+      expectedFrameRateRange: { min: 60, max: 120, expected: 120 },
       duration: 250,
       curve: Curve.EaseInOut,
       onFinish: () => {
@@ -118,7 +119,7 @@ export struct FullImagePreview {
       this.flyInStarted = false;
       // 收起：图片从全屏（0/0/1.0）飞回缩略图矩形起点（配合 contentCover 淡出）
       const o = this.calcFlyOrigin();
-      animateTo({ curve: curves.interpolatingSpring(0, 1, 228, 22) }, () => {
+      animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, curve: curves.interpolatingSpring(0, 1, 228, 22) }, () => {
         this.flyOffsetX = o[0];
         this.flyOffsetY = o[1];
         this.flyScale = o[2];
@@ -135,7 +136,7 @@ export struct FullImagePreview {
     this.flyOffsetX = o[0];
     this.flyOffsetY = o[1];
     this.flyScale = o[2];
-    animateTo({ curve: curves.interpolatingSpring(0, 1, 228, 22) }, () => {
+    animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, curve: curves.interpolatingSpring(0, 1, 228, 22) }, () => {
       this.flyOffsetX = 0;
       this.flyOffsetY = 0;
       this.flyScale = 1.0;

@@ -59,12 +59,12 @@ struct LocalWallpaperPage {
     this.landscapeCrop = cleanWallpaperCrop(item.landscape);
     this.portrait = true;
     this.crop = cleanWallpaperCrop(this.portraitCrop);
-    this.getUIContext().animateTo({ duration: 280, curve: Curve.EaseOut }, () => { this.editing = true; });
+    this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 280, curve: Curve.EaseOut }, () => { this.editing = true; });
   }
   private cancelEdit(): void {
     if (this.busy) return;
     const path = this.item.path;
-    this.getUIContext().animateTo({ duration: 280, curve: Curve.EaseOut,
+    this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 280, curve: Curve.EaseOut,
       onFinish: () => { PageWallpaperService.getInstance().discardImport(path); } }, () => { this.editing = false; });
   }
   private switchOrientation(portrait: boolean): void {
@@ -95,7 +95,7 @@ struct LocalWallpaperPage {
       edited.portrait = cleanWallpaperCrop(this.portraitCrop); edited.landscape = cleanWallpaperCrop(this.landscapeCrop);
       await PageWallpaperService.getInstance().select('local', this.portrait, false, edited.path, edited);
       this.items = PageWallpaperService.getInstance().localWallpapers();
-      this.getUIContext().animateTo({ duration: 280, curve: Curve.EaseOut }, () => { this.editing = false; });
+      this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 280, curve: Curve.EaseOut }, () => { this.editing = false; });
       this.toast('已保存到本地壁纸并应用');
     } catch (_) { this.toast('保存失败，已保留原壁纸，请重试'); }
     finally { this.busy = false; }

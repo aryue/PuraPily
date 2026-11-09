@@ -19,7 +19,7 @@ for (const [names, icon] of [
   [['FreeBuds 2', 'FREEBUDS 3', 'FreeBuds4', 'FreeBuds 7 悦彰耳机'], '16646'],
   [['FreeBuds 5', 'FreeBuds6'], '16660'],
   [['FreeBuds Studio'], 'roc'], [['FreeArc', 'HUAWEI FreeArc 2'], '16661'],
-  [['HUAWEI Glass', 'smart glasses'], '5888'], [['FreeClip', 'FreeClip2'], '16659'],
+  [['HUAWEI Glasses', 'smart glasses'], '5888'], [['FreeClip', 'FreeClip2'], '16659'],
   [['FreeBuds 4i', 'FreeBuds5i', 'FreeBuds 6 i', 'FreeBuds 12i'], '16644']
 ]) for (const name of names) {
   assert.equal(headphoneIconName(name), 'earphone_' + icon, name);

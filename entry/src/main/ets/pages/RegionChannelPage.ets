@@ -183,7 +183,7 @@ export struct RegionChannelPage {
 
   private slideContent(offset: number): Promise<void> {
     return new Promise<void>(resolve => {
-      this.getUIContext().animateTo({ duration: 260, curve: Curve.EaseOut, onFinish: resolve }, () => {
+      this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 260, curve: Curve.EaseOut, onFinish: resolve }, () => {
         this.contentOffset = offset;
       });
     });

@@ -122,7 +122,7 @@ export struct HomeChannelContainer {
   }
 
   private onTabsAnimationStart(toIndex: number): void {
-    this.getUIContext().animateTo({ duration: HOME_CHANNEL_DURATION, curve: HOME_CHANNEL_CURVE }, () => {
+    this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: HOME_CHANNEL_DURATION, curve: HOME_CHANNEL_CURVE }, () => {
       this.channelPosition = toIndex;
     });
   }

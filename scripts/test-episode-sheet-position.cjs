@@ -21,6 +21,9 @@ p.ch = 400;
 p.navIndicatorHeight = 12;
 assert.equal(p.selectionSheetHeight(400), 324, 'compact landscape must fit inside the actual safe viewport');
 p.vd = { pages: Array.from({ length: 150 }, (_, i) => ({ cid: i + 1 })) };
+// pagesForCurrentVideo() 的“合集切集期间不暴露旧分P”语义由 test-season-isolation.cjs 覆盖，
+// 这里只验证弹窗定位，用等价的最简实现承接。
+p.pagesForCurrentVideo = function () { return this.vd && this.vd.pages ? this.vd.pages : []; };
 p.referenceEpisodeSelection = -1;
 for (const [index, segment, local] of [[0,0,0], [19,0,19], [20,1,0], [38,1,18], [149,7,9]]) {
   p.currentPageIndex = index;

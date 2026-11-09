@@ -5,7 +5,7 @@ export function headphoneIconName(name: string): string {
   if (/\bfree\s*buds\s*studio\b/.test(normalized)) return 'earphone_roc';
   if (/\bfree\s*arc(?:\s*\d+)?\b/.test(normalized)) return 'earphone_16661';
   if (/\bfree\s*clip(?:\s*\d+)?\b/.test(normalized)) return 'earphone_16659';
-  if (/glass/i.test(normalized)) return 'earphone_5888';
+  if (/(?:glasses|eyewear)/i.test(normalized)) return 'earphone_5888';
   if (/\bfree\s*buds\s*\d+\s*i\b/.test(normalized)) return 'earphone_16644';
   if (/\bfree\s*buds\s*(2|3|4|7)\b/.test(normalized)) return 'earphone_16646';
   if (/\bfree\s*buds\s*(5|6)\b/.test(normalized)) return 'earphone_16660';

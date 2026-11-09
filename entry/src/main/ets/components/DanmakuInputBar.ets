@@ -36,7 +36,7 @@ export struct DanmakuInputBar {
 
   private setSettings(open: boolean): void {
     if (open) this.getUIContext().getFocusController().clearFocus();
-    this.getUIContext().animateTo({ duration: 240, curve: Curve.EaseInOut }, () => {
+    this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 240, curve: Curve.EaseInOut }, () => {
       this.settings = open;
       this.onSettingsChange(open);
     });
@@ -44,6 +44,11 @@ export struct DanmakuInputBar {
 
   private colorHex(value: number): string {
     return '#' + value.toString(16).padStart(6, '0');
+  }
+
+  /** 样式入口沿用评论页输入胶囊的次级前景色，展开时用品牌色提示当前状态。 */
+  private styleToggleColor(): ResourceColor {
+    return this.settings ? '#FB7299' : $r('app.color.color_player_text_secondary');
   }
 
   private async send(): Promise<void> {
@@ -66,21 +71,20 @@ export struct DanmakuInputBar {
   }
 
   build() {
-    NativeComposerSurface({ active: this.materialEnabled }) {
+    // 收起态是单层胶囊，不额外套面板；设置展开才需要底板承载选项。
+    NativeComposerSurface({ active: this.materialEnabled && this.settings }) {
     Column() {
-      Row({ space: 10 }) {
-        Text('A').fontSize(25).decoration({ type: TextDecorationType.Underline })
-          .fontColor(this.settings ? '#FB7299' : '#92969D')
-          .width(30).height(44).textAlign(TextAlign.Center)
-          .accessibilityText('弹幕样式').id('danmaku-style-toggle')
-          .onClick(() => { this.setSettings(!this.settings); })
-        Row() {
-          NativeGlassInput({ inputHeight: 36, cornerRadius: 8 }) {
+      // 与评论页「发条评论吧」输入胶囊同款：单层 capsule 原生玻璃、40vp 全圆角，
+      // 文字在左、弹幕样式「A」在右。不再放独立发送按钮，发送交给键盘 EnterKeyType.Send。
+      Row() {
+        NativeGlassInput({ inputHeight: 40 }) {
+          Row() {
             TextInput({ text: this.text, placeholder: '发个友善的弹幕见证当下' })
-              .width('100%').height(36).fontSize(14)
-              .fontColor(this.isDarkMode ? '#F1F2F3' : '#18191C').placeholderColor('#797D84')
+              .layoutWeight(1).height(40).fontSize(13)
+              .fontColor(this.isDarkMode ? '#F1F2F3' : '#18191C')
+              .placeholderColor($r('app.color.color_player_text_secondary'))
               .backgroundColor(Color.Transparent)
-              .borderRadius(8)
+              .padding({ left: 14, right: 4 })
               .caretColor('#FB7299').maxLength(100).showCounter(false)
               .id('danmaku_text_input').defaultFocus(this.autoFocus)
               .enableKeyboardOnFocus(true)
@@ -88,14 +92,14 @@ export struct DanmakuInputBar {
               .onChange((value: string) => { this.text = value; })
               .onFocus(() => { if (this.settings) this.setSettings(false); })
               .onSubmit(() => { this.send(); })
-          }
-        }.layoutWeight(1)
-        Button() {
-          Image($r('app.media.send_out')).width(24).height(24)
-            .fillColor(this.text.trim() ? '#FB7299' : '#646970')
-        }.width(32).height(40).padding(4).backgroundColor(Color.Transparent)
-          .enabled(!this.sending && this.text.trim().length > 0)
-          .accessibilityText('发送弹幕').onClick(() => { this.send(); })
+            Text('A').fontSize(20).decoration({ type: TextDecorationType.Underline })
+              .fontColor(this.styleToggleColor())
+              .width(32).height(40).textAlign(TextAlign.Center).flexShrink(0)
+              .margin({ right: 12 })
+              .accessibilityText('弹幕样式').id('danmaku-style-toggle')
+              .onClick(() => { this.setSettings(!this.settings); })
+          }.width('100%').height('100%')
+        }
       }.width('100%').height(52)
       Column({ space: 22 }) {
         Row({ space: 18 }) {

@@ -286,7 +286,7 @@ export struct PgcChannelPage {
         this.panelScale = 0.92;
         // ⭐ 左侧面板宽度动画：0 → 屏宽*0.33，信息流 layoutWeight 自动跟随平滑伸缩
         const screenW: number = display.getDefaultDisplaySync().width / display.getDefaultDisplaySync().densityPixels;
-        this.getUIContext().animateTo({
+        this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 },
           duration: 500,
           curve: Curve.EaseInOut
         }, () => {
@@ -321,7 +321,7 @@ export struct PgcChannelPage {
     const count: number = this.getVisibleRowCount();
     // ⭐ 单一 animateTo + EaseInOut：所有属性同步开始/同步结束，
     //    避免此前双动画时长差（350/420ms）尾段卡片已停、面板还在 scale/opacity 动的"最后一段位移"
-    this.getUIContext().animateTo({
+    this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 },
       duration: 500,
       curve: Curve.EaseInOut
     }, () => {
@@ -399,7 +399,7 @@ export struct PgcChannelPage {
         const row: number = hideRows[k];
         setTimeout(() => {
           if (token !== this.filterAnimToken) return;
-          this.getUIContext().animateTo({
+          this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 },
             duration: 300,
             // ⚠️ 收起方向用临界阻尼（同 collapseRowHeights）：44→0 欠阻尼会在 0 处回弹→顿；1.0 无回弹平滑收敛
             curve: curves.springMotion(0.4, 1.0)
@@ -446,7 +446,7 @@ export struct PgcChannelPage {
         if (next[i] === 0) {
           setTimeout(() => {
             if (token !== this.filterAnimToken) return;
-            this.getUIContext().animateTo({
+            this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 },
               duration: 300,
               curve: curves.springMotion(0.4, 0.85)
             }, () => {
@@ -494,7 +494,7 @@ export struct PgcChannelPage {
     const count: number = this.getVisibleRowCount(); // 全量稳定行数
     this.rowHeights = new Array<number>(count).fill(0);
     // ⭐ Column 垂直 padding 恢复为 8（与行展开同步动画）
-    this.getUIContext().animateTo({
+    this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 },
       duration: 240,
       curve: curves.springMotion(0.4, 0.85)
     }, () => {
@@ -515,7 +515,7 @@ export struct PgcChannelPage {
       const row: number = visibleRows[k];
       setTimeout(() => {
         if (token !== this.rowAnimToken) return;
-        this.getUIContext().animateTo({
+        this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 },
           duration: 300,
           curve: curves.springMotion(0.4, 0.85)
         }, () => {

@@ -138,7 +138,7 @@ export struct FloatingBottomBar {
     // Ease-in preserves its size and contrast during the initial downward motion.
     .scale({ x: this.hidden ? 0 : 1, y: this.hidden ? 0 : 1, centerX: '50%', centerY: '50%' })
     .opacity(this.hidden ? 0 : 1)
-    .animation({ duration: 280, curve: this.hidden ? Curve.EaseIn : Curve.EaseOut })
+    .animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 280, curve: this.hidden ? Curve.EaseIn : Curve.EaseOut })
     }
     .width('64%').height(72).constraintSize({ maxWidth: 280 })
     .padding(8).justifyContent(FlexAlign.Center)
@@ -148,7 +148,7 @@ export struct FloatingBottomBar {
     })
     .margin({ bottom: Math.max(0, this.navIndicatorHeight - 8) })
     .translate({ y: this.hidden ? 64 : 0 })
-    .animation({ duration: 280, curve: Curve.FastOutSlowIn })
+    .animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 280, curve: Curve.FastOutSlowIn })
     .hitTestBehavior(this.hidden ? HitTestMode.None : HitTestMode.Default)
     }
     .width('100%').justifyContent(FlexAlign.Center)
@@ -157,7 +157,7 @@ export struct FloatingBottomBar {
       this.updateGripPosition();
     })
     .translate({ x: this.gripOffset })
-    .animation({ curve: curves.interpolatingSpring(0, 1, 200, 17) })
+    .animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, curve: curves.interpolatingSpring(0, 1, 200, 17) })
     .hitTestBehavior(HitTestMode.Transparent)
   }
 }

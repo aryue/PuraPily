@@ -252,7 +252,7 @@ struct LivePlayerPage {
 
   private settleInformation(visible: boolean): void {
     this.informationVisible = visible;
-    this.getUIContext().animateTo({ duration: 160, curve: Curve.EaseOut }, () => {
+    this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 160, curve: Curve.EaseOut }, () => {
       this.informationProgress = visible ? 0 : 1;
     });
   }
@@ -493,7 +493,7 @@ struct LivePlayerPage {
   private animateRoomOffset(offset: number): Promise<void> {
     this.roomAnimating = true;
     return new Promise<void>(resolve => {
-      this.getUIContext().animateTo({ duration: 340, curve: Curve.EaseOut, onFinish: () => {
+      this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 340, curve: Curve.EaseOut, onFinish: () => {
         this.roomAnimating = false;
         resolve();
       } }, () => { this.roomOffset = offset; });
@@ -1593,7 +1593,7 @@ struct LivePlayerPage {
         this.PlaybackSettingsContent()
       }
     }.width('100%').position({ bottom: 0 }).zIndex(25)
-      .transition(TransitionEffect.move(TransitionEdge.BOTTOM).animation({ duration: 240, curve: Curve.EaseOut }))
+      .transition(TransitionEffect.move(TransitionEdge.BOTTOM).animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 240, curve: Curve.EaseOut }))
   }
 
   // ==================== build ====================
