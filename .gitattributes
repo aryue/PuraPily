@@ -1,0 +1,5 @@
+# GitHub Actions 的 run: 块由 Linux 上的 bash 直接执行。
+# 如果在 Windows 上被检出成 CRLF，运行时会报 $'\r': command not found，
+# 而且报错位置和真实原因看起来毫无关系，很难查。这里钉死 LF。
+.github/workflows/*.yml text eol=lf
+.github/workflows/*.yaml text eol=lf

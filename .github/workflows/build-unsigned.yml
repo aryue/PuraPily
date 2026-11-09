@@ -1,0 +1,395 @@
+name: Build Unsigned HAP
+
+# 构建未签名 HAP 并在打 tag 时发布到 GitHub Release。
+#
+# ── 为什么需要自备 SDK ──────────────────────────────────────────────
+# HarmonyOS 的 command-line-tools（含 SDK / NDK / hvigor / ohpm / node）
+# 必须用华为开发者账号登录后下载，GitHub Actions 无法匿名获取，因此这里
+# 不自动下载官方包，而是从一个你自托管的地址取压缩包。
+#
+# 一次性准备（本地做一次即可）：
+#   1. 从华为开发者联盟下载 DevEco Studio 对应版本的 command-line-tools
+#      压缩包（Linux 版，与 compileSdkVersion 26.0.0 / modelVersion 6.1.0 对齐）。
+#   2. 不用转换格式：流程按 magic bytes 识别，zip 和 tar.gz 都能直接吃。
+#      官方 Linux 包本身就是 zip，省掉解压重打包这一步。
+#   3. 托管位置：SDK 放在**私有仓库 aryue/hos-cli 的 Release**（v26.0.0.865）。
+#      因此本流程必须配 SDK_REPO_TOKEN —— GITHUB_TOKEN 是仓库级 token，只对
+#      当前仓库有效，跨仓库（尤其私有仓库）一律 403。
+#      不要把 SDK 放进 PuraPily 的 Release：这是公开仓库，那等于公开再分发
+#      华为工具链，许可上通常不允许。
+#      注意 Release 单个 asset 上限 2 GiB（硬限制，与仓库体积无关）。
+#      官方包 2.19 GiB 已超限，所以切成 part-00/part-01 两个分片，URL 用通配，
+#      工作流按文件名顺序 cat 合并后再校验 sha256（sha256 按合并后的整包算）。
+#   4. 在仓库 Settings → Secrets and variables → Actions 里加：
+#        Variables: HOS_SDK_URL        gh://aryue/hos-cli@v26.0.0.865/commandline-tools-linux-x64-26.0.0.865.zip.part-*
+#        Variables: HOS_SDK_SHA256     e5fda7d37eef11263588203d724d1b72380273d3c07535bb7d361a1d0e95cf34
+#        Secrets:   SDK_REPO_TOKEN     fine-grained PAT，只授权 aryue/hos-cli + Contents: Read
+#
+#   省钱提示：构建这台工程其实只要 command-line-tools 里的 sdk/ + hvigor/ +
+#   ohpm/ + node/ + bin/，把 previewer、emulator、codelinter、tool 这类用不到的
+#   大件裁掉能降到 1.96 GiB（实测），但离 2 GiB 上限只剩 90 MiB，风险大于收益，
+#   所以这里选择分片而不是裁包。
+#
+# ── 关于「未签名」 ────────────────────────────────────────────────
+# 仓库里只有 build-profile.json5.example（不含 signingConfigs），
+# 本地私有的 build-profile.json5 不会进 CI。流程直接复制 example 作为
+# 构建配置，hvigor 产出 entry-default-unsigned.hap。
+# 未签名包无法用 hdc install 直接安装，需要自行签名后再装。
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      build_mode:
+        description: "构建模式"
+        type: choice
+        options: ["release", "debug"]
+        default: "release"
+      publish:
+        description: "构建后创建 / 更新 Release（推送 tag 时总会发布）"
+        type: boolean
+        default: false
+
+concurrency:
+  group: unsigned-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+env:
+  CMT_HOME: ${{ github.workspace }}/.hos-cmt
+
+jobs:
+  build:
+    name: 构建未签名 HAP
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      BUILD_MODE: ${{ inputs.build_mode || 'release' }}
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # SDK 展开后 5GB 起，ubuntu-latest 只剩约 14GB，先删掉用不到的大件。
+      - name: 释放磁盘空间
+        run: |
+          set -euo pipefail
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
+                      /usr/local/share/boost /opt/hostedtoolcache/CodeQL || true
+          df -h /
+
+      - name: 恢复命令行工具缓存
+        id: cmt-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/hos-cmt.tar.gz
+          key: hos-cmt-${{ vars.HOS_SDK_SHA256 || 'unset' }}
+
+      - name: 下载 HarmonyOS 命令行工具
+        if: steps.cmt-cache.outputs.cache-hit != 'true'
+        env:
+          SDK_URL: ${{ vars.HOS_SDK_URL }}
+          SDK_SHA256: ${{ vars.HOS_SDK_SHA256 }}
+          SDK_REPO_TOKEN: ${{ secrets.SDK_REPO_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ARCHIVE: ${{ runner.temp }}/hos-cmt-archive
+        run: |
+          set -euo pipefail
+          if [ -z "${SDK_URL}" ]; then
+            echo "::error::未配置 HOS_SDK_URL。请在仓库 Variables 里指向 command-line-tools 的 tar.gz，或使用 gh://owner/repo@tag/file.tar.gz"
+            exit 1
+          fi
+
+          case "${SDK_URL}" in
+            gh://*)
+              # gh://<owner>/<repo>@<tag>/<pattern>
+              spec="${SDK_URL#gh://}"
+              repo_tag="${spec%/*}"
+              pattern="${spec##*/}"
+              repo="${repo_tag%@*}"
+              tag="${repo_tag##*@}"
+
+              # GITHUB_TOKEN 是仓库级 token，只对当前仓库有效；跨仓库（尤其私有）
+              # 必须改用 PAT，否则 403。
+              if [ -n "${SDK_REPO_TOKEN}" ]; then
+                export GH_TOKEN="${SDK_REPO_TOKEN}"
+                echo "使用 SDK_REPO_TOKEN 访问 ${repo}"
+              elif [ "${repo}" != "${GITHUB_REPOSITORY}" ]; then
+                echo "::warning::SDK 在另一个仓库（${repo}）却没配 SDK_REPO_TOKEN，私有仓库会 403"
+              fi
+
+              echo "从 Release 拉取：${repo}@${tag}/${pattern}"
+              DLDIR="${RUNNER_TEMP}/hos-sdk-dl"
+              rm -rf "${DLDIR}"
+              mkdir -p "${DLDIR}"
+              gh release download "${tag}" \
+                --repo "${repo}" \
+                --pattern "${pattern}" \
+                --dir "${DLDIR}" \
+                --clobber || {
+                  echo "::error::拉取 ${repo}@${tag} 失败。私有仓库请确认 SDK_REPO_TOKEN 已配置，且对该仓库有 Contents: Read 权限"
+                  exit 1
+                }
+
+              mapfile -t PARTS < <(find "${DLDIR}" -maxdepth 1 -type f | sort)
+              if [ "${#PARTS[@]}" -eq 0 ]; then
+                echo "::error::${repo}@${tag} 里没有匹配 ${pattern} 的文件"
+                exit 1
+              fi
+              if [ "${#PARTS[@]}" -eq 1 ]; then
+                mv "${PARTS[0]}" "${ARCHIVE}"
+              else
+                echo "匹配到 ${#PARTS[@]} 个分片，按名称顺序合并："
+                printf '  %s\n' "${PARTS[@]##*/}"
+                cat "${PARTS[@]}" > "${ARCHIVE}"
+              fi
+              ;;
+            *)
+              echo "从 URL 拉取：${SDK_URL}"
+              curl -fL --retry 3 --retry-delay 5 --connect-timeout 30 \
+                   -o "${ARCHIVE}" "${SDK_URL}"
+              ;;
+          esac
+
+          if [ -n "${SDK_SHA256}" ]; then
+            echo "${SDK_SHA256}  ${ARCHIVE}" | sha256sum -c -
+          else
+            echo "::warning::未配置 HOS_SDK_SHA256，跳过完整性校验，缓存也可能命中错误版本"
+          fi
+          ls -lh "${ARCHIVE}"
+
+      - name: 解压并配置 SDK 环境
+        run: |
+          set -euo pipefail
+          ARCHIVE="${{ runner.temp }}/hos-cmt-archive"
+          rm -rf "${CMT_HOME}"
+          mkdir -p "${CMT_HOME}"
+
+          # 按 magic bytes 判格式，不依赖文件名（分片合并后名字是固定的）。
+          # zip = 504b0304，gzip = 1f8b。华为官方 Linux 包就是 zip，直接收下省一次重打包。
+          MAGIC="$(head -c 4 "${ARCHIVE}" | od -An -tx1 | tr -d ' \n')"
+          echo "归档格式 magic: ${MAGIC}"
+          case "${MAGIC}" in
+            504b0304)
+              # 包里 128 个符号链接（hms/native/BiSheng/bin 下的 clang/lld 别名），
+              # 必须按 external_attr 重建；只靠 unzip 有退化成普通文件的风险，
+              # 那会让 native 编译以很难查的方式失败。
+              python3 - "${ARCHIVE}" "${CMT_HOME}" <<'PYEOF'
+          import os, stat, sys, zipfile
+          archive, dest = sys.argv[1], sys.argv[2]
+          links = 0
+          with zipfile.ZipFile(archive) as z:
+              infos = z.infolist()
+              for info in infos:
+                  mode = info.external_attr >> 16
+                  path = z.extract(info, dest)
+                  if stat.S_ISLNK(mode):
+                      target = z.read(info).decode("utf-8")
+                      if os.path.lexists(path):
+                          os.remove(path)
+                      os.symlink(target, path)
+                      links += 1
+                  elif mode & 0o777:
+                      os.chmod(path, mode & 0o777)
+          print(f"extracted {len(infos)} entries, restored {links} symlinks")
+          PYEOF
+              ;;
+            1f8b*)
+              tar -xzf "${ARCHIVE}" -C "${CMT_HOME}"
+              ;;
+            *)
+              echo "::error::无法识别的归档格式（magic=${MAGIC}），支持 zip 与 tar.gz"
+              exit 1
+              ;;
+          esac
+
+          # 兼容两种打包：顶层就是 command-line-tools，或外面多套了一层目录。
+          if [ -d "${CMT_HOME}/command-line-tools/sdk" ]; then
+            CMT="${CMT_HOME}/command-line-tools"
+          elif [ -d "${CMT_HOME}/sdk" ]; then
+            CMT="${CMT_HOME}"
+          else
+            # 用 -print -quit 代替 find|head，避免 head 提前关管道触发 SIGPIPE
+            SDK_DIR="$(find "${CMT_HOME}" -maxdepth 3 -type d -name sdk -print -quit)"
+            if [ -n "${SDK_DIR}" ]; then
+              CMT="$(dirname "${SDK_DIR}")"
+            else
+              CMT=""
+            fi
+          fi
+
+          if [ -z "${CMT}" ] || [ ! -d "${CMT}/sdk" ]; then
+            echo "::error::解压后找不到 command-line-tools/sdk，请检查压缩包结构"
+            find "${CMT_HOME}" -maxdepth 3 -type d | head -40
+            exit 1
+          fi
+
+          chmod +x "${CMT}/hvigor/bin/hvigorw" "${CMT}/ohpm/bin/ohpm" 2>/dev/null || true
+          chmod +x "${CMT}/bin/"* 2>/dev/null || true
+
+          echo "CMT=${CMT}" >> "${GITHUB_ENV}"
+          echo "DEVECO_SDK_HOME=${CMT}/sdk" >> "${GITHUB_ENV}"
+          echo "OHOS_SDK_HOME=${CMT}/sdk" >> "${GITHUB_ENV}"
+          {
+            echo "${CMT}/bin"
+            echo "${CMT}/hvigor/bin"
+            echo "${CMT}/ohpm/bin"
+            echo "${CMT}/node/bin"
+          } >> "${GITHUB_PATH}"
+
+      - name: 验证构建环境
+        run: |
+          set -euo pipefail
+          node --version
+          ohpm --version
+          hvigorw --version
+          echo "DEVECO_SDK_HOME=${DEVECO_SDK_HOME}"
+          ls "${DEVECO_SDK_HOME}"
+
+      # 仓库不含 build-profile.json5（含本机签名绝对路径，已在 .gitignore），
+      # 复制 example 就得到「无 signingConfig」的未签名构建配置。
+      - name: 生成未签名构建配置
+        run: |
+          set -euo pipefail
+          cp build-profile.json5.example build-profile.json5
+          if grep -q 'signingConfig' build-profile.json5; then
+            echo "::error::build-profile.json5.example 含签名配置，会产出已签名包，与预期不符"
+            exit 1
+          fi
+          echo "已生成 build-profile.json5（无签名配置）"
+
+      # 只缓存包下载目录，不缓存 ~/.ohpm 整体（里面可能有凭据配置）。
+      - name: 缓存 ohpm / hvigor 依赖
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.ohpm/cache
+            ~/.hvigor
+          key: hos-deps-${{ hashFiles('oh-package-lock.json5', 'entry/oh-package.json5', 'hvigor/hvigor-config.json5') }}
+
+      - name: 安装依赖
+        run: |
+          set -euo pipefail
+          ohpm install --all
+
+      - name: 构建
+        run: |
+          set -euo pipefail
+          hvigorw assembleHap \
+            --mode module \
+            -p product=default \
+            -p buildMode="${BUILD_MODE}" \
+            --no-daemon \
+            --stacktrace
+
+      - name: 收集产物
+        id: collect
+        run: |
+          set -euo pipefail
+          # 单次 sed 取值，不用 |head（pipefail 下 head 提前退出会触发 SIGPIPE）
+          # 注意 versionCode 是纯数字、versionName 是字符串，两种模式分开写。
+          VERSION_NAME=$(sed -n 's/.*"versionName"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' AppScope/app.json5)
+          VERSION_CODE=$(sed -n 's/.*"versionCode"[[:space:]]*:[[:space:]]*\([0-9]\+\).*/\1/p' AppScope/app.json5)
+          : "${VERSION_NAME:=0.0.0}"
+          : "${VERSION_CODE:=0}"
+
+          SRC=$(find entry/build -type f -name '*-unsigned.hap' -print -quit)
+          if [ -z "${SRC}" ]; then
+            echo "::error::没有找到未签名 HAP，检查 hvigor 输出"
+            find entry/build -type f -name '*.hap' || true
+            exit 1
+          fi
+
+          mkdir -p dist
+          HAP_NAME="PuraPily-${VERSION_NAME}-${VERSION_CODE}-${BUILD_MODE}-unsigned.hap"
+          cp "${SRC}" "dist/${HAP_NAME}"
+          SIZE_BYTES=$(stat -c%s "dist/${HAP_NAME}")
+          ( cd dist && sha256sum "${HAP_NAME}" > "${HAP_NAME}.sha256" )
+
+          {
+            echo "versionName: ${VERSION_NAME}"
+            echo "versionCode: ${VERSION_CODE}"
+            echo "buildMode: ${BUILD_MODE}"
+            echo "size: ${SIZE_BYTES} bytes"
+            echo "signed: false"
+            echo "commit: ${GITHUB_SHA}"
+            echo "ref: ${GITHUB_REF}"
+            echo "sdk: ${DEVECO_SDK_HOME}"
+          } > dist/build-info.txt
+
+          echo "version_name=${VERSION_NAME}" >> "${GITHUB_OUTPUT}"
+          echo "version_code=${VERSION_CODE}" >> "${GITHUB_OUTPUT}"
+          echo "hap_name=${HAP_NAME}" >> "${GITHUB_OUTPUT}"
+          echo "size=${SIZE_BYTES}" >> "${GITHUB_OUTPUT}"
+          ls -lh dist
+
+      - name: 写入构建摘要
+        run: |
+          set -euo pipefail
+          SIZE_MB=$(( ${{ steps.collect.outputs.size }} / 1024 / 1024 ))
+          {
+            echo "## PuraPily 未签名包"
+            echo ""
+            echo "| 项 | 值 |"
+            echo "| --- | --- |"
+            echo "| 版本 | ${{ steps.collect.outputs.version_name }} (${{ steps.collect.outputs.version_code }}) |"
+            echo "| 构建模式 | ${BUILD_MODE} |"
+            echo "| 产物 | \`${{ steps.collect.outputs.hap_name }}\` (${SIZE_MB} MB) |"
+            echo "| 签名 | 无（需自行签名后才能安装） |"
+            echo "| 提交 | \`${GITHUB_SHA:0:7}\` |"
+            echo ""
+            echo "> 未签名 HAP 无法直接 \`hdc install\`，请用自有证书签名后再安装。"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: purapily-unsigned-${{ github.sha }}
+          path: dist/*
+          retention-days: 14
+
+      - name: 发布 Release
+        if: startsWith(github.ref, 'refs/tags/') || inputs.publish == true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION_NAME="${{ steps.collect.outputs.version_name }}"
+          VERSION_CODE="${{ steps.collect.outputs.version_code }}"
+
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            TAG="${GITHUB_REF_NAME}"
+          else
+            TAG="build-$(date -u +%Y%m%d)-${GITHUB_RUN_NUMBER}"
+          fi
+          TITLE="PuraPily ${VERSION_NAME} (${VERSION_CODE}) 未签名包"
+
+          {
+            echo "## PuraPily ${VERSION_NAME} (${VERSION_CODE})"
+            echo ""
+            echo "- 构建模式：\`${BUILD_MODE}\`"
+            echo "- 提交：\`${GITHUB_SHA:0:7}\`"
+            echo "- 目标 SDK：\`26.0.0\`"
+            echo ""
+            echo "> ⚠️ 本包**未签名**，仅供调试与自签名流程使用，无法直接安装到设备。"
+            echo ""
+            echo "### 最近提交"
+            echo ""
+            git log --oneline -10
+          } > /tmp/release-notes.md
+
+          if gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "Release ${TAG} 已存在，覆盖上传"
+            gh release upload "${TAG}" dist/* --repo "${GITHUB_REPOSITORY}" --clobber
+          else
+            gh release create "${TAG}" dist/* \
+              --repo "${GITHUB_REPOSITORY}" \
+              --title "${TITLE}" \
+              --notes-file /tmp/release-notes.md
+          fi
+          echo "已发布：${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/${TAG}"

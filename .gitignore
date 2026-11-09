@@ -9,6 +9,8 @@
 /.clangd
 /.clang-format
 /.clang-tidy
+# CI 用的 command-line-tools 压缩包（2.2GB，误提交会撑爆 .git）
+*.zip
 
 # ── IDE 与工具本地数据 ──
 /.idea
