@@ -18,6 +18,22 @@ import { MaterialUtil } from '../utils/MaterialUtil';
 import { ImmersiveLightWrapper } from './ImmersiveLightWrapper';
 
 
+/**
+ * 横屏全屏顶栏（ReferenceLandscapeFullscreenControls）的几何口径。
+ *
+ * 横向：与同一屏的底部控件 `ReferenceLandscapeBottomControls` 全屏档完全一致（左右各 30vp），
+ * 顶栏圆形按钮的边缘因此和进度条两端、播放键/画质文字对齐；此前是 left 4 / right 22，
+ * 返回按钮几乎贴到屏幕左缘，整行比底栏"宽"出一截。
+ *
+ * 纵向：顶栏还要让开应用自绘的状态条（`topBarStatusInfo`，y:3、高约 20vp）。
+ * 原来按钮在 y 13~53、状态条 3~23，直接叠在点赞/不喜欢上沿（电池图标压住圆形按钮）；
+ * 现在按钮下移到 31~71，与状态条留 8vp 间隙。
+ */
+const PLAYER_TOP_BAR_INSET_X: number = 18;
+const PLAYER_TOP_BAR_PAD_TOP: number = 20;
+const PLAYER_TOP_BAR_ROW_H: number = 62;   // 内容区 42vp = 40 按钮 + 上下各 1
+const PLAYER_TOP_BAR_BAND_H: number = 70;  // 容器比行高多 8（沿用改动前 64/54 的缓冲关系）
+
 @Component
 export struct VideoControls {
   @StorageLink('isDarkMode') private bottomMenuDark: boolean = true;
@@ -1669,10 +1685,11 @@ export struct VideoControls {
   // ═══ ⭐ 镜像布局：组内顺序反序 = 子项条件排列 + 间距两侧翻转（Row 确定性布局）═══
 
   @Builder
-  private topGlassAction(icon: Resource, label: string, controlId: string, action: () => void) {
+  private topGlassAction(icon: Resource, label: string, controlId: string, action: () => void,
+    tint: string = '#FFFFFF') {
     Column() {
       HeaderGlassControl({ label: label, controlId: controlId, onActivate: action }) {
-        Image(icon).width(22).height(22).fillColor('#FFFFFF').hitTestBehavior(HitTestMode.None)
+        Image(icon).width(22).height(22).fillColor(tint).hitTestBehavior(HitTestMode.None)
       }
     }.width(40).height(40)
   }
@@ -2329,19 +2346,24 @@ export struct VideoControls {
                   .fillColor(this.isDisliked ? '#D34E7E' : '#FFFFFF').hitTestBehavior(HitTestMode.None)
               }
             }.width(40).height(40)
-            this.topGlassAction(this.isCoined ? $r('app.media.ref_apk_story_coined') : $r('app.media.ref_coin'),
-              '投币', 'fullscreen-header-coin', () => { this.onCoinPress(); })
+            // 投币与左侧点赞/不喜欢同口径：单色 SVG + 染色，选中沿用 #D34E7E；
+            // 原来选中态切的是 APK 位图（烘焙了 #FF6699），和邻居的粉色不是一个色号。
+            this.topGlassAction($r('app.media.ref_coin'),
+              '投币', 'fullscreen-header-coin', () => { this.onCoinPress(); },
+              this.isCoined ? '#D34E7E' : '#FFFFFF')
             this.topGlassAction($r('app.media.ref_share'), '分享', 'fullscreen-header-share', () => { this.onSharePress(); })
             this.topGlassAction($r('app.media.ref_more'), '更多', 'fullscreen-header-more', () => { this.onMorePress(); })
           }.alignItems(VerticalAlign.Center)
         }
-        .width('100%').height(54)
-        .padding({ left: 4, right: 22, top: 12 })
+        // 横向 30/30 = 底部控件全屏档同一套边距（见 PLAYER_TOP_BAR_INSET_X 注释）；
+        // 纵向 30 + 行高 72 让开自绘状态条，按钮落在 31~71。
+        .width('100%').height(PLAYER_TOP_BAR_ROW_H)
+        .padding({ left: PLAYER_TOP_BAR_INSET_X, right: PLAYER_TOP_BAR_INSET_X, top: PLAYER_TOP_BAR_PAD_TOP })
         .alignItems(VerticalAlign.Center)
         .linearGradient({ direction: GradientDirection.Bottom, colors: [['#66000000', 0], ['#00000000', 1]] })
         this.topBarStatusInfo()
       }
-      .width('100%').height(64)
+      .width('100%').height(PLAYER_TOP_BAR_BAND_H)
 
       Blank().layoutWeight(1)
 
@@ -2368,7 +2390,7 @@ export struct VideoControls {
           }.width('100%').height(22).padding({ left: this.referenceLandscapeHalfScreen ? 22 : 38, right: this.referenceLandscapeHalfScreen ? 22 : 38 }).alignItems(VerticalAlign.Center)
           Row() {
             this.ReferenceSeekBar(26, this.referenceLandscapeHalfScreen ? 9 : 7, this.referenceLandscapeHalfScreen ? '#D34E7E' : '#FFFFFF')
-          }.width('100%').padding({ left: this.referenceLandscapeHalfScreen ? 18 : 30, right: this.referenceLandscapeHalfScreen ? 18 : 30 })
+          }.width('100%').padding({ left: this.referenceLandscapeHalfScreen ? 12 : 18, right: this.referenceLandscapeHalfScreen ? 12 : 18 })
         }
 
         Row({ space: 8 }) {
@@ -2424,7 +2446,7 @@ export struct VideoControls {
               .width(36).height(46).id('landscape-fullscreen').onClick(() => this.toggleFullscreen())
           }
         }
-        .width('100%').height(52).padding({ left: this.referenceLandscapeHalfScreen ? 18 : 30, right: this.referenceLandscapeHalfScreen ? 18 : 30 })
+        .width('100%').height(52).padding({ left: this.referenceLandscapeHalfScreen ? 12 : 18, right: this.referenceLandscapeHalfScreen ? 12 : 18 })
         .alignItems(VerticalAlign.Center)
       }
       .width('100%').padding({ bottom: 8 + (this.referenceLandscapeHalfScreen ? Math.max(0, this.navIndicatorHeight || 0) : 0) })
