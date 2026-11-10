@@ -10,8 +10,10 @@ import { playbackMenuOptions } from '../utils/PlaybackMenuStyle';
 import { StatusBarUtils } from '../utils/StatusBarUtils';
 import { HeaderGlassControl } from '../components/HeaderGlassControl';
 import { HeaderBackButton } from '../components/HeaderBackButton';
+import { PlayerStatusStrip } from '../components/PlayerStatusStrip';
+import { VideoListItem } from '../components/VideoListItem';
 import { AppContinuation, ContinuationPage } from '../services/AppContinuation';
-﻿// LivePlayerPage.ets — 直播播放页（使用 Video 组件）
+import { HOME_CHANNEL_CURVE, HOME_CHANNEL_DURATION } from '../utils/HomeChannelMotion';
 import { window, display, LengthMetrics } from '@kit.ArkUI';
 import { logInfo, logWarn, logError } from '../utils/Logger';
 import { audio } from '@kit.AudioKit';
@@ -19,7 +21,8 @@ import { common } from '@kit.AbilityKit';
 import { preferences } from '@kit.ArkData';
 import { media } from '@kit.MediaKit';
 import { getLiveRoomInfo, getLiveStreamUrl, getLiveQualityLabel, invalidateCachedStreamUrl, getRoomPlayInfo, QualityDescription, LiveStreamUrlResult, LiveRoomInfo } from '../api/LiveApi';
-import { LiveFeedRoom, fetchLiveRoomsByArea, formatOnlineCount } from '../api/LiveFeedApi';
+import { LiveFeedRoom, fetchLiveRoomsByArea, fetchRecommendedLiveRooms, formatOnlineCount } from '../api/LiveFeedApi';
+import { getVideoIntroCard } from '../api/BilibiliApi';
 import { LiveViewHelper } from '../services/LiveViewHelper';
 import { systemShare } from '@kit.ShareKit';
 import { getLiveChatHistory, LiveChatMessage } from '../api/LiveApi';
@@ -85,11 +88,43 @@ struct LivePlayerPage {
   @State portraitScale: string = 'fill';
   @State portraitScaleScope: string = 'standard';
   @State anchorFace: string = '';
+  /** 主播粉丝数：用房间 uid 取用户卡片，简介页与普通简介页 ReferenceUpRow 同款 */
+  @State anchorFans: number = 0;
   @State roomOffset: number = 0;
   @State roomSlideDirection: number = 1;
   @State roomAnimating: boolean = false;
   private roomIds: number[] = [];
-  private rooms: LiveFeedRoom[] = [];
+  /** 上下滑切房 / 旧推荐数据源（分页追加时整体重新赋值，保证 @State 触发重绘） */
+  @State rooms: LiveFeedRoom[] = [];
+  /** 简介 tab 的直播推荐：与竖屏直播页同一套拉数算法（areaId=0 走 fetchRecommendedLiveRooms），
+   *  按 roomId 去重、排除当前房间、触底分页追加 */
+  @State liveIntroRooms: LiveFeedRoom[] = [];
+  private liveIntroPage: number = 1;
+  private liveIntroLoading: boolean = false;
+  private liveIntroHasMore: boolean = true;
+  private liveIntroRoomIds: Set<number> = new Set<number>();
+  /** 评论 tab：弹幕列表滚动器与「是否贴底」跟随标记（贴底才自动滚到最新，不打断上滑看历史） */
+  private landscapeChatScroller: Scroller = new Scroller();
+  @State private chatFollowLatest: boolean = true;
+  /** 横屏信息面板：0=简介（主播信息+直播推荐），1=评论（弹幕列表） */
+  @State livePanelTab: number = 0;
+  /** Swiper 跟手进度（0=简介 1=评论），tab 文字与指示器连续插值，口径同普通页 referenceTabProgress */
+  @State livePanelTabProgress: number = 0;
+  private livePanelSwiper: SwiperController = new SwiperController();
+  private livePanelTabWidths: number[] = [0, 0];
+  /** 切 tab 瞬间新挂载的卡片会消费同一次 pointer-up，300ms 内的卡片点击一律忽略 */
+  private lastPanelTabChangeAt: number = 0;
+  /** 拖动分界柄期间冻结面板内容宽度，避免每帧重排（普通页 referenceLandscapeTabWidth 同款） */
+  // 拖动期间不冻结任何 tab：直播页两个 tab 都比普通页评论列表轻，统一用 '100%'
+  // 跟随 Swiper 容器重排，切 tab 前后内容宽度完全一致，不会出现比例突变。
+  /** 竖屏全屏按钮：请求横屏后，旋转完成再落到横屏全屏态；退出时恢复竖屏方向 */
+  private pendingLandscapeFullscreen: boolean = false;
+  private portraitFullscreenOrigin: boolean = false;
+  /** 强制回竖屏后要释放方向锁，否则用户之后手动旋转会被 PORTRAIT 锁死 */
+  private pendingRestoreRotation: boolean = false;
+  /** 全屏横向锁定：进横屏全屏即锁 AUTO_ROTATION_LANDSCAPE，退出时交还全局旋转设置。
+   *  普通页 prepareFullscreenEnvironment / restoreOrientationOnly 同款口径，手机转竖屏不会掉出全屏。 */
+  private liveFullscreenLocked: boolean = false;
   private areaId: number = 0;
   private roomPage: number = 0;
   private switchingRoom: boolean = false;
@@ -123,14 +158,16 @@ struct LivePlayerPage {
   @State showBottomHint: boolean = false;
   @State bottomHintImage: ResourceStr | undefined = undefined;
   @State bottomHintText: string = '';
-  @State liveChatMessages: LiveChatMessage[] = [];
+  /** 弹幕历史上限：评论 tab 持续刷新且旧消息不消失，同时避免无界增长 */
+  private readonly LIVE_CHAT_LIMIT: number = 200;
+  @State @Watch('onLiveChatMessagesChanged') liveChatMessages: LiveChatMessage[] = [];
   @State liveChatStatus: string = '正在加载弹幕…';
   private liveChatTimer: number = -1;
   private liveChatGeneration: number = 0;
   private liveChatConnected: boolean = false;
   private liveChatReceiver: LiveChatReceiver = new LiveChatReceiver((message: LiveChatMessage) => {
     if (this.disposed || this.pageHidden) return;
-    this.liveChatMessages = this.liveChatMessages.concat([message]).slice(-6);
+    this.liveChatMessages = this.liveChatMessages.concat([message]).slice(-this.LIVE_CHAT_LIMIT);
   }, (status: string) => {
     if (this.disposed || this.pageHidden) return;
     this.liveChatConnected = status === '';
@@ -145,6 +182,9 @@ struct LivePlayerPage {
   // 安全区域
   @State safeTop: number = 28;
   @State safeBottom: number = 24;
+  // 系统状态栏当前高度（StatusBarUtils 在每次显隐/旋转后回写 AppStorage；分栏内容要让它位）
+  @StorageLink('statusBarHeight') statusBarHeight: number = 0;
+  @StorageLink('realStatusBarHeight') realStatusBarHeight: number = 0;
 
   private maxRetries: number = 8;
   private controlsTimer: number = -1;
@@ -178,6 +218,23 @@ struct LivePlayerPage {
   @StorageLink('cardStyleLiveQuality') cardStyleLiveQuality: boolean = true;
   @StorageLink('bgp') bgp: boolean = false; // 后台播放开关（与普通播放器共用持久化 key）
 
+  // ========== 横屏播放页（信息层居一侧；播放区方位与普通播放页共用同一设置项） ==========
+  @StorageLink('cardBorderRadius') cardBorderRadius: number = 20;
+  /** 横屏分栏边距与普通播放页共用同一设置项（普通页 safeCM 读的就是它） */
+  @StorageLink('cardMargin') cardMargin: number = 0;
+  @StorageProp('landscapePlaybackSide') landscapePlaybackSide: string = 'left';
+  /** 横屏分栏比例：播放区占窗口宽度的比例（默认 2/3，与普通播放页一致）。
+   *  只属于当前页面实例、不落盘：重新进入分栏界面必然回默认值；单纯横竖屏切换不经过
+   *  aboutToAppear，比例自然保留；不同分栏页跳转通过 landscapePlayerRatio 路由参数继承。 */
+  @State landscapeRatio: number = 2 / 3;
+  /** 拖动分界柄时的临时展开量（0..1，1 = 播放区占满窗口） */
+  @State landscapeExpand: number = 0;
+  /** 横屏全屏：信息面板推出屏幕，播放区占满窗口 */
+  @State liveFullscreen: boolean = false;
+  private landscapeResizeStart: number = 2 / 3;
+  /** 横屏信息面板里弹幕区实际可用高度（由布局回填，用于决定显示条数） */
+  @State chatSlotHeight: number = 0;
+
   /** 当前窗口是否为横屏（基于窗口尺寸，非物理屏幕） */
   private isWindowLandscape(): boolean {
     if (this.mw) {
@@ -192,6 +249,322 @@ struct LivePlayerPage {
     } catch (_e) {
       return false;
     }
+  }
+
+  // ==================== 横屏分栏几何（对齐普通播放页） ====================
+
+  /** 以实际视口判断横屏布局；首帧视口未量到时退回物理屏幕，避免闪一帧竖屏结构 */
+  private landscapeLayout(): boolean {
+    return (this.viewportWidth || this.screenWv()) > (this.viewportHeight || this.screenHv());
+  }
+
+  /** 横屏（分栏/全屏）进入即纯净观看：控件默认隐藏，单击播放区再唤出；竖屏信息层默认显示。
+   *  进页、旋转换向、退出全屏回到分栏都走这一个口径，避免某条路径把控件又冒出来。 */
+  private defaultInformationVisible(): boolean {
+    return !this.landscapeLayout();
+  }
+
+  private landscapeSwapped(): boolean {
+    return this.landscapePlaybackSide === 'right';
+  }
+
+  /** 分栏边距取普通页 safeCM 的同源设置 cardMargin。参考外观下它为 0，
+   *  播放区贴屏幕左/右边缘、详情面板贴右边缘与窗口底边，三者之间零缝隙。 */
+  private landscapeInset(): number {
+    const v = Number(this.cardMargin);
+    return Number.isFinite(v) ? Math.max(0, v) : 0;
+  }
+
+  /** 渲染用的连续展开量：拖动跟手、进/退全屏用 animateTo 连续插值（普通页 expandProgress 口径）。
+   *  liveFullscreen 只是逻辑标志，不再直接参与几何，否则切全屏会瞬间跳变。 */
+  private landscapeExpandAmount(): number {
+    return this.landscapeExpand;
+  }
+
+  private landscapeLayoutPixel(value: number): number {
+    const context = this.getUIContext();
+    return context.px2vp(Math.round(context.vp2px(value)));
+  }
+
+  /** 播放区最小 280、信息面板最小 220，小窗口按窗口宽度收缩（与普通播放页同限位） */
+  private landscapeClampedWidth(width: number): number {
+    const cw = this.viewportWidth || this.screenWv();
+    const minimum = Math.min(280, cw * 0.4);
+    const panelMinimum = Math.min(220, cw * 0.3);
+    return Math.max(1, Math.max(minimum, Math.min(cw - panelMinimum, width)));
+  }
+
+  private landscapePlayerWidth(): number {
+    const cw = this.viewportWidth || this.screenWv();
+    const base = this.landscapeClampedWidth(cw * (this.landscapeRatio || 2 / 3));
+    return base + (cw - base) * this.landscapeExpandAmount();
+  }
+
+  private landscapePlayerX(): number {
+    const cw = this.viewportWidth || this.screenWv();
+    const inset = this.landscapeInset() * (1 - this.landscapeExpandAmount());
+    // 与普通页 referenceLandscapePlayerX 同口径：外侧边距随展开量收起；
+    // 播放区在右时向内收（不越出窗口右边界），cardMargin=0 时两侧都是零边距
+    return this.landscapeSwapped() ? cw - this.landscapePlayerWidth() - inset : inset;
+  }
+
+  /** 顶部让位系统状态栏，逐值照抄普通页 referenceSafeTop()：只取状态栏高度，不掺分栏边距 */
+  private landscapeTopInset(): number {
+    const real: number = this.realStatusBarHeight || this.statusBarHeight || 40;
+    return real;
+  }
+
+  private landscapeAreaTop(): number {
+    return this.landscapeTopInset() * (1 - this.landscapeExpandAmount());
+  }
+
+  /** 面板底部只留与播放区一致的 cardMargin（普通页 safeCM 口径）；为 0 时面板贴窗口底边 */
+  private landscapeBottomInset(): number {
+    return this.landscapeInset();
+  }
+
+  /** 视频区：顶部让状态栏、底部贴窗口底边，不跟着面板留白 */
+  private landscapeAreaHeight(): number {
+    const ch = this.viewportHeight || this.screenHv();
+    return Math.max(1, ch - this.landscapeAreaTop());
+  }
+
+  /** 面板 y 固定状态栏下缘、高度固定，展开时只靠 x 整块平移推出（普通页 ReferencePortrait 口径）。
+   *  高度只扣顶部状态栏与底部 cardMargin：cardMargin=0 时详情区整块贴到屏幕底边 */
+  private landscapePanelTop(): number {
+    return this.landscapeTopInset();
+  }
+
+  private landscapeViewportWidth(): number {
+    return Math.max(1, this.landscapePlayerWidth() -
+      2 * this.landscapeInset() * (1 - this.landscapeExpandAmount()));
+  }
+
+  /** 画面完整显示在播放区内（横屏不再套用竖屏直播的裁切铺满） */
+  private landscapeMediaWidth(srcW: number, srcH: number): number {
+    const ar = srcW / Math.max(1, srcH);
+    return Math.max(1, Math.min(this.landscapeViewportWidth(), this.landscapeAreaHeight() * ar));
+  }
+
+  private landscapeMediaX(srcW: number, srcH: number): number {
+    return this.landscapePlayerX() + (this.landscapePlayerWidth() - this.landscapeMediaWidth(srcW, srcH)) / 2;
+  }
+
+  private landscapeMediaY(srcW: number, srcH: number): number {
+    const height = this.landscapeMediaWidth(srcW, srcH) * srcH / Math.max(1, srcW);
+    return this.landscapeAreaTop() + (this.landscapeAreaHeight() - height) / 2;
+  }
+
+  /** 容器宽度必须实时跟随分栏比例：拖动时播放区与详情区此消彼长，面板右缘始终贴屏幕边。
+   *  冻结容器宽度会让 panelX 跟着播放区走、宽度却不变 ⇒ 右侧露出一条大黑边（普通页不冻结容器）。
+   *  进全屏（expand>0）时 ratio 不变，宽度保持 resting，面板靠 x 整块平移推出，与普通页一致。 */
+  private landscapePanelWidth(): number {
+    const cw = this.viewportWidth || this.screenWv();
+    const resting = this.landscapeClampedWidth(cw * (this.landscapeRatio || 2 / 3));
+    return Math.max(1, this.landscapeLayoutPixel(cw - resting - 2 * this.landscapeInset()));
+  }
+
+  /** 简介卡片可用宽度（面板宽减去 List 左右各 12vp padding），实时跟随分栏比例。
+   *  两个 tab 外层都用 '100%' 跟随 Swiper 容器，拖动时不冻结任何一页：普通页因评论
+   *  列表很重才冻结非活动 tab，直播页内容轻，同步重排可避免切 tab 时内容宽度突变。 */
+  private landscapePanelContentWidth(): number {
+    return Math.max(1, this.landscapePanelWidth() - 24);
+  }
+
+  private landscapePanelHeight(): number {
+    const ch = this.viewportHeight || this.screenHv();
+    return Math.max(1, ch - this.landscapePanelTop() - this.landscapeBottomInset());
+  }
+
+  /** 展开时整块面板随播放区推出屏幕，而不是靠条件渲染瞬间消失 */
+  private landscapePanelX(): number {
+    const expand = this.landscapeExpandAmount();
+    return (this.landscapeSwapped() ? -(this.landscapePanelWidth() + 2 * this.landscapeInset()) * expand
+      : this.landscapePlayerWidth()) + this.landscapeInset();
+  }
+
+  /** 32vp 触控区以分界线为中心（左右两侧都能起拖），4vp 可见条向详情侧偏 2vp 贴边，
+   *  不压住视频画面。逐值照抄普通页 ReferenceLandscapeResizeHandle 的最终口径，
+   *  见 docs/landscape-resize-20261025.md「拖动柄贴简介边缘」。 */
+  private landscapeHandleX(): number {
+    return this.landscapePanelX() + (this.landscapeSwapped() ? this.landscapePanelWidth() : 0) - 16;
+  }
+
+  /**
+   * 全屏时信息面板已整块推出屏幕（`landscapePanelX/Width` 会算到窗外、宽度归 1），
+   * 浮层菜单不能跟着面板走，仍按「收起态」面板的位置与宽度摆放。
+   */
+  private landscapeDockPanelX(): number {
+    if (!this.liveFullscreen) return this.landscapePanelX();
+    const cw = this.viewportWidth || this.screenWv();
+    const resting = this.landscapeClampedWidth(cw * (this.landscapeRatio || 2 / 3));
+    return this.landscapeSwapped() ? this.landscapeInset() : resting + this.landscapeInset();
+  }
+
+  private landscapeDockPanelWidth(): number {
+    if (!this.liveFullscreen) return this.landscapePanelWidth();
+    const cw = this.viewportWidth || this.screenWv();
+    const resting = this.landscapeClampedWidth(cw * (this.landscapeRatio || 2 / 3));
+    return Math.max(1, this.landscapeLayoutPixel(cw - resting - 2 * this.landscapeInset()));
+  }
+
+  /** 信息面板配色：与普通页 ReferencePanel / ReferenceIntro 同一套深浅口径 */
+  private panelBgColor(): string { return this.isDarkMode ? '#17181A' : '#FFFFFF'; }
+  private panelPrimaryColor(): string { return this.isDarkMode ? '#E7E9EB' : '#18191C'; }
+  private panelMutedColor(): string { return this.isDarkMode ? '#9A9BA1' : '#757A81'; }
+  private panelDividerColor(): string { return this.isDarkMode ? '#24FFFFFF' : '#18000000'; }
+  private panelCardColor(): string { return this.isDarkMode ? '#242629' : '#F1F2F3'; }
+  private panelChatBubbleColor(): string { return this.isDarkMode ? '#6630323A' : '#12000000'; }
+  /** 指示器从「详情」中心滑到「推荐」中心的距离（普通页 referenceTabProgress 同款公式） */
+  private panelTabIndicatorTravel(): number {
+    const a = this.livePanelTabWidths[0] || 28;
+    const b = this.livePanelTabWidths[1] || 28;
+    return a / 2 + 20 + b / 2;
+  }
+
+  /** 分栏时三点菜单跟随播放区右下（与顶栏「更多」同侧）；全屏沿用收起态面板 dock */
+  private landscapeMenuDockWidth(): number {
+    if (this.liveFullscreen) return this.landscapeDockPanelWidth();
+    return Math.max(1, Math.min(360, this.landscapePlayerWidth() - 2 * this.landscapeInset()));
+  }
+
+  private landscapeMenuDockX(): number {
+    if (this.liveFullscreen) return this.landscapeDockPanelX();
+    return this.landscapePlayerX() + this.landscapePlayerWidth() -
+      this.landscapeInset() - this.landscapeMenuDockWidth();
+  }
+
+  private landscapeResize(offset: number): void {
+    if (!this.landscapeLayout() || this.liveFullscreen) return;
+    const cw = this.viewportWidth || this.screenWv();
+    if (cw <= 0) return;
+    const delta = this.landscapeSwapped() ? -offset : offset;
+    const proposed = this.landscapeLayoutPixel(cw * this.landscapeResizeStart + delta);
+    const maximum = this.landscapeClampedWidth(cw);
+    this.landscapeRatio = this.landscapeClampedWidth(proposed) / cw;
+    this.landscapeExpand = Math.max(0, Math.min(1, (proposed - maximum) / Math.max(1, cw - maximum)));
+  }
+
+  private beginLandscapeResize(): void {
+    if (this.liveFullscreen) return;
+    const cw = this.viewportWidth || this.screenWv();
+    this.landscapeResizeStart = cw > 0 ? this.landscapePlayerWidth() / cw : 2 / 3;
+    // 不冻结 tab 内容：两页都用 '100%' 跟随容器，随分栏比例同步重排
+  }
+
+  private finishLandscapeResize(offset: number, cancel: boolean = false): void {
+    const settle = (): void => {
+      this.applySystemBars(false);
+    };
+    if (cancel) {
+      this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 },
+        duration: 200, curve: Curve.EaseOut, onFinish: settle }, () => {
+        this.landscapeRatio = this.landscapeResizeStart;
+        this.landscapeExpand = 0;
+      });
+      return;
+    }
+    this.landscapeResize(offset);
+    if (this.landscapeExpand >= 0.62) {
+      // 从松手时的真实矩形连续放大到全屏，动画落定后才置逻辑标志（几何等价，无跳变）。
+      this.settleInformation(false);
+      this.applySystemBars(true);
+      this.lockFullscreenLandscape();
+      this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 },
+        duration: 260, curve: Curve.EaseOut,
+        onFinish: () => {
+          this.liveFullscreen = true;
+          this.landscapeExpand = 1;
+          this.landscapeRatio = this.landscapeResizeStart;
+        } }, () => {
+        this.landscapeExpand = 1;
+      });
+    } else {
+      this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 },
+        duration: 200, curve: Curve.EaseOut, onFinish: settle }, () => {
+        this.landscapeExpand = 0;
+      });
+    }
+  }
+
+  /** 全屏横向锁定（普通页 prepareFullscreenEnvironment 口径）：全屏期间只允许两个横屏方向互换，
+   *  手机转到竖屏方向不会退回竖屏页面。三条进全屏的路径都走这里：顶部按钮、拖柄甩入、竖屏请求旋转。 */
+  private lockFullscreenLandscape(): void {
+    if (this.liveFullscreenLocked || !this.mw) return;
+    this.liveFullscreenLocked = true;
+    try {
+      this.mw.enableLandscapeMultiWindow().catch(() => {});
+      this.mw.setPreferredOrientation(window.Orientation.AUTO_ROTATION_LANDSCAPE).catch(() => {});
+    } catch (_e) { logWarn('[LivePlayer] 全屏横向锁定失败'); }
+  }
+
+  /** 退出全屏：解横向锁定并把方向交还全局旋转设置（普通页 restoreOrientationOnly 口径）。
+   *  竖屏进入的全屏由 restorePortraitFullscreenRotation 强制回竖屏，不在这里重复下发。 */
+  private unlockFullscreenLandscape(): void {
+    if (!this.liveFullscreenLocked) return;
+    this.liveFullscreenLocked = false;
+    if (!this.mw) return;
+    try {
+      this.mw.disableLandscapeMultiWindow().catch(() => {});
+      this.applyRotationMode().catch(() => {});
+    } catch (_e) {}
+  }
+
+  private toggleLandscapeFullscreen(): void {
+    const enabled = !this.liveFullscreen;
+    // 进/退全屏都是同一条连续缩放曲线；liveFullscreen 只作逻辑标志，在动画落定后切换。
+    if (enabled) {
+      this.lockFullscreenLandscape();
+      this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 },
+        duration: 260, curve: Curve.EaseOut,
+        onFinish: () => { this.liveFullscreen = true; this.landscapeExpand = 1; } }, () => {
+        this.landscapeExpand = 1;
+      });
+    } else {
+      this.liveFullscreen = false;
+      if (this.portraitFullscreenOrigin) this.restorePortraitFullscreenRotation();
+      else this.unlockFullscreenLandscape();
+      this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 },
+        duration: 260, curve: Curve.EaseOut }, () => {
+        this.landscapeExpand = 0;
+      });
+    }
+    // 全屏与分栏都默认纯净观看：进/退全屏一律收起控件，单击播放区再唤出
+    this.settleInformation(false);
+    // 全屏隐藏系统状态栏、退回分栏恢复显示（对齐普通横屏播放页）
+    this.applySystemBars(enabled);
+  }
+
+  /** 竖屏全屏入口：请求横屏并锁横屏，旋转完成后由 onAreaChange 落到横屏全屏态
+   *  （普通页 prepareFullscreenEnvironment 口径） */
+  private enterPortraitFullscreen(): void {
+    if (this.landscapeLayout() || this.pendingLandscapeFullscreen || !this.mw) return;
+    this.pendingLandscapeFullscreen = true;
+    this.portraitFullscreenOrigin = true;
+    // 锁横屏必须在请求旋转时就下发，否则旋转落定后手机一转又会掉回竖屏页面
+    this.lockFullscreenLandscape();
+  }
+
+  /** 退出「竖屏进入的全屏」：先强制回竖屏，旋转落定后把方向交还给全局设置（避免 PORTRAIT 锁死） */
+  private restorePortraitFullscreenRotation(): void {
+    this.portraitFullscreenOrigin = false;
+    this.pendingRestoreRotation = true;
+    // 方向由 pendingRestoreRotation 在回到竖屏后统一交还，这里只清掉全屏锁标记
+    this.liveFullscreenLocked = false;
+    if (!this.mw) return;
+    try {
+      this.mw.disableLandscapeMultiWindow().catch(() => {});
+      this.mw.setPreferredOrientation(window.Orientation.PORTRAIT).catch(() => {});
+    } catch (_e) {}
+  }
+
+  /** 分栏比例的入口口径（普通页 referenceLandscapeRestoreRatio / @State 默认 2/3 同款）：
+   *  比例只属于当前页面实例、不落盘 —— 重新进入分栏界面必然回到默认 2/3；
+   *  只有「不同分栏页跳转」带 landscapePlayerRatio 才继承；单纯横竖屏切换不经过
+   *  aboutToAppear，且 onAreaChange 不动 landscapeRatio，比例自然保留。 */
+  private initialLandscapeRatio(params: Record<string, Object> | undefined): number {
+    const passed = params ? Number(params['landscapePlayerRatio']) : NaN;
+    return Number.isFinite(passed) && passed > 0 && passed < 1 ? passed : 2 / 3;
   }
 
   // ========== 手势状态（onVT 风格） ==========
@@ -230,6 +603,7 @@ struct LivePlayerPage {
   }
 
   private videoW(): number {
+    if (this.landscapeLayout()) return this.landscapeMediaWidth(this.sourceWidth, this.sourceHeight);
     const sw = this.viewportWidth || this.screenWv();
     const sh = this.viewportHeight || this.screenHv();
     const r = this.sourceWidth / this.sourceHeight;
@@ -239,11 +613,17 @@ struct LivePlayerPage {
   }
 
   private videoH(): number {
-    const r = this.sourceWidth / this.sourceHeight;
-    return this.videoW() / r;
+    return this.videoW() * this.sourceHeight / Math.max(1, this.sourceWidth);
+  }
+
+  private videoLeft(): number {
+    if (this.landscapeLayout()) return this.landscapeMediaX(this.sourceWidth, this.sourceHeight);
+    const sw = this.viewportWidth || this.screenWv();
+    return (sw - this.videoW()) / 2;
   }
 
   private videoTop(): number {
+    if (this.landscapeLayout()) return this.landscapeMediaY(this.sourceWidth, this.sourceHeight);
     const sh = this.viewportHeight || this.screenHv();
     // 横向直播在竖屏中上部播放，为下方信息留出空间；清屏时位置不变。
     return this.portraitWindow() && !this.portraitRoom()
@@ -255,6 +635,21 @@ struct LivePlayerPage {
     this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 160, curve: Curve.EaseOut }, () => {
       this.informationProgress = visible ? 0 : 1;
     });
+  }
+
+  /**
+   * 系统栏对齐普通播放页：横屏分栏显示系统状态栏（小白条仍隐藏），全屏与竖屏保持隐藏。
+   * 同时同步 AppStorage `isFullscreen` —— EntryAbility 回前台恢复（后台播放）读它决定显隐；
+   * 离开直播间（aboutToDisappear）必须复位为 false。
+   */
+  private applySystemBars(fullscreenOverride?: boolean): void {
+    // ⚠️ 进/退全屏时状态在 animateTo 闭包里才写入，这里必须允许直接传目标态，
+    //    否则读到的是旧值（分栏→全屏仍下发"显示"，系统状态栏就藏不掉）。
+    const fullscreen = fullscreenOverride === undefined ? this.liveFullscreen : fullscreenOverride;
+    const hide = !this.landscapeLayout() || fullscreen;
+    AppStorage.setOrCreate('isFullscreen', hide);
+    if (!this.mw) return;
+    StatusBarUtils.setSystemBars(this.mw, !hide, false);
   }
 
   private openLiveMenu(): void {
@@ -269,6 +664,51 @@ struct LivePlayerPage {
       this.liveShareController = new systemShare.ShareController(data);
       await this.liveShareController.show(this.getUIContext().getHostContext() as common.UIAbilityContext, {});
     } catch (_e) { this.showBottomHintTemporarily('未能打开系统分享'); }
+  }
+
+  /** 评论 tab：新弹幕到达时只在用户仍贴底的情况下自动滚到最新，上滑翻历史不被打断 */
+  private onLiveChatMessagesChanged(): void {
+    if (!this.chatFollowLatest || !this.landscapeLayout() || this.disposed) return;
+    setTimeout(() => {
+      if (this.disposed || !this.chatFollowLatest) return;
+      try { this.landscapeChatScroller.scrollEdge(Edge.Bottom); } catch (_e) { /* 列表尚未挂载 */ }
+    }, 30);
+  }
+
+  /** 简介 tab 的直播推荐：照抄竖屏 LivePage.loadLiveRooms 的取数口径——
+   *  areaId=0 走 fetchRecommendedLiveRooms（B 站默认推荐流），否则按分区取；
+   *  客户端按 roomId 去重、分页追加，额外排除当前房间。 */
+  private async loadLiveIntroRooms(reset: boolean): Promise<void> {
+    if (this.liveIntroLoading || this.disposed) return;
+    if (!reset && !this.liveIntroHasMore) return;
+    if (reset) {
+      this.liveIntroPage = 1;
+      this.liveIntroRoomIds.clear();
+      this.liveIntroHasMore = true;
+    }
+    this.liveIntroLoading = true;
+    const page = this.liveIntroPage;
+    const roomId = this.roomId;
+    try {
+      const rooms = this.areaId > 0
+        ? await fetchLiveRoomsByArea(this.areaId, page, 30)
+        : await fetchRecommendedLiveRooms(page, 30);
+      if (this.disposed || this.roomId !== roomId) return;
+      const fresh: LiveFeedRoom[] = [];
+      rooms.forEach((room: LiveFeedRoom) => {
+        if (room.roomId > 0 && room.roomId !== roomId && !this.liveIntroRoomIds.has(room.roomId)) {
+          this.liveIntroRoomIds.add(room.roomId);
+          fresh.push(room);
+        }
+      });
+      this.liveIntroRooms = reset ? fresh : this.liveIntroRooms.concat(fresh);
+      this.liveIntroHasMore = rooms.length >= 30;
+      this.liveIntroPage = page + 1;
+    } catch (_e) {
+      if (reset) this.liveIntroRooms = [];
+    } finally {
+      this.liveIntroLoading = false;
+    }
   }
 
   private stopLiveChat(): void {
@@ -300,7 +740,7 @@ struct LivePlayerPage {
       this.liveChatMessages.forEach(message => merged.set(message.id, message));
       messages.forEach(message => merged.set(message.id, message));
       this.liveChatMessages = Array.from(merged.values())
-        .sort((a, b) => a.timeline.localeCompare(b.timeline)).slice(-6);
+        .sort((a, b) => a.timeline.localeCompare(b.timeline)).slice(-this.LIVE_CHAT_LIMIT);
       if (!this.liveChatConnected && this.liveChatMessages.length) this.liveChatStatus = '';
     } catch (_) {
       if (generation !== this.liveChatGeneration || this.disposed || this.pageHidden || this.roomId !== roomId) return;
@@ -335,6 +775,32 @@ struct LivePlayerPage {
     } catch (_e) { logWarn('[LivePlayer] 直播比例生效范围保存失败'); }
   }
 
+  /** 简介 tab 的直播推荐列表（换房后再过滤一次当前房间） */
+  private introRooms(): LiveFeedRoom[] {
+    return this.liveIntroRooms.filter((room: LiveFeedRoom) => room.roomId > 0 && room.roomId !== this.roomId);
+  }
+
+  /** 旧推荐/上下滑列表：排除当前房间的其它直播间 */
+  private recommendedRooms(): LiveFeedRoom[] {
+    return this.rooms.filter((room: LiveFeedRoom) => room.roomId > 0 && room.roomId !== this.roomId).slice(0, 30);
+  }
+
+  /** 推荐卡片点击：push 出新的直播播放页（普通页相关视频同款跳转），并带上当前分栏比例 */
+  private selectRecommendedRoom(target: LiveFeedRoom): void {
+    if (!target || target.roomId <= 0 || target.roomId === this.roomId || this.disposed) return;
+    this.getUIContext().getRouter().pushUrl({
+      url: 'pages/LivePlayerPage',
+      params: {
+        roomId: target.roomId,
+        roomIds: this.roomIds.slice(),
+        rooms: this.rooms.slice(),
+        areaId: this.areaId,
+        roomPage: this.roomPage,
+        landscapePlayerRatio: this.landscapeRatio
+      }
+    }).catch((err: Error) => { logError(`[LivePlayer] 跳转推荐直播间失败: ${err.message}`); });
+  }
+
   private async switchRoom(direction: number): Promise<void> {
     if (this.switchingRoom || this.disposed) return;
     this.switchingRoom = true;
@@ -351,7 +817,7 @@ struct LivePlayerPage {
         rooms.forEach(room => {
           if (room.roomId > 0 && !this.roomIds.includes(room.roomId)) {
             this.roomIds.push(room.roomId);
-            this.rooms.push(room);
+            this.rooms = this.rooms.concat(room);
           }
         });
         index = this.roomIds.indexOf(this.roomId);
@@ -534,10 +1000,15 @@ struct LivePlayerPage {
   }
 
   aboutToAppear() {
+    // 横屏进页（含推荐卡片 push 的新直播页）默认纯净观看，控件隐藏；竖屏信息层仍默认显示
+    this.informationVisible = this.defaultInformationVisible();
+    this.informationProgress = this.informationVisible ? 0 : 1;
     this.registerContinuation();
     // ⭐ 注册系统音量变化监听（音量键调节时同步 app 内滑块/手势起点）
     this.registerVolumeListener();
     const params = this.getUIContext().getRouter().getParams() as Record<string, Object>;
+    // 比例只在实例内：重新进入分栏界面重置 2/3，只有不同分栏页跳转继承（普通页口径）
+    this.landscapeRatio = this.initialLandscapeRatio(params);
     if (params && params['roomId']) {
       this.roomId = params['roomId'] as number;
       this.roomIds = (params['roomIds'] as number[] || []).filter(id => id > 0);
@@ -548,6 +1019,7 @@ struct LivePlayerPage {
       const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
       preferences.getPreferences(ctx, 'my_app_settings').then(pref => {
         if (!this.disposed) {
+          // 只读取竖屏画面比例设置；横屏分栏比例不持久化，避免重新进入分栏时恢复旧值
           this.portraitScale = pref.getSync('livePortraitScale', 'fill') === 'auto' ? 'auto' : 'fill';
           this.portraitScaleScope = pref.getSync('livePortraitScaleScope', 'standard') === 'all' ? 'all' : 'standard';
         }
@@ -578,11 +1050,11 @@ struct LivePlayerPage {
         //    startPlay 是异步的（先取画质再拉流），可能早于这里拿到窗口，
         //    而 onVideoStart 里那次调用会因 mw 还是 undefined 而被静默丢弃。
         this.updateKeepScreen();
-        // 初始化时尊重全局旋转设置。
+        // 初始化时尊重全局旋转设置；窗口回调是异步的，不能把已生效的全屏横向锁覆盖掉。
         const lock = AppStorage.get<string>('screenOrientationLock') ?? '跟随系统';
         this.rotationFreeMode = lock === '自动旋转' ? 'auto' : 'system';
         this.rotationMode = lock === '锁定竖屏' ? 'portrait' : lock === '锁定横屏' ? 'landscape' : this.rotationFreeMode;
-        this.applyRotationMode();
+        if (!this.liveFullscreenLocked) this.applyRotationMode();
         const top = w.getWindowAvoidArea(window.AvoidAreaType.TYPE_SYSTEM);
         if (top.topRect.height > 0) {
           this.safeTop = this.getUIContext().px2vp(top.topRect.height);
@@ -591,10 +1063,8 @@ struct LivePlayerPage {
         if (bottom.bottomRect.height > 0) {
           this.safeBottom = this.getUIContext().px2vp(bottom.bottomRect.height);
         }
-        // 进入直播间立即隐藏导航小白条
-        try {
-          StatusBarUtils.setSystemBars(w, false, false);
-        } catch (_e2) {}
+        // 进入直播间立即隐藏系统栏（状态栏+小白条），与普通播放页同一口径
+        this.applySystemBars();
       });
     } catch (_e) {
       // 使用默认值
@@ -656,6 +1126,8 @@ struct LivePlayerPage {
         const isLandscape: boolean = AppStorage.get<boolean>('isLandscape') ?? false;
         const hideSb: boolean = AppStorage.get<boolean>('hideStatusBar') ?? false;
         StatusBarUtils.setSystemBars(w, !isLandscape && !hideSb, true);
+        // 直播间的系统栏常隐态结束，别让 EntryAbility 在其它页面上继续隐藏状态栏。
+        AppStorage.setOrCreate('isFullscreen', false);
         // 离开直播恢复全局设置，避免临时锁定覆盖系统旋转策略。
         const lock = AppStorage.get<string>('screenOrientationLock') ?? '跟随系统';
         const orientation = lock === '锁定竖屏' ? window.Orientation.PORTRAIT
@@ -694,10 +1166,15 @@ struct LivePlayerPage {
     try {
       if (!this.userPaused && this.av && this.av.state === 'paused') { this.av.play(); }
     } catch (_) {}
-    // ⭐ 回到直播间：恢复屏幕常亮。
-    //    这里必须显式补设 —— onPageHide 已经把常亮关掉了，而"后台播放"模式下
-    //    播放从未中断，也就不会有 stateChange('playing') 去触发 onVideoStart。
+    // ⭐ 回到直播间：恢复屏幕常亮 + 重新隐藏系统栏（EntryAbility 回前台可能按
+    //    全局状态把状态栏恢复了，这里与普通播放页 onPageShow → manageSB(true) 同口径补设）。
+    //    "后台播放"模式下播放从未中断，不会有 stateChange('playing') 去触发 onVideoStart。
     this.updateKeepScreen();
+    this.applySystemBars();
+    // 从其它页面回到仍处于横屏全屏的直播间：补发方向锁，避免新页面的全局方向设置把它带成竖屏
+    if (this.liveFullscreen && this.liveFullscreenLocked && this.mw) {
+      try { this.mw.setPreferredOrientation(window.Orientation.AUTO_ROTATION_LANDSCAPE).catch(() => {}); } catch (_e) {}
+    }
   }
 
   // ==================== 播放器逻辑（基于 media.AVPlayer） ====================
@@ -732,6 +1209,16 @@ struct LivePlayerPage {
         this.online = info.online;
         this.uname = info.uname || card?.uname || '';
         this.roomCover = info.face || info.keyframe || ''; // 封面优先 user_cover，其次 keyframe
+        // 简介页的「N粉丝」用主播 uid 取用户卡片（与普通简介页 ReferenceUpRow 同源）
+        this.anchorFans = 0;
+        const anchorUid = info.uid || card?.uid || 0;
+        if (anchorUid > 0) {
+          void getVideoIntroCard(anchorUid).then(introCard => {
+            if (!this.disposed && introCard?.card?.fans !== undefined) {
+              this.anchorFans = Number(introCard.card.fans) || 0;
+            }
+          }).catch(() => {});
+        }
         if (info.liveStatus !== 1) {
           this.errorMsg = '主播未开播';
           this.loading = false;
@@ -1019,6 +1506,28 @@ struct LivePlayerPage {
     this.getUIContext().getRouter().back();
   }
 
+  /** 顶栏返回：横屏全屏先退回分栏播放态（对齐普通横屏播放页），其余直接退出直播间 */
+  private handleHeaderBack(): void {
+    if (this.liveFullscreen) {
+      this.toggleLandscapeFullscreen();
+      return;
+    }
+    this.goBack();
+  }
+
+  /** 返回键/侧滑返回：先收菜单，再退全屏，最后才离开直播间 */
+  onBackPress(): boolean {
+    if (this.showPlaybackSettings) {
+      this.showPlaybackSettings = false;
+      return true;
+    }
+    if (this.liveFullscreen) {
+      this.toggleLandscapeFullscreen();
+      return true;
+    }
+    return false;
+  }
+
   /** 后台播放开关：持久化设置并同步媒体会话。 */
   private toggleBackgroundPlayback(): void {
     this.bgp = !this.bgp;
@@ -1177,6 +1686,16 @@ struct LivePlayerPage {
     VibrateUtils.vibratePreset('haptic.notification.trigger');
   }
 
+  /** 音量条贴播放区左边、亮度条贴播放区右边；横屏时不能按整窗宽度算 */
+  private gestureHintX(): number {
+    if (!this.landscapeLayout()) {
+      return this.gestureHintType === 'volume' ? 28 : Math.max(28, this.viewportWidth - 92);
+    }
+    const left = this.landscapePlayerX();
+    return this.gestureHintType === 'volume' ? left + 28
+      : Math.max(left + 28, left + this.landscapePlayerWidth() - 92);
+  }
+
   private fireHaptic(duration: number): void {
     VibrateUtils.vibrateTime(duration);
   }
@@ -1321,6 +1840,7 @@ struct LivePlayerPage {
         this.dt_ = setTimeout(() => {
           this.dt_ = -1;
           if (!this.disposed && !this.pageHidden && !this.showPlaybackSettings && !this.showQualityPicker) {
+            // 横屏分栏/全屏的控件层与竖屏浮层一样，单击整体显隐
             this.settleInformation(!this.informationVisible);
           }
         }, 250);
@@ -1370,93 +1890,172 @@ struct LivePlayerPage {
   }
 
   @Builder
-  private LiveAction(icon: Resource, action: () => void) {
-    Image(icon).width(24).height(24).fillColor('#FFFFFF')
-      .padding(9).width(42).height(42).borderRadius(21)
-      .backgroundColor('#503A3B43').onClick(action)
-      .onTouch((event: TouchEvent) => { this.cancelPendingTap(); event.stopPropagation(); })
+  /** 直播操作按钮：与顶部按钮同一套玻璃材质（HeaderGlassControl 40×40 图标钮） */
+  private LiveAction(icon: Resource, label: string, action: () => void) {
+    Column() {
+      HeaderGlassControl({ label: label, controlId: 'live-action-' + label, onActivate: action }) {
+        Image(icon).width(24).height(24).fillColor('#FFFFFF').hitTestBehavior(HitTestMode.None)
+      }
+    }.width(40).height(40)
   }
 
   @Builder
-  private AnchorIdentity(details: boolean) {
+  private AnchorIdentity(details: boolean, maxWidth: number) {
     Row({ space: 8 }) {
       if (this.anchorFace) { Image(this.anchorFace).width(36).height(36).borderRadius(18) }
       Column({ space: 3 }) {
         Text(this.uname || '直播间').fontSize(14).fontColor('#FFFFFF').maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
         if (details) { Text(`${formatOnlineCount(this.online)} 人气`).fontSize(10).fontColor('#CCCCCC') }
-      }.alignItems(HorizontalAlign.Start).constraintSize({ maxWidth: this.portraitWindow() ? 150 : 260 })
+      }.alignItems(HorizontalAlign.Start).constraintSize({ maxWidth: maxWidth })
     }.padding({ left: 5, right: 14, top: 5, bottom: 5 })
     .backgroundColor('#66282A33').borderRadius(24)
   }
 
+  /** 横屏面板只有一列宽，主播胶囊不能按整窗 260 取值 */
+  private overlayIdentityMaxWidth(): number {
+    return this.portraitWindow() ? 150 : 260;
+  }
+
+  /** 弹幕只在竖屏画面浮层；横屏统一放详情 tab（受面板实测高度约束） */
+  private chatOverlayMode(): boolean {
+    return !this.landscapeLayout();
+  }
+
+  private chatMaxHeight(): number {
+    if (!this.chatOverlayMode()) {
+      return Math.max(60, this.chatSlotHeight || this.landscapePanelHeight() * 0.5);
+    }
+    return Math.max(40, (this.viewportHeight || this.screenHv()) * 0.32);
+  }
+
+  private chatMessageLimit(): number {
+    const height = this.chatMaxHeight();
+    return Math.max(1, Math.min(12, Math.floor((height - (this.liveChatStatus ? 32 : 0)) / 48)));
+  }
+
   private visibleLiveChatMessages(): LiveChatMessage[] {
-    const height = (this.viewportHeight || this.screenHv()) * 0.32;
-    const count = Math.max(1, Math.min(6, Math.floor((height - (this.liveChatStatus ? 32 : 0)) / 48)));
-    return this.liveChatMessages.slice(-count);
+    return this.liveChatMessages.slice(-this.chatMessageLimit());
   }
 
   @Builder
-  private LiveChatInformation() {
+  private LiveChatInformation(themed: boolean) {
     Column({ space: 5 }) {
       ForEach(this.visibleLiveChatMessages(), (message: LiveChatMessage) => {
         Text() {
           Span(`${message.nickname}：`).fontColor(message.nameColor)
-          Span(message.text).fontColor('#FFFFFF')
+          Span(message.text).fontColor(themed ? this.panelPrimaryColor() : '#FFFFFF')
         }.fontSize(13).maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
         .padding({ left: 10, right: 10, top: 5, bottom: 5 })
-        .backgroundColor('#6630323A').borderRadius(15)
+        .backgroundColor(themed ? this.panelChatBubbleColor() : '#6630323A').borderRadius(15)
         .constraintSize({ maxWidth: '100%' })
       }, (message: LiveChatMessage) => message.id)
       if (this.liveChatStatus) {
-        Text(this.liveChatStatus).fontSize(12).fontColor('#D2D3D8')
-          .padding({ left: 10, right: 10, top: 5, bottom: 5 }).backgroundColor('#6630323A').borderRadius(15)
+        Text(this.liveChatStatus).fontSize(12).fontColor(themed ? this.panelMutedColor() : '#D2D3D8')
+          .padding({ left: 10, right: 10, top: 5, bottom: 5 })
+          .backgroundColor(themed ? this.panelChatBubbleColor() : '#6630323A').borderRadius(15)
       }
     }.alignItems(HorizontalAlign.Start)
-    .width(this.portraitWindow() ? '86%' : '55%')
-    .constraintSize({ maxHeight: Math.max(40, (this.viewportHeight || this.screenHv()) * 0.32) })
+    .width(this.chatOverlayMode() ? (this.portraitWindow() ? '86%' : '55%') : '100%')
+    .constraintSize({ maxHeight: this.chatMaxHeight() })
     .clip(true).align(Alignment.BottomStart)
-    .margin({ left: 16, bottom: 12 }).alignSelf(ItemAlign.Start)
+    .margin({ left: this.chatOverlayMode() ? 16 : 0, bottom: this.chatOverlayMode() ? 12 : 0 })
+    .alignSelf(ItemAlign.Start)
     .id('live-chat-information').hitTestBehavior(HitTestMode.None)
   }
 
   @Builder
+  private MoreGlassButton() {
+    Column() {
+      HeaderGlassControl({ label: '更多', controlId: 'live-header-more', onActivate: () => this.openLiveMenu() }) {
+        Image($r('app.media.ref_more')).width(24).height(24).fillColor('#FFFFFF').hitTestBehavior(HitTestMode.None)
+      }
+    }.width(40).height(40)
+  }
+
+  /** 播放器顶栏（返回 + 更多）：竖屏浮层保留主播胶囊；横屏分栏的主播信息已在详情面板里，
+   *  播放区不再重复放胶囊（普通页分栏顶栏同款）；全屏保留胶囊对应普通页全屏的标题位。 */
+  @Builder
+  private LiveInfoHeader(showAnchor: boolean) {
+    Row({ space: 10 }) {
+      HeaderBackButton({ iconColor: '#FFFFFF', onBack: () => this.handleHeaderBack() })
+      if (showAnchor) {
+        this.AnchorIdentity(true, this.overlayIdentityMaxWidth())
+      }
+      Blank()
+      this.MoreGlassButton()
+    }.width('100%')
+    .onTouch((event: TouchEvent) => { this.cancelPendingTap(); event.stopPropagation(); })
+  }
+
+  /** 竖屏浮层底部：标题/房间号 + 操作行 */
+  @Builder
+  private LiveInfoFooter() {
+    Column({ space: 10 }) {
+      Text(this.title).fontSize(16).fontColor('#FFFFFF').fontWeight(FontWeight.Medium)
+        .maxLines(2).width('100%')
+      Text(`房间号 ${this.roomId}`).fontSize(12).fontColor('#BFC0C9').width('100%')
+      this.LiveControlRow(false)
+    }.width('100%')
+    .padding({ left: 20, right: 20, top: 24, bottom: this.safeBottom + 12 })
+    .backgroundColor('#40202430')
+  }
+
+  /** 播放/重置/画质操作行；横屏控件层额外带进/退全屏按钮（对齐普通横屏页底部控件行） */
+  @Builder
+  private LiveControlRow(landscape: boolean) {
+    Row({ space: landscape ? 12 : 14 }) {
+      Column() {
+        HeaderGlassControl({ label: this.isPlaying ? '暂停' : '播放', controlId: 'live-play-pause',
+          onActivate: () => this.togglePlayPause() }) {
+          Image(this.isPlaying ? $r('app.media.ic_public_pause') : $r('app.media.ic_public_play'))
+            .width(24).height(24).fillColor('#FFFFFF').hitTestBehavior(HitTestMode.None)
+        }
+      }.width(40).height(40)
+      this.LiveAction($r('app.media.reset_70'), '重置直播', () => this.resetLive())
+      Blank()
+      this.QualityLabel()
+      this.FullscreenGlassButton(!landscape)
+    }.width('100%').height(42)
+    .onTouch((event: TouchEvent) => { this.cancelPendingTap(); event.stopPropagation(); })
+  }
+
+  /** 全屏入口：横屏切分栏/全屏；竖屏请求横屏并落到横屏全屏态（普通页 toggleFS 口径） */
+  @Builder
+  private FullscreenGlassButton(portrait: boolean) {
+    Column() {
+      HeaderGlassControl({ label: this.liveFullscreen ? '退出全屏' : '进入全屏',
+        controlId: 'live-landscape-fullscreen',
+        onActivate: () => { if (portrait) this.enterPortraitFullscreen(); else this.toggleLandscapeFullscreen(); } }) {
+        Image(this.liveFullscreen ? $r('app.media.ref_apk_minimize') : $r('app.media.ref_fullscreen'))
+          .width(24).height(24).fillColor('#FFFFFF').hitTestBehavior(HitTestMode.None)
+      }
+    }.width(40).height(40)
+  }
+
+  @Builder
+  private QualityLabel() {
+    Text(this.availableQualities.find(q => q.qn === this.currentQn)?.label || getLiveQualityLabel(this.currentQn))
+      .fontSize(13).fontColor('#FFFFFF').maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+      .onClick(() => { this.showQualityPicker = true; })
+      .id('live-quality-anchor')
+      .bindMenu(this.showQualityPicker, this.LiveOptions('quality'),
+        playbackMenuOptions(this.isDarkMode, () => { this.showQualityPicker = false; }))
+  }
+
+  /** 竖屏浮层：顶栏、弹幕、标题与操作行，单击整体显隐 */
+  @Builder
   private RoomInformation() {
     Stack() {
       Column() {
-        Row({ space: 10 }) {
-          HeaderBackButton({ iconColor: '#FFFFFF', onBack: () => this.goBack() })
-          this.AnchorIdentity(true)
-          Blank()
-          Column() {
-            HeaderGlassControl({ label: '更多', controlId: 'live-header-more', onActivate: () => this.openLiveMenu() }) {
-              Image($r('app.media.ref_more')).width(24).height(24).fillColor('#FFFFFF').hitTestBehavior(HitTestMode.None)
-            }
-          }.width(40).height(40)
+        Column() {
+          this.LiveInfoHeader(true)
         }.width('100%').padding({ left: 16, right: 12, top: this.safeTop + 8 })
-        .onTouch((event: TouchEvent) => { this.cancelPendingTap(); event.stopPropagation(); })
         Blank()
-        this.LiveChatInformation()
-        Column({ space: 10 }) {
-          Text(this.title).fontSize(16).fontColor('#FFFFFF').fontWeight(FontWeight.Medium).maxLines(2).width('100%')
-          Text(`房间号 ${this.roomId}`).fontSize(12).fontColor('#BFC0C9').width('100%')
-          Row({ space: 14 }) {
-            Image(this.isPlaying ? $r('app.media.ic_public_pause') : $r('app.media.ic_public_play'))
-              .width(24).height(24).fillColor('#FFFFFF').padding(9).width(42).height(42)
-              .borderRadius(21).backgroundColor('#503A3B43').id('live-play-pause')
-              .accessibilityText(this.isPlaying ? '暂停' : '播放')
-              .onClick(() => this.togglePlayPause())
-              .onTouch((event: TouchEvent) => { this.cancelPendingTap(); event.stopPropagation(); })
-            this.LiveAction($r('app.media.reset_70'), () => this.resetLive())
-            Text(this.availableQualities.find(q => q.qn === this.currentQn)?.label || getLiveQualityLabel(this.currentQn))
-              .fontSize(13).fontColor('#FFFFFF').onClick(() => { this.showQualityPicker = true; })
-              .id('live-quality-anchor')
-              .bindMenu(this.showQualityPicker, this.LiveOptions('quality'),
-                playbackMenuOptions(this.isDarkMode, () => { this.showQualityPicker = false; }))
-            Blank()
-          }.width('100%')
-          .onTouch((event: TouchEvent) => { this.cancelPendingTap(); event.stopPropagation(); })
-        }.padding({ left: 20, right: 20, bottom: this.safeBottom + 12, top: 24 }).backgroundColor('#40202430')
+        Column() {
+          this.LiveChatInformation(false)
+        }.width('100%')
+        this.LiveInfoFooter()
       }.width('100%').height('100%')
       .id('live-information-layer')
       .opacity(1 - this.informationProgress)
@@ -1464,9 +2063,258 @@ struct LivePlayerPage {
     }.width('100%').height('100%')
   }
 
+  /** 横屏信息面板：详情 / 推荐 tab 走与普通页 ReferencePanel 同款 Swiper（380ms 自定义曲线 + 跟手指示器） */
+  @Builder
+  private LandscapeInformationPanel() {
+    Column() {
+      Row() {
+        this.PanelTab('简介', 0)
+        this.PanelTab('评论', 1)
+      }.width('100%').height(46).padding({ left: 16, right: 16 })
+      Row().width('100%').height(0.5).backgroundColor(this.panelDividerColor())
+      Swiper(this.livePanelSwiper) {
+        ForEach([0, 1], (page: number) => {
+          Column() {
+            if (page === 0) {
+              this.LandscapeIntroTab()
+            } else {
+              this.LandscapeCommentTab()
+            }
+          }.width('100%').height('100%')
+        }, (page: number) => page.toString())
+      }
+      .index(this.livePanelTab)
+      .loop(false)
+      .indicator(false)
+      .cachedCount(1)
+      .duration(HOME_CHANNEL_DURATION)
+      .curve(HOME_CHANNEL_CURVE)
+      .width('100%')
+      .layoutWeight(1)
+      .clip(true)
+      .onContentDidScroll((_selected: number, index: number, position: number, _length: number) => {
+        this.livePanelTabProgress = Math.max(0, Math.min(1, index - position));
+      })
+      .onChange((index: number) => {
+        this.livePanelTab = index;
+        this.livePanelTabProgress = index;
+        this.lastPanelTabChangeAt = Date.now();
+      })
+    }
+    .width(this.landscapePanelWidth())
+    .height(this.landscapePanelHeight())
+    .position({ x: this.landscapePanelX(), y: this.landscapePanelTop() })
+    .backgroundColor(this.panelBgColor())
+    .borderRadius({ topLeft: this.cardBorderRadius, topRight: this.cardBorderRadius,
+      bottomLeft: this.cardBorderRadius, bottomRight: this.cardBorderRadius })
+    .clip(true)
+    .id('live-landscape-information-panel')
+    .hitTestBehavior(this.landscapeExpandAmount() > 0.01 ? HitTestMode.None : HitTestMode.Default)
+    .onTouch((event: TouchEvent) => { this.cancelPendingTap(); event.stopPropagation(); })
+  }
+
+  /** tab 文字/指示器随 Swiper 进度连续插值；点击走 changeIndex(index, true) 带动画 */
+  @Builder
+  private PanelTab(label: string, index: number) {
+    Column({ space: 6 }) {
+      Text(label).fontSize(14)
+        .fontWeight(Math.abs(this.livePanelTabProgress - index) < 0.5 ? FontWeight.Bold : FontWeight.Normal)
+        .fontColor(Math.abs(this.livePanelTabProgress - index) < 0.5 ? this.panelPrimaryColor() : this.panelMutedColor())
+        .onAreaChange((_old: Area, area: Area) => { this.livePanelTabWidths[index] = Number(area.width); })
+      Row().width(16).height(3).borderRadius(2)
+        .backgroundColor(index === 0 ? '#D34E7E' : Color.Transparent)
+        .translate({ x: index === 0 ? this.livePanelTabProgress * this.panelTabIndicatorTravel() : 0 })
+    }.height(32).justifyContent(FlexAlign.End).margin({ right: 20 })
+    .onClick(() => {
+      if (this.livePanelTab === index) return;
+      this.lastPanelTabChangeAt = Date.now();
+      this.livePanelSwiper.changeIndex(index, true);
+    })
+    .onTouch((event: TouchEvent) => { this.cancelPendingTap(); event.stopPropagation(); })
+  }
+
+  /** 简介 tab：结构与普通播放页 ReferenceIntro 一致——头部主播信息（头像/名字/
+   *  「N粉丝  N人气」，视频数换人气、bv 号位置换房间号），下面直接列直播推荐。 */
+  @Builder
+  private LandscapeIntroTab() {
+    List() {
+      ListItem() {
+        Column() {
+          // 主播信息行：照抄 ReferenceUpRow(false) 的尺寸与配色
+          Row({ space: 10 }) {
+            if (this.anchorFace) {
+              Image(this.anchorFace).width(28).height(28).borderRadius(20)
+                .objectFit(ImageFit.Cover).backgroundColor(this.panelCardColor()).draggable(false)
+            }
+            Column({ space: 3 }) {
+              Text(this.uname || '直播间').fontSize(13).fontColor('#D34E7E').maxLines(1)
+                .textOverflow({ overflow: TextOverflow.Ellipsis })
+              Text(`${this.anchorFans > 0 ? formatOnlineCount(this.anchorFans) : '—'}粉丝  ${formatOnlineCount(this.online)}人气`)
+                .fontSize(10).fontColor('#757A81').maxLines(1)
+            }.layoutWeight(1).alignItems(HorizontalAlign.Start)
+          }.width('100%').height(62).alignItems(VerticalAlign.Center)
+          // 标题 + 房间号：普通简介页这里是可展开标题 + 统计行 + bv 号
+          Column({ space: 7 }) {
+            Text(this.title).fontSize(16).lineHeight(22).fontColor(this.panelPrimaryColor())
+              .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%')
+            Text(`房间号 ${this.roomId}`).fontSize(10).fontColor('#757A81').maxLines(1).width('100%')
+          }.width('100%').padding({ top: 10, bottom: 12 })
+        }.width('100%').padding({ top: 8 })
+      }.width('100%')
+      // 与普通简介页一样，正文和推荐列表之间留一条短占位
+      ListItem() { Column().width('100%').height(10) }
+      // 直播推荐：与普通简介页相关视频列表同款 VideoListItem，宽度随面板实时变化
+      ForEach(this.introRooms(), (room: LiveFeedRoom) => {
+        ListItem() {
+          Column() {
+            VideoListItem({
+              availableWidth: this.landscapePanelContentWidth(),
+              title: room.title, cover: room.cover || '', duration: 0,
+              owner: room.uname, playCount: -1,
+              detailText: `${formatOnlineCount(room.online)}人气`,
+              videoId: '', ownerMid: '',
+              onActivate: () => {
+                if (Date.now() - this.lastPanelTabChangeAt < 300) return;
+                this.selectRecommendedRoom(room);
+              }
+            })
+          }.width('100%').id('live-intro-room-' + room.roomId)
+        }.width('100%')
+      }, (room: LiveFeedRoom) => `${room.roomId}`)
+      if (this.introRooms().length === 0) {
+        ListItem() {
+          Text('正在获取直播推荐…').fontSize(12).fontColor(this.panelMutedColor())
+            .width('100%').padding({ top: 16, bottom: 16 })
+        }
+      }
+      ListItem() { Column().width('100%').height(20) }
+    }
+    .id('live-landscape-intro')
+    .width('100%').height('100%')
+    .padding({ left: 12, right: 12 }).cachedCount(2).scrollBar(BarState.Off)
+    .align(Alignment.TopStart).edgeEffect(EdgeEffect.None)
+    .onReachEnd(() => { void this.loadLiveIntroRooms(false); })
+    .onAppear(() => { if (this.liveIntroRooms.length === 0) void this.loadLiveIntroRooms(true); })
+  }
+
+  // 推荐卡片复用 components/VideoListItem：封面按可用宽度 40% 自适应、行高至少 98vp，
+  // 标题/主播/人气各有独立行，窄面板下不会再互相挤压串行；空 videoId 会隐藏视频反馈三点菜单。
+
+  /** 评论 tab：渲染全部弹幕历史（上限 LIVE_CHAT_LIMIT），持续刷新且旧消息不消失；
+   *  列表可上下滑动，贴底时自动跟随最新，上滑翻历史不会被拉回。 */
+  @Builder
+  private LandscapeCommentTab() {
+    Stack({ alignContent: Alignment.BottomEnd }) {
+      List({ scroller: this.landscapeChatScroller }) {
+        ForEach(this.liveChatMessages, (message: LiveChatMessage) => {
+          ListItem() {
+            // ListItem 默认把子组件水平居中；包一层满宽 Column 让气泡靠左（普通评论列表口径）
+            Column() {
+              Text() {
+                Span(`${message.nickname}：`).fontColor(message.nameColor)
+                Span(message.text).fontColor(this.panelPrimaryColor())
+              }.fontSize(13).maxLines(4).textOverflow({ overflow: TextOverflow.Ellipsis })
+                .padding({ left: 10, right: 10, top: 6, bottom: 6 })
+                .backgroundColor(this.panelChatBubbleColor()).borderRadius(12)
+                .constraintSize({ maxWidth: '100%' })
+            }.width('100%').alignItems(HorizontalAlign.Start)
+          }.width('100%').padding({ bottom: 6 })
+        }, (message: LiveChatMessage) => message.id)
+        if (this.liveChatStatus) {
+          ListItem() {
+            Column() {
+              Text(this.liveChatStatus).fontSize(12).fontColor(this.panelMutedColor())
+                .padding({ left: 10, right: 10, top: 5, bottom: 5 })
+                .backgroundColor(this.panelChatBubbleColor()).borderRadius(12)
+            }.width('100%').alignItems(HorizontalAlign.Start)
+          }.width('100%').padding({ bottom: 6 })
+        }
+        ListItem() { Column().width('100%').height(12) }
+      }
+      .id('live-landscape-comment-list')
+      .width('100%').height('100%')
+      .padding({ left: 12, right: 12, top: 8 })
+      .cachedCount(2).scrollBar(BarState.Off).edgeEffect(EdgeEffect.None)
+      .onScrollIndex((_start: number, end: number) => {
+        this.chatFollowLatest = end >= this.liveChatMessages.length - 2;
+      })
+      if (!this.chatFollowLatest) {
+        Text('回到最新').fontSize(12).fontColor('#FFFFFF')
+          .padding({ left: 12, right: 12, top: 8, bottom: 8 })
+          .backgroundColor('#CC242629').borderRadius(16)
+          .margin({ right: 16, bottom: 16 })
+          .onClick(() => {
+            this.chatFollowLatest = true;
+            try { this.landscapeChatScroller.scrollEdge(Edge.Bottom); } catch (_e) {}
+          })
+      }
+    }.width('100%').height('100%')
+  }
+
+  /**
+   * 横屏控件层：全部叠在播放区（分栏与全屏同一套），单击整体显隐。
+   * 全屏时系统状态栏隐藏 ⇒ 顶部补自绘「网速·时间·电量」条（普通页全屏同款）。
+   */
+  @Builder
+  private LandscapePlayerControls() {
+    Column() {
+      Stack({ alignContent: Alignment.TopStart }) {
+        if (this.liveFullscreen) {
+          PlayerStatusStrip()
+        }
+        Column() {
+          this.LiveInfoHeader(this.liveFullscreen)
+        }.width('100%')
+        .padding({ left: this.liveFullscreen ? 18 : 12, right: this.liveFullscreen ? 18 : 12,
+          top: this.liveFullscreen ? 20 : 12, bottom: 12 })
+        // 普通页分栏顶栏（ReferenceTopBar）没有渐变底板；只有全屏档才压一层顶部渐变
+        .linearGradient({ direction: GradientDirection.Bottom,
+          colors: [[this.liveFullscreen ? '#66000000' : '#00000000', 0], ['#00000000', 1]] })
+      }.width('100%')
+      Blank().layoutWeight(1)
+      Column() {
+        this.LiveControlRow(true)
+      }.width('100%')
+      .padding({ left: this.liveFullscreen ? 18 : 12, right: this.liveFullscreen ? 18 : 12,
+        top: 14, bottom: this.liveFullscreen ? 20 : 12 })
+      // 底部控件不加实色/渐变底板：普通页 ReferenceLandscapeBottomControls 只留 padding，
+      // 按钮靠自身玻璃材质浮在画面上，播放区与屏幕底边之间不留遮罩带
+    }
+    .width(this.landscapePlayerWidth())
+    .height(this.landscapeAreaHeight())
+    .position({ x: this.landscapePlayerX(), y: this.landscapeAreaTop() })
+    .clip(true)
+    .id('live-landscape-player-controls')
+    .opacity(1 - this.informationProgress)
+    .hitTestBehavior(this.informationVisible ? HitTestMode.Default : HitTestMode.BLOCK_DESCENDANTS)
+  }
+
+  @Builder
+  private LandscapeResizeHandle() {
+    Row() {
+      // 条默认居中在分界线上，向详情侧偏 2vp ⇒ 整条落在详情面板内、贴边且不压画面
+      Row().width(4).height(42).borderRadius(2).backgroundColor('#45494F')
+        .translate({ x: this.landscapeSwapped() ? -2 : 2 })
+    }.width(32).height(72).justifyContent(FlexAlign.Center)
+      .id('live-landscape-resize-handle')
+      .accessibilityText('拖动调节直播画面与信息区大小')
+      .position({ x: this.landscapeHandleX(),
+        y: this.landscapeAreaTop() + (this.landscapeAreaHeight() - 72) / 2 })
+      // 拖动展开时播放区会临时变宽，提到上层保证任何中间态 32vp 触控区都可拖
+      .zIndex(1)
+      .gesture(PanGesture({ direction: PanDirection.Horizontal, distance: 1 })
+        .onActionStart(() => { this.beginLandscapeResize(); })
+        .onActionUpdate((event: GestureEvent) => { this.landscapeResize(event.offsetX); })
+        .onActionEnd((event: GestureEvent) => { this.finishLandscapeResize(event.offsetX); })
+        .onActionCancel(() => { this.finishLandscapeResize(0, true); }))
+  }
+
   private menuTextColor(): string { return this.isDarkMode ? '#EEEFF1' : '#18191C'; }
 
-  private liveRowWidth(): number { return Math.max(0, (this.viewportWidth || this.screenWv()) - 28); }
+  private liveRowWidth(): number {
+    const width = this.landscapeLayout() ? this.landscapeMenuDockWidth() : (this.viewportWidth || this.screenWv());
+    return Math.max(0, width - 28);
+  }
 
   private liveOptionLabels(kind: string): string[] {
     if (kind === 'quality') return this.availableQualities.map((item: QualityOption) => item.label);
@@ -1541,14 +2389,30 @@ struct LivePlayerPage {
   private PlaybackSettingsContent() {
     Column({ space: 0 }) {
       if (this.liveMenuPanel === 'share') {
-        Row() {
-          this.ShareChannel()
-          this.MenuShortcut($r('app.media.ref_ps_settings'), '播放设置', () => { this.liveMenuPanel = 'playback'; })
-          this.MenuShortcut($r('app.media.live_menu_consumption'), '消费管理', () => this.unavailableLiveAction('当前客户端暂不支持直播消费管理'))
-          this.MenuShortcut($r('app.media.live_menu_effects'), '隐藏特效', () => this.unavailableLiveAction('当前播放器未展示礼物特效'))
-          this.MenuShortcut($r('app.media.ref_ps_cast'), '投屏', () => this.unavailableLiveAction('当前客户端暂不支持直播投屏'))
-          this.MenuShortcut($r('app.media.ref_ps_report'), '举报', () => this.unavailableLiveAction('请在哔哩哔哩官方直播间内提交举报'))
-        }.width('100%').padding({ left: 8, right: 8, top: 20, bottom: 14 })
+        if (this.landscapeLayout()) {
+          // 横屏菜单只占信息面板一列宽，六个入口分两排，胶囊不再互相压住
+          Column({ space: 6 }) {
+            Row() {
+              this.ShareChannel()
+              this.MenuShortcut($r('app.media.ref_ps_settings'), '播放设置', () => { this.liveMenuPanel = 'playback'; })
+              this.MenuShortcut($r('app.media.live_menu_consumption'), '消费管理', () => this.unavailableLiveAction('当前客户端暂不支持直播消费管理'))
+            }.width('100%')
+            Row() {
+              this.MenuShortcut($r('app.media.live_menu_effects'), '隐藏特效', () => this.unavailableLiveAction('当前播放器未展示礼物特效'))
+              this.MenuShortcut($r('app.media.ref_ps_cast'), '投屏', () => this.unavailableLiveAction('当前客户端暂不支持直播投屏'))
+              this.MenuShortcut($r('app.media.ref_ps_report'), '举报', () => this.unavailableLiveAction('请在哔哩哔哩官方直播间内提交举报'))
+            }.width('100%')
+          }.width('100%').padding({ left: 8, right: 8, top: 16, bottom: 10 })
+        } else {
+          Row() {
+            this.ShareChannel()
+            this.MenuShortcut($r('app.media.ref_ps_settings'), '播放设置', () => { this.liveMenuPanel = 'playback'; })
+            this.MenuShortcut($r('app.media.live_menu_consumption'), '消费管理', () => this.unavailableLiveAction('当前客户端暂不支持直播消费管理'))
+            this.MenuShortcut($r('app.media.live_menu_effects'), '隐藏特效', () => this.unavailableLiveAction('当前播放器未展示礼物特效'))
+            this.MenuShortcut($r('app.media.ref_ps_cast'), '投屏', () => this.unavailableLiveAction('当前客户端暂不支持直播投屏'))
+            this.MenuShortcut($r('app.media.ref_ps_report'), '举报', () => this.unavailableLiveAction('请在哔哩哔哩官方直播间内提交举报'))
+          }.width('100%').padding({ left: 8, right: 8, top: 20, bottom: 14 })
+        }
       } else {
         Row({ space: 12 }) {
           Row() {
@@ -1562,7 +2426,7 @@ struct LivePlayerPage {
             Text('完成').fontSize(14).fontColor(this.menuTextColor()).hitTestBehavior(HitTestMode.None)
           }
         }.width('100%').padding({ left: 14, right: 14, top: 14, bottom: 16 })
-        if (this.portraitRoom()) {
+        if (this.portraitRoom() && !this.landscapeLayout()) {
           Column({ space: 8 }) {
             this.LiveChoiceRow($r('app.media.ref_ps_settings'), '竖屏直播画面', 'scale')
             this.LiveChoiceRow($r('app.media.ref_ps_settings'), '生效范围', 'scope')
@@ -1574,7 +2438,7 @@ struct LivePlayerPage {
             onToggle: (enabled: boolean) => { if (enabled !== this.bgp) this.toggleBackgroundPlayback(); } })
         }.width('100%').margin({ bottom: 14 })
       }
-    }.width('100%').padding({ bottom: this.safeBottom + 12 })
+    }.width('100%').padding({ bottom: this.landscapeLayout() ? 14 : this.safeBottom + 12 })
       .onAreaChange((_old: Area, area: Area) => {
         const height = Number(area.height);
         if (height > 0 && Math.abs(height - this.liveMenuHeight) > 0.5) this.liveMenuHeight = height;
@@ -1585,15 +2449,22 @@ struct LivePlayerPage {
   private PlaybackSettings() {
     Stack({ alignContent: Alignment.TopStart }) {
       if (this.liveMenuHeight > 0) {
-        CommentMenuSurface({ surfaceWidth: this.viewportWidth || this.screenWv(), surfaceHeight: this.liveMenuHeight,
+        CommentMenuSurface({ surfaceWidth: this.settingsSurfaceWidth(), surfaceHeight: this.liveMenuHeight,
           radius: 24, interactive: false, followTouchLight: true }) {
           this.PlaybackSettingsContent()
         }
       } else {
         this.PlaybackSettingsContent()
       }
-    }.width('100%').position({ bottom: 0 }).zIndex(25)
+    }.width(this.landscapeLayout() ? this.landscapeMenuDockWidth() : '100%')
+      // Edges 定位：分栏贴播放区右下、全屏沿收起态面板位
+      .position({ left: this.landscapeLayout() ? this.landscapeMenuDockX() : 0, bottom: 0 })
+      .zIndex(25)
       .transition(TransitionEffect.move(TransitionEdge.BOTTOM).animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 240, curve: Curve.EaseOut }))
+  }
+
+  private settingsSurfaceWidth(): number {
+    return this.landscapeLayout() ? this.landscapeMenuDockWidth() : (this.viewportWidth || this.screenWv());
   }
 
   // ==================== build ====================
@@ -1601,36 +2472,46 @@ struct LivePlayerPage {
   @Builder
   private LiveRoomViewport() {
     Stack() {
-      // 加载中
-      if (this.loading) {
-        Column() {
-          LoadingProgress().width(48).height(48).color('#FFFFFF')
-          Text('加载直播...').fontSize(14).fontColor('#CCCCCC').margin({ top: 16 })
+      Stack() {
+        // 加载中
+        if (this.loading) {
+          Column() {
+            LoadingProgress().width(48).height(48).color('#FFFFFF')
+            Text('加载直播...').fontSize(14).fontColor('#CCCCCC').margin({ top: 16 })
+          }
+          .width('100%').height('100%')
+          .justifyContent(FlexAlign.Center)
+          .backgroundColor('#000000')
         }
-        .width('100%').height('100%')
-        .justifyContent(FlexAlign.Center)
-        .backgroundColor('#0C0E17')
-      }
 
-      // 错误提示（仅当无视频源时显示）
-      if (this.errorMsg && !this.videoSrc) {
-        Column() {
-          Text('⚠️').fontSize(48).fontColor('#FF6600')
-          Text(this.errorMsg).fontSize(14).fontColor('#CCCCCC').margin({ top: 16 })
-          Text('点击返回').fontSize(14).fontColor('#007DFF').margin({ top: 24 })
-            .onClick(() => this.goBack())
+        // 错误提示（仅当无视频源时显示）
+        if (this.errorMsg && !this.videoSrc) {
+          Column() {
+            Text('⚠️').fontSize(48).fontColor('#FF6600')
+            Text(this.errorMsg).fontSize(14).fontColor('#CCCCCC').margin({ top: 16 })
+            Text('点击返回').fontSize(14).fontColor('#007DFF').margin({ top: 24 })
+              .onClick(() => this.goBack())
+          }
+          .width('100%').height('100%')
+          .justifyContent(FlexAlign.Center)
+          .backgroundColor('#000000')
         }
-        .width('100%').height('100%')
-        .justifyContent(FlexAlign.Center)
-        .backgroundColor('#0C0E17')
       }
+      // 横屏分栏时加载/错误只占播放区，不再铺到信息面板底下
+      .width(this.landscapeLayout() ? this.landscapePlayerWidth() : '100%')
+      .height('100%')
+      .position({ x: this.landscapeLayout() ? this.landscapePlayerX() : 0, y: 0 })
 
-      this.RoomInformation()
+      // 横屏控件统一叠在播放区（分栏与全屏同一套，支持显隐）
+      if (!this.landscapeLayout()) {
+        this.RoomInformation()
+      }
     }.width('100%').height('100%').clip(true)
   }
 
   private slotWidth(slot: number): number {
     if (slot === this.activeSlot) return this.videoW();
+    if (this.landscapeLayout()) return this.landscapeMediaWidth(this.previewWidth, this.previewHeight);
     const sw = this.viewportWidth || this.screenWv();
     const sh = this.viewportHeight || this.screenHv();
     const ratio = this.previewWidth / this.previewHeight;
@@ -1640,11 +2521,20 @@ struct LivePlayerPage {
   }
 
   private slotHeight(slot: number): number {
-    return slot === this.activeSlot ? this.videoH() : this.slotWidth(slot) * this.previewHeight / this.previewWidth;
+    if (slot === this.activeSlot) return this.videoH();
+    return this.slotWidth(slot) * this.previewHeight / Math.max(1, this.previewWidth);
+  }
+
+  private slotLeft(slot: number): number {
+    if (slot === this.activeSlot) return this.videoLeft();
+    if (this.landscapeLayout()) return this.landscapeMediaX(this.previewWidth, this.previewHeight);
+    const sw = this.viewportWidth || this.screenWv();
+    return (sw - this.slotWidth(slot)) / 2;
   }
 
   private slotTop(slot: number): number {
     if (slot === this.activeSlot) return this.videoTop();
+    if (this.landscapeLayout()) return this.landscapeMediaY(this.previewWidth, this.previewHeight);
     const sh = this.viewportHeight || this.screenHv();
     return this.portraitWindow() && this.previewWidth >= this.previewHeight
       ? Math.max(this.safeTop + 86, sh * 0.237) : (sh - this.slotHeight(slot)) / 2;
@@ -1665,11 +2555,13 @@ struct LivePlayerPage {
       XComponent({ id: slot === 0 ? 'live_video_xc' : 'live_video_spare',
         type: XComponentType.SURFACE, controller: slot === 0 ? this.xc : this.spareXc })
         .width(this.slotWidth(slot)).height(this.slotHeight(slot))
-        .position({ x: ((this.viewportWidth || this.screenWv()) - this.slotWidth(slot)) / 2, y: this.slotTop(slot) })
+        .position({ x: this.slotLeft(slot), y: this.slotTop(slot) })
+        .borderRadius(this.landscapeLayout() ? (this.liveFullscreen ? 0 : this.cardBorderRadius) : 0)
+        .clip(true)
         .hitTestBehavior(HitTestMode.None)
       // Surface 复用后仍可能持有旧房间末帧；只有对应播放器的首帧能解除实色遮挡。
       if (!this.slotHasCurrentFrame(slot)) {
-        Column().width('100%').height('100%').backgroundColor('#0C0E17')
+        Column().width('100%').height('100%').backgroundColor('#000000')
           .hitTestBehavior(HitTestMode.None)
       }
       if (slot === this.activeSlot) {
@@ -1678,9 +2570,9 @@ struct LivePlayerPage {
         Column({ space: 14 }) {
           LoadingProgress().width(36).height(36).color('#FFFFFF')
           Text('加载直播…').fontSize(14).fontColor('#CCCCCC')
-        }.width('100%').height('100%').justifyContent(FlexAlign.Center).backgroundColor('#0C0E17')
+        }.width('100%').height('100%').justifyContent(FlexAlign.Center).backgroundColor('#000000')
       }
-    }.width('100%').height('100%').backgroundColor('#0C0E17').clip(true)
+    }.width('100%').height('100%').backgroundColor('#000000').clip(true)
     .translate({ y: slot === this.activeSlot ? this.roomOffset
       : this.roomOffset + this.roomSlideDirection * (this.viewportHeight || this.screenHv()) })
     .hitTestBehavior(slot === this.activeSlot ? HitTestMode.Default : HitTestMode.None)
@@ -1692,6 +2584,13 @@ struct LivePlayerPage {
     Stack() {
       this.LiveVideoSlot(0)
       this.LiveVideoSlot(1)
+
+      // 横屏：播放区承载全部控件（可显隐），另一栏是详情/推荐 tab 面板，中间分界柄可调大小、可拖入全屏
+      if (this.landscapeLayout()) {
+        this.LandscapeInformationPanel()
+        if (!this.liveFullscreen) { this.LandscapeResizeHandle() }
+        this.LandscapePlayerControls()
+      }
 
       if (this.showBottomHint) {
         Text(this.bottomHintText).fontSize(14).fontColor('#FFFFFF')
@@ -1714,7 +2613,7 @@ struct LivePlayerPage {
             headphoneIcon: this.outputHeadphoneIcon })
         }
         .position({
-          x: this.gestureHintType === 'volume' ? 28 : Math.max(28, this.viewportWidth - 92),
+          x: this.gestureHintX(),
           y: Math.max(0, (this.viewportHeight - 144) / 2)
         })
         .transition(TransitionEffect.OPACITY)
@@ -1726,11 +2625,53 @@ struct LivePlayerPage {
     }
     .width('100%')
     .height('100%')
-    .backgroundColor('#0C0E17')
+    .backgroundColor('#000000')
     .clip(true)
     .onAreaChange((_old, area) => {
-      this.viewportWidth = Number(area.width);
-      this.viewportHeight = Number(area.height);
+      const width = Number(area.width);
+      const height = Number(area.height);
+      const wasLandscape = this.landscapeLayout();
+      // 全屏横向锁定期间不跟随物理旋转换布局：方向锁只会在两个横屏之间切换，
+      // 手机转到竖屏方向不应把全屏页重置成竖屏。系统若仍短暂下发竖屏视口
+      // （折叠屏 / 分屏边界），重新锁回横屏并保留原横屏几何与全屏态。
+      if (this.liveFullscreenLocked && !this.pendingLandscapeFullscreen) {
+        if (width < height) {
+          try {
+            if (this.mw) this.mw.setPreferredOrientation(window.Orientation.AUTO_ROTATION_LANDSCAPE).catch(() => {});
+          } catch (_e) {}
+          return;
+        }
+        this.viewportWidth = width;
+        this.viewportHeight = height;
+        return;
+      }
+      this.viewportWidth = width;
+      this.viewportHeight = height;
+      if ((width > height) !== wasLandscape) {
+        // 旋转会换一套布局：拖动进度、全屏都是横屏临时态，不跨方向保留。
+        this.landscapeExpand = 0;
+        this.liveFullscreen = false;
+        this.chatSlotHeight = 0;
+        this.informationVisible = this.defaultInformationVisible();
+        this.informationProgress = this.informationVisible ? 0 : 1;
+        if (width > height && this.pendingLandscapeFullscreen) {
+          // 竖屏点「全屏」→ 请求横屏完成：直接落到横屏全屏纯净观看态
+          this.pendingLandscapeFullscreen = false;
+          this.landscapeExpand = 1;
+          this.liveFullscreen = true;
+          this.informationVisible = false;
+          this.informationProgress = 1;
+        } else {
+          this.portraitFullscreenOrigin = false;
+          if (this.pendingRestoreRotation && width < height) {
+            // 已经回到竖屏：释放临时的 PORTRAIT 锁，交还用户全局旋转设置
+            this.pendingRestoreRotation = false;
+            setTimeout(() => { if (!this.disposed) this.applyRotationMode().catch(() => {}); }, 400);
+          }
+        }
+        // 分栏显示系统状态栏、竖屏/全屏隐藏：随新方向重新下发（同时刷新状态栏高度测量）
+        this.applySystemBars();
+      }
     })
     .onTouch(this.onVT)
   }

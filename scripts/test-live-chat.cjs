@@ -6,7 +6,9 @@ const base = 'entry/build/default/cache/default/default@CompileArkTS/esmodule/de
 const source = fs.readFileSync(base + 'pages/LivePlayerPage.ts', 'utf8');
 const tree = ts.createSourceFile('page.ts', source, ts.ScriptTarget.Latest, true);
 const page = tree.statements.find(n => ts.isClassDeclaration(n) && n.name.text === 'LivePlayerPage');
-const names = ['stopLiveChat', 'startLiveChat', 'refreshLiveChat', 'visibleLiveChatMessages'];
+const names = ['stopLiveChat', 'startLiveChat', 'refreshLiveChat', 'chatOverlayMode', 'chatMaxHeight',
+  'chatMessageLimit', 'visibleLiveChatMessages', 'landscapeLayout', 'landscapeInset', 'landscapeExpandAmount',
+  'landscapePanelHeight'];
 const methods = names.map(name => {
   const method = page.members.find(n => n.name?.getText(tree) === name);
   assert.ok(method, `CompileArkTS must emit ${name}`);
@@ -23,7 +25,8 @@ const flush = async () => { await Promise.resolve(); await Promise.resolve(); };
 const message = i => ({ id: String(i), text: String(i), nickname: 'viewer', timeline: String(i).padStart(3, '0') });
 async function main() {
   const p = new ctx.exports.Page();
-  Object.assign(p, { liveChatGeneration: 0, roomId: 1, liveChatMessages: [], liveChatStatus: '', liveChatReceiver: { start() {}, stop() {} }, viewportHeight: 800 });
+  Object.assign(p, { liveChatGeneration: 0, roomId: 1, liveChatMessages: [], liveChatStatus: '', liveChatReceiver: { start() {}, stop() {} }, viewportWidth: 720, viewportHeight: 800,
+    liveFullscreen: false, landscapeExpand: 0, chatSlotHeight: 0, LIVE_CHAT_LIMIT: 200 });
   p.startLiveChat(true);
   const old = requests.shift();
   p.roomId = 2; p.startLiveChat(true);
@@ -31,12 +34,14 @@ async function main() {
   assert.equal(p.liveChatMessages.length, 0, 'old room response must be discarded');
   assert.equal(timers.size, 0, 'old room must not schedule more requests');
   requests.shift().resolve(Array.from({ length: 9 }, (_, i) => message(i))); await flush();
-  assert.deepEqual(Array.from(p.liveChatMessages, m => m.id), ['3', '4', '5', '6', '7', '8']);
+  assert.deepEqual(Array.from(p.liveChatMessages, m => m.id), ['0', '1', '2', '3', '4', '5', '6', '7', '8'],
+    'history keeps every recent row for the scrollable comment tab');
   assert.equal(timers.size, 1);
   const timer = [...timers.values()][0]; assert.equal(timer.delay, 3000);
   timers.clear(); timer.cb();
   requests.shift().resolve([message(8), message(9)]); await flush();
-  assert.deepEqual(Array.from(p.liveChatMessages, m => m.id), ['4', '5', '6', '7', '8', '9'], 'overlapping history must not duplicate messages');
+  assert.deepEqual(Array.from(p.liveChatMessages, m => m.id),
+    ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9'], 'overlapping history must not duplicate messages');
   p.startLiveChat(); p.liveChatConnected = true;
   requests.shift().resolve([message(88)]); await flush();
   assert.equal(p.liveChatMessages.at(-1).id, '9', 'late history cannot replace a connected live stream');
@@ -44,7 +49,7 @@ async function main() {
   p.liveChatConnected = false;
   p.startLiveChat();
   requests.shift().reject(new Error('network')); await flush();
-  assert.equal(p.liveChatMessages.length, 6, 'failure preserves received messages');
+  assert.equal(p.liveChatMessages.length, 10, 'failure preserves received messages');
   assert.equal([...timers.values()][0].delay, 10000, 'failure backs off');
   p.startLiveChat(); p.pageHidden = true; p.stopLiveChat();
   requests.shift().resolve([message(99)]); await flush();
@@ -53,9 +58,18 @@ async function main() {
   p.pageHidden = false; p.startLiveChat(); p.disposed = true; p.stopLiveChat();
   requests.shift().resolve([message(100)]); await flush();
   assert.equal(p.liveChatMessages.at(-1).id, '9', 'exit response must be discarded');
-  p.viewportHeight = 360;
+  p.viewportHeight = 360; p.chatSlotHeight = 96;
   assert.equal(p.visibleLiveChatMessages().at(-1).id, '9', 'landscape keeps newest messages');
   assert.ok(p.visibleLiveChatMessages().length <= 2);
+  // 评论 tab 的历史上限：250 条历史只丢最旧 50 条，不再被 12 条裁掉
+  Object.assign(p, { disposed: false, pageHidden: false, liveChatConnected: false,
+    liveChatMessages: [], liveChatStatus: '', roomId: 1, liveChatGeneration: 0 });
+  timers.clear();
+  p.startLiveChat();
+  requests.shift().resolve(Array.from({ length: 250 }, (_, i) => message(i))); await flush();
+  assert.equal(p.liveChatMessages.length, 200, 'comment tab keeps a bounded 200-message history');
+  assert.equal(p.liveChatMessages[0].id, '50', 'oldest kept message is exactly at the cap');
+  assert.equal(p.liveChatMessages.at(-1).id, '249', 'newest live message is visible');
 
   const api = fs.readFileSync(base + 'api/LiveApi.ts', 'utf8');
   const start = api.indexOf('export async function getLiveChatHistory(');

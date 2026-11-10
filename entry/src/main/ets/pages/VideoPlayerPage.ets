@@ -418,6 +418,14 @@ struct VideoPlayerPage {
   // 0: undecided, 1: horizontal pager, 2: vertical panel/content drag.
   private referencePanelBodyDirection: number = 0
   private referencePanelBodyStartOffset: number = 0
+  /**
+   * ⭐ 面板跟手锚点：方向确认时把起点前移到 10vp 方向死区的边界。
+   *    死区那 10vp 作为 slop 吃掉（不补写），起步只消费「超出的部分」，
+   *    之后每一帧都用同一个绝对映射 anchorOffset + (y - anchorY)，
+   *    因此起步不跳、按住来回移动也不跳。与 dy 分开，进连刷/回弹的阈值不受影响。
+   */
+  private referencePanelDragAnchorY: number = 0
+  private referencePanelDragAnchorOffset: number = 0
   private referenceTouchX: number = 0
   private referenceTouchY: number = 0
   private referenceVerticalSwipe: boolean = false
@@ -12620,6 +12628,8 @@ struct VideoPlayerPage {
       this.referencePanelBodyLastY = this.referencePanelBodyStartY;
       this.referencePanelBodyStartX = e.touches[0].windowX;
       this.referencePanelBodyStartOffset = this.referencePanelOffset;
+      this.referencePanelDragAnchorY = this.referencePanelBodyStartY;
+      this.referencePanelDragAnchorOffset = this.referencePanelBodyStartOffset;
       this.referencePanelBodyDirection = 0;
       const atTop = scroller.currentOffset().yOffset <= 0;
       // 即使内容已滚动，上滑也先将播放区收至最小。
@@ -12643,6 +12653,12 @@ struct VideoPlayerPage {
         this.referencePanelBodyDirection = 1;
       } else if (Math.abs(dy) > 10 && Math.abs(dy) > Math.abs(dx) * 1.15) {
         this.referencePanelBodyDirection = 2;
+        // ⭐ 锚点定在死区边界：本帧 dy 已 >10，若直接写 startOffset+dy 会一次跳 10+vp
+        //    （起步跳动，与起步位置无关）。吃掉 slop 后本帧只走 dy-10，
+        //    后续每帧沿用同一映射，起步与来回移动都连续。
+        const slop = dy > 0 ? 10 : -10;
+        this.referencePanelDragAnchorY = this.referencePanelBodyStartY + slop;
+        this.referencePanelDragAnchorOffset = this.referencePanelBodyStartOffset;
       }
     }
     // 横向由原生 Swiper 连续跟手；不能在 Move 阶段直接翻转 at 卸载旧页。
@@ -12663,19 +12679,21 @@ struct VideoPlayerPage {
         this.referencePanelBodyCanDrag = true;
         this.referencePanelBodyStartY = touch.windowY;
         this.referencePanelBodyStartOffset = this.referencePanelOffset;
+        // 交接点同步锚点，避免接管那一帧把之前累计的 dy 又补写一次。
+        this.referencePanelDragAnchorY = touch.windowY;
+        this.referencePanelDragAnchorOffset = this.referencePanelOffset;
         dy = 0;
       }
     }
     if (!this.referencePanelBodyCanDrag) return;
-    // ⭐ 唯一保留的修复：方向判定的 |dy|>10 死区不再套到写入阶段。
-    //    按住正文区来回移动、边界回到触摸前高度 x 时 |dy| 会落回 10 以内，
-    //    旧逻辑那几帧不写 offset，穿过死区后一次性写 startOffset+dy → 跳变。
-    //    方向已由 referencePanelBodyDirection 锁定，之后每帧按绝对映射写入。
+    // ⭐ 同一处 slop 的两端：起步（死区内不写、确认帧一次性补 dy）与
+    //    按住来回移动（|dy| 落回 10 以内不写、穿过死区后补写）都会跳。
+    //    现在每帧都按锚点绝对映射写入，方向仍由 referencePanelBodyDirection 锁一次。
     if (e.type === TouchType.Move) {
-      const proposed = this.referencePanelBodyStartOffset + dy;
+      const proposed = this.referencePanelDragAnchorOffset + (touch.windowY - this.referencePanelDragAnchorY);
       // 评论只从当前尺寸向上收缩，反向可跟手回到起点，触顶下拉保留刷新。
       this.referencePanelOffset = this.referencePanelDragOffset(comments
-        ? Math.min(this.referencePanelBodyStartOffset, proposed) : proposed);
+        ? Math.min(this.referencePanelDragAnchorOffset, proposed) : proposed);
     } else if (e.type === TouchType.Up) {
       if (!comments && dy > 90 && this.referencePanelBodyStartOffset >= -20) this.referenceSetFeed(true);
       else if (this.referencePanelOffset > 0) {
@@ -13762,7 +13780,13 @@ struct VideoPlayerPage {
               Row().width(42).height(4).borderRadius(2).backgroundColor('#45494F')
             }.width('100%').height(this.isLs ? 8 : 20).visibility(this.isLs ? Visibility.Hidden : Visibility.Visible).justifyContent(FlexAlign.Center)
               .id('reference-portrait-resize-handle')
-              .gesture(PanGesture({ direction: PanDirection.Vertical, distance: 8 })
+              // ⭐ distance 与横屏 referenceLandscapeResize 一样取 1vp：
+              //    GestureEvent.offsetY 是从按下点算起的累计量，原来的 distance: 8
+              //    会让第一次 onActionUpdate 直接带 8vp，起步首帧凭空补 8vp（跳一下）。
+              //    取 1vp 后首帧只有 1vp、肉眼不可见，且 `referencePanelStart + offsetY`
+              //    与 onActionEnd 的 90 / 45 / 850 判定仍在同一坐标系，阈值语义完全不变。
+              //    PanDirection.Vertical 已排除横向手势，把手 Row 内也没有点击目标。
+              .gesture(PanGesture({ direction: PanDirection.Vertical, distance: 1 })
                 .onActionStart(() => { this.referencePanelStart = this.referencePanelOffset; })
                 .onActionUpdate((event: GestureEvent) => {
                   if (this.isLs) return;

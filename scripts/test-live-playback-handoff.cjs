@@ -8,7 +8,8 @@ const tree = ts.createSourceFile('page.ts', source, ts.ScriptTarget.Latest, true
 const pageClass = tree.statements.find(n => ts.isClassDeclaration(n) && n.name.text === 'LivePlayerPage');
 const names = ['switchRoom', 'animateRoomOffset', 'clearPreview', 'disposePlayer', 'prepareAdjacentRoom',
   'preparePreview', 'bindPlayer', 'ownsPlayer', 'liveMediaSource', 'onTD', 'onTM', 'onTU', 'onTC',
-  'cancelPendingTap', 'togglePlayPause', 'settleInformation', 'onPageHide', 'onPageShow',
+  'cancelPendingTap', 'togglePlayPause', 'settleInformation', 'applySystemBars',
+  'onPageHide', 'onPageShow',
   'slotHasCurrentFrame', 'releaseAVPlayer'];
 const methods = names.map(name => {
   const method = pageClass.members.find(n => n.name?.getText(tree) === name);
@@ -32,6 +33,7 @@ function player() {
   return p;
 }
 const context = { exports: {}, logInfo() {}, logWarn() {}, logError() {},
+  AppStorage: { setOrCreate() {}, set() {}, get: () => undefined },
   Curve: { EaseOut: 0 }, audio: { StreamUsage: { STREAM_USAGE_MOVIE: 4 }, InterruptMode: { SHARE_MODE: 0 } },
   setTimeout: cb => { timers.set(++timerId, cb); return timerId; }, clearTimeout: id => timers.delete(id),
   media: { createAVPlayer: async () => player(), createMediaSourceWithUrl: url => url },
@@ -50,7 +52,8 @@ function page() {
     previewRelease: Promise.resolve(), previewTask: Promise.resolve(), previewAV: null,
     playGeneration: 0, viewportWidth: 400, viewportHeight: 800, vol: 1, bri: 1, activeFrameReady: false,
     informationVisible: true, informationProgress: 0, dt_: -1, lt_: -1, previewQualities: [],
-    portraitWindow: () => true, showBottomHintTemporarily() {}, ensureSurfaceId_: async slot => `surface-${slot}`,
+    portraitWindow: () => true, landscapeLayout: () => false, liveFullscreen: false, landscapeExpand: 0,
+    showBottomHintTemporarily() {}, ensureSurfaceId_: async slot => `surface-${slot}`,
     audioOutputMonitor: { bind() {} }, finishLevelGesture() {}, startLiveChat() {}, stopLiveChat() {}, applyStreamQuality() {}, setupLiveView_() {}, updateKeepScreen() {}, registerContinuation() {},
     onVideoPrepared() {}, onVideoStart() { this.isPlaying = true; }, onVideoPause() { this.isPlaying = false; },
     initPlayback: async () => { p.fallback = true; }, handlePlayError() { p.failed = true; },
