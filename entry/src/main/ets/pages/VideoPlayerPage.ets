@@ -213,6 +213,22 @@ const FEED_ACTION_ITEM_W: number = 54
 const FEED_DANMAKU_MAX_W: number = 360
 
 /**
+ * ⭐ 播放页实例身份。
+ * 路由 path 只能说明「栈顶是不是播放页」，说明不了「栈顶是不是我」：
+ * 播放页里点相关推荐会 push 出**另一个** `pages/VideoPlayerPage`，
+ * A 被 B 覆盖时两页 path 完全相同，A 切后台时用 path 比对会误判自己仍在栈顶。
+ * 这里给每个实例一个独立编号，并在 onPageShow 时登记为「当前最上层播放页」。
+ * ⚠ 不能用模块级自增计数器：同一个页面模块可能被重复求值（两页各有一份模块作用域），
+ *   两个实例会拿到同一个序号，判据就退化成「永远是我」。时间戳 + 随机数与之无关。
+ */
+function newVideoPlayerPageInstanceId(): string {
+  return String(Date.now()) + '-' + String(Math.floor(Math.random() * 1000000));
+}
+
+/** AppStorage key：最后一次 onPageShow 的播放页实例编号（空 = 尚未登记）。 */
+const TOP_PLAYER_PAGE_KEY: string = 'topVideoPlayerPageId'
+
+/**
  * Bilibili CDN 图片缩放辅助：在 URL 后追加 `@Ww` 参数缩放到指定宽度
  * 仅对 hdslb.com 域名生效，其他 URL 原样返回
  */
@@ -295,7 +311,13 @@ struct VideoPlayerPage {
   @State private referenceFeedCommentAnimating: boolean = false
   private referenceFeedCommentGen: number = 0
   private playerPageVisible: boolean = true;
-  // ⭐ 播放页被其它路由页覆盖（如进 UP 空间），区别于「应用整体切后台」：
+  /**
+   * ⭐ 本播放页实例的唯一编号（见文件顶部 newVideoPlayerPageInstanceId）。
+   * 栈里可能同时存在多个播放页（A 点相关推荐 push 出 B），path 区分不出谁在上面，
+   * 只能靠实例编号判断「切后台时栈顶是不是我」。
+   */
+  private pageInstanceId_: string = newVideoPlayerPageInstanceId();
+  // ⭐ 播放页被其它路由页覆盖（如进 UP 空间、点进另一个视频），区别于「应用整体切后台」：
   //    被覆盖时即使 appInBackground=true 也不允许后台续播。
   private pageCoveredByRoute_: boolean = false;
   private commentRequestSequence: number = 0;
@@ -3956,12 +3978,28 @@ struct VideoPlayerPage {
     return recorded.length > 0 ? this.normalizeRoutePath(recorded) : this.currentTopPage();
   }
 
+  /** 最后一次 onPageShow 的播放页实例编号（空串 = 从未登记）。 */
+  private topPlayerPageInstanceId(): string {
+    return AppStorage.get<string>(TOP_PLAYER_PAGE_KEY) ?? '';
+  }
+
+  /**
+   * 本实例是否就是「当前最上层的播放页」。
+   * 未登记（空串）时按「是」处理：保留原来的 path 单一判据，避免历史路径失效后后台播放全哑。
+   */
+  private isTopPlayerPageInstance(): boolean {
+    const topId = this.topPlayerPageInstanceId();
+    return topId.length === 0 || topId === this.pageInstanceId_;
+  }
+
   /** 播放页已被覆盖时确保没有残留播放（视频轨 + 音频轨 + 状态 + 实况窗）。 */
   private pausePlaybackForCoveredPage(): void {
     if (this.av?.state === 'playing') this.av.pause().catch(() => {});
     if (this.avAudio?.state === 'playing') this.avAudio.pause().catch(() => {});
     this.play = false;
-    LiveViewHelper.updatePlayState(false);
+    // 媒体会话是进程级单例（LiveViewHelper）：被覆盖的旧页在这里写「暂停」，
+    // 会把正在后台播放的新页在通知栏/锁屏上显示成已暂停。只有本页仍是最上层时才写。
+    if (this.isTopPlayerPageInstance()) LiveViewHelper.updatePlayState(false);
   }
 
   // Native play() and startup seeks can finish after a route has covered this page.
@@ -4014,8 +4052,10 @@ struct VideoPlayerPage {
     this.playerPageVisible = false;
     // ⭐ 记录本次隐藏的成因：栈顶已变成别的页面就是跳页，不是切后台；
     //    pushUrl 时序可能让这里仍读到本页，故 onBackground 确认时会用 Ability 记录的栈顶复核。
+    //    同一路由的另一个播放页（点相关推荐 push 出的 B）path 与本节相同，还得靠实例编号区分。
     const topOnHide = this.currentTopPage();
-    this.pageCoveredByRoute_ = topOnHide.length > 0 && topOnHide !== 'pages/VideoPlayerPage';
+    this.pageCoveredByRoute_ = topOnHide.length > 0 &&
+      (topOnHide !== 'pages/VideoPlayerPage' || !this.isTopPlayerPageInstance());
     this.playbackListPrefetch.pause();
     this.releaseReferenceFeedPreview();
     // ⭐ 页面隐藏即释放屏幕常亮（后台播放/跳页时屏幕可正常锁屏）
@@ -4058,19 +4098,27 @@ struct VideoPlayerPage {
    */
   onAppBackgroundConfirmed(): void {
     if (this.appBgTimestamp === 0) return;
-    if (!this.bgpPausedByPageHide_) return;
-    this.bgpPausedByPageHide_ = false;
-    // ⭐ 关键复核：这次 onBackground 发生时播放页是否仍是最上层页面。
-    //    「播放中进 UP 空间 → 播放已暂停 → 再切后台」时栈顶是 UpSpacePage，
-    //    pending 标记只是跳页留下的，若在这里恢复就会凭空接着播放。
-    //    取不到栈顶时按「被覆盖」保守处理：宁可少续播，也不能凭空出声。
+    // ⭐ 关键复核：这次 onBackground 发生时，本页是否仍是「最上层的播放页实例」。
+    //    1) 路由栈顶不是播放页 → 被其它页面覆盖（进 UP 空间、动态详情等）；
+    //    2) 路由栈顶是播放页但不是本实例 → 被同路由的另一个播放页覆盖
+    //       （播放页里点相关推荐 push 出 B，两页 path 都是 pages/VideoPlayerPage）。
+    //    第 2 条是「旧视频暂停后一熄屏/切后台又自己响起来」的根因：path 比对对同路由无效，
+    //    旧页把自己当成栈顶，于是把 onPageHide 时为等 onBackground 而临时暂停的视频重新拉起，
+    //    和新页的后台播放叠成两条音轨。
     const topOnBackground = this.backgroundTopPage();
-    this.pageCoveredByRoute_ = topOnBackground !== 'pages/VideoPlayerPage';
-    if (this.pageCoveredByRoute_) {
-      logInfo(`[VideoPlayer] onBackground 确认 → 栈顶=${topOnBackground || '未知'}，播放页已被覆盖，保持暂停`);
+    const topIsPlayerPage = topOnBackground === 'pages/VideoPlayerPage';
+    const coveredByOtherPage = !topIsPlayerPage || !this.isTopPlayerPageInstance();
+    this.pageCoveredByRoute_ = coveredByOtherPage;
+    if (coveredByOtherPage) {
+      // pending 标记只是跳页/换视频时留下的，这里必须一并清掉，否则下次切后台会被误用。
+      this.bgpPausedByPageHide_ = false;
+      logInfo(`[VideoPlayer] onBackground 确认 → 栈顶=${topOnBackground || '未知'}`
+        + ` topInstance=${this.topPlayerPageInstanceId()} self=${this.pageInstanceId_}，播放页已被覆盖，保持暂停`);
       this.pausePlaybackForCoveredPage();
       return;
     }
+    if (!this.bgpPausedByPageHide_) return;
+    this.bgpPausedByPageHide_ = false;
     if (!this.bgp) return;
     if (!this.av) return;
     logInfo('[VideoPlayer] onBackground 确认 → 后台播放模式，恢复播放');
@@ -4097,6 +4145,11 @@ struct VideoPlayerPage {
    */
   onPageShow(): void {
     this.playerPageVisible = true;
+    // ⭐ 登记「我是当前最上层的播放页实例」。被 push 出来的同路由页会覆盖这个值，
+    //    被覆盖的旧页因此在切后台时不会误判自己仍在栈顶（见 onAppBackgroundConfirmed）。
+    const previousTopId = this.topPlayerPageInstanceId();
+    AppStorage.setOrCreate<string>(TOP_PLAYER_PAGE_KEY, this.pageInstanceId_);
+    logInfo(`[VideoPlayer] page shown instance=${this.pageInstanceId_} prevTop=${previousTopId}`);
     this.pageCoveredByRoute_ = false;
     this.registerContinuation();
     // 清除 bgp 暂停标记（如果是页面跳转场景，onBackground 不会触发，标记仍存在）
