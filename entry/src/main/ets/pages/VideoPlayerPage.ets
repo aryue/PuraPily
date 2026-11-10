@@ -198,6 +198,21 @@ PersistentStorage.persistProp('lightsOffDanmakuOutside', true)
 const DM_SETTING_KEY: string = 'danmakuDisplaySettings'
 
 /**
+ * 连刷底部操作按钮（点赞/投币/收藏/评论）的单项宽度。
+ * 原先四个按钮各带 layoutWeight(1)，会跟弹幕输入框一起按屏宽比例分配：手机上每项约 60vp 还算正常，
+ * 平板上单项被拉到 200vp+，四个图标散成一条、间距随屏宽无限变大。
+ * 现在改成「输入框吸收剩余宽度 + 按钮组固定宽度靠右」，图标间距在任何屏宽下都一致。
+ */
+const FEED_ACTION_ITEM_W: number = 54
+
+/**
+ * 连刷底部「发弹幕」输入胶囊的最大宽度。
+ * 按钮组定宽后，剩下的宽度全给输入框；手机上刚好铺满，平板上会拉成一条空的超长胶囊，
+ * 所以给个上限，超出的部分留成输入框与按钮之间的空隙（SpaceBetween 收尾对齐，按钮仍然贴右）。
+ */
+const FEED_DANMAKU_MAX_W: number = 360
+
+/**
  * Bilibili CDN 图片缩放辅助：在 URL 后追加 `@Ww` 参数缩放到指定宽度
  * 仅对 hdslb.com 域名生效，其他 URL 原样返回
  */
@@ -10190,8 +10205,18 @@ struct VideoPlayerPage {
             }
           }
           // Keep feed dragging on its own node so the page-entry offset below cannot overwrite it.
+          // 显式尺寸：裁剪框按页面边界算，不能跟着子节点推导出来的盒子走。
+          .width('100%').height('100%')
           .offset({ y: this.referencePortraitFeedActive() && !this.referenceFeedComments ? this.referenceFeedDragY : 0 })
+          // ⭐ 连刷翻页时整页会被拖出屏幕。播放 Surface 是按 cover 撑大的（见 feedSurfaceW/H：
+          //    IJK 把解码帧铺满 buffer，做不到 native 裁切，填充只能放大 surface 再由上层裁掉），
+          //    溢出的那一条此前只被「整屏」裁剪兜住；页面一旦上移，溢出带就落到下一页顶部
+          //    （用户截图里「本该被裁掉却盖住下一个视频」的那一条，翻页收尾还会残留一两帧）。
+          //    裁剪必须挂在这个带 offset 的节点上：裁剪框随页面一起移动，溢出止于页边界。
+          //    ⚠️ 不要改成裁到视频视口（ovRect）：连刷里双指放大要能扩进原始黑边。
           .animation({ duration: this.referenceLayout && this.referenceFeed ? this.referenceFeedMotionDuration : 0, curve: Curve.EaseOut })
+          // 放在 .animation() 之后：裁剪不是可动画属性，别让它进隐式动画节点（HDR 画面经不起额外的图层包裹）。
+          .clip(this.referenceFeed)
         }
         .opacity(this.fs ? 1 : (this.contentVisible ? this.calcPageEnterOpacity() : 0))
         .scale({
@@ -11754,15 +11779,26 @@ struct VideoPlayerPage {
   }
 
   /**
-   * 两套信息层共用的位置：竖片铺满时保持页面底部；横片居中时贴到「全屏播放」按钮下方。
-   * 滑入页额外带一个「跟手提前量」：信息层原本钉在页面底部，页面没滑到位前整块还在屏幕外，
+   * 连刷信息层与屏幕底边的距离：与顶部控件同一套安全区口径。
+   * 顶部控件固定在 referenceSafeTop()（状态栏下沿），信息层底部就用同一个值；
+   * 系统手势条更高时取手势条，避免操作栏压进手势区。
+   */
+  private referenceChromeInset(): number {
+    return Math.max(this.referenceSafeTop(), this.navIndicatorHeight + 4);
+  }
+
+  /**
+   * 两套信息层共用的位置：固定在屏幕底部，不再贴「全屏播放」按钮或按画幅收
+   * （平板上的宽画幅视频会被压成中间一条，跟着画幅走会让整块信息飘到屏幕中间）。
+   * 滑入页额外带一个「跟手提前量」：信息层钉在页面底部，页面没滑到位前整块还在屏幕外，
    * 于是拖动中只能看到下一条的画面、看不到它的信息，翻完页才突然出现（用户说的跳一下）。
    * 这里按滑入进度把它相对页面上移，让它跟着画面一起进视口；滑到位时提前量收敛到 0，
    * 与当前页信息层落在同一个位置，提交瞬间两层交接不会错位。
    */
-  private feedChromeTop(aspect: number, preview: boolean = false): number {
-    let base = Math.max(0, this.ch - 244 - this.navIndicatorHeight);
-    if (aspect >= 1) base = Math.min(base, this.referenceFullscreenButtonTop(aspect) + 34);
+  private feedChromeTop(preview: boolean = false): number {
+    // 固定在屏幕底部，不再跟着画幅走：平板上的宽画幅视频会被压成中间一条，
+    // 原先用「视频底边 + 34」当上限，整块信息会跟着视频飘到屏幕中间、下面空一大片。
+    const base = Math.max(0, this.ch - 244 - this.referenceChromeInset());
     if (!preview) return base;
     const progress = Math.min(1, Math.abs(this.referenceFeedDragY) / Math.max(1, this.ch));
     return Math.max(0, base - (1 - progress) * this.ch * 0.45);
@@ -13410,23 +13446,23 @@ struct VideoPlayerPage {
             .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
           FollowGlassButton({ buttonWidth: 72, buttonHeight: 26, fontSize: 12,
             accent: '#D34E7E', fill: '#D34E7E' })
-        }.width('100%').padding({ left: 12, right: 12, top: 10, bottom: 10 })
+        }.width('100%').padding({ top: 10, bottom: 10 })
         Row() {
           Text(this.feedNextChrome()!.title).fontSize(14).fontColor('#FFFFFF').maxLines(2).layoutWeight(1)
           Stack() { Image($r('app.media.ref_chevron_up')).width(16).height(16).fillColor('#FFFFFF') }
             .width(30).height(30).borderRadius(15).backgroundColor('#CC252525')
-        }.width('100%').padding({ left: 12, right: 12 })
+        }.width('100%')
         Row() {
           Stack({ alignContent: Alignment.Center }) {
             Image($r('app.media.ref_pause')).width(22).height(22).fillColor('#FFFFFF')
           }.width(40).height(40)
           Text(`00:00 / ${this.formatDuration(this.feedNextChrome()!.duration)}`)
             .fontSize(12).fontColor('#EEEEEE').maxLines(1)
-        }.width('100%').height(40).padding({ left: 4, right: 12 })
+        }.width('100%').height(40)
         Stack({ alignContent: Alignment.Start }) {
           Rect().width('100%').height(2).fill('#45494F')
           Circle().width(5).height(5).fill('#D34E7E')
-        }.width('96%').height(20)
+        }.width('100%').height(20)
         Row() {
           Row() {
             // 连刷预览浮层的弹幕输入入口：与评论页输入胶囊同款 capsule 材质、全圆角。
@@ -13437,14 +13473,18 @@ struct VideoPlayerPage {
                 Text('发弹幕').fontSize(13).fontColor('#E7E9EB')
               }.width('100%').height('100%').padding({ left: 12, right: 12 })
             }
-          }.layoutWeight(2)
-          ReferencePlayerAction({ icon: $r('app.media.ref_like'), label: this.fmtN(this.feedNextChrome()!.like), light: true })
-          ReferencePlayerAction({ icon: $r('app.media.ref_apk_story_coin'), label: this.fmtN(this.feedNextChrome()!.coin), light: true, originalIcon: true })
-          ReferencePlayerAction({ icon: $r('app.media.ref_apk_story_favorite'), label: this.fmtN(this.feedNextChrome()!.favorite), light: true, originalIcon: true })
-          ReferencePlayerAction({ icon: $r('app.media.ref_apk_story_comment'), label: this.fmtN(this.feedNextChrome()!.reply), light: true, originalIcon: true })
-        }.width('100%').padding({ left: 12, right: 6 })
-      }.width('100%').height(244 + this.navIndicatorHeight).padding({ bottom: this.navIndicatorHeight + 4 })
-        .position({ x: 0, y: this.feedChromeTop(this.referencePreviewAspectRatio, true) })
+          }.layoutWeight(1).constraintSize({ maxWidth: FEED_DANMAKU_MAX_W })
+          // 与当前页操作行同一口径：按钮组固定宽度靠右，翻页交接时图标位置不会跳。
+          Row() {
+            ReferencePlayerAction({ icon: $r('app.media.ref_like'), label: this.fmtN(this.feedNextChrome()!.like), light: true })
+            ReferencePlayerAction({ icon: $r('app.media.ref_coin'), label: this.fmtN(this.feedNextChrome()!.coin), light: true })
+            ReferencePlayerAction({ icon: $r('app.media.ref_favorite'), label: this.fmtN(this.feedNextChrome()!.favorite), light: true })
+            ReferencePlayerAction({ icon: $r('app.media.ref_comment_fill'), label: this.fmtN(this.feedNextChrome()!.reply), light: true })
+          }.width(FEED_ACTION_ITEM_W * 4)
+        }.width('100%').justifyContent(FlexAlign.SpaceBetween)
+      }.width('100%').height(244 + this.referenceChromeInset()).justifyContent(FlexAlign.End)
+        .padding({ left: 8, right: 8, bottom: this.referenceChromeInset() })
+        .position({ x: 0, y: this.feedChromeTop(true) })
         .linearGradient({ angle: 180, colors: [['#00000000', 0], ['#CC000000', 0.5], ['#FF000000', 1]] })
     }
   }
@@ -13535,7 +13575,7 @@ struct VideoPlayerPage {
       FollowGlassButton({ followed: this.isFollowed, buttonWidth: 72, buttonHeight: 26, fontSize: 12,
         accent: this.isFollowed ? '#45494F' : '#D34E7E', fill: this.isFollowed ? '#45494F' : '#D34E7E',
         onActivate: () => this.toggleFollow() })
-    }.width('100%').height(compact ? 54 : 62).padding({ left: compact ? 12 : 0, right: compact ? 12 : 0 })
+    }.width('100%').height(compact ? 54 : 62)
   }
 
   @Builder
@@ -14378,7 +14418,7 @@ struct VideoPlayerPage {
           Text(this.vi.title).fontSize(14).fontColor('#FFFFFF').maxLines(2).layoutWeight(1)
           Stack() { Image($r('app.media.ref_chevron_up')).width(16).height(16).fillColor('#FFFFFF') }
             .width(30).height(30).borderRadius(15).backgroundColor('#CC252525')
-        }.width('100%').padding({ left: 12, right: 12 }).onClick(() => this.referenceSetFeed(false))
+        }.width('100%').onClick(() => this.referenceSetFeed(false))
         }
         Row() {
           Stack({ alignContent: Alignment.Center }) {
@@ -14390,14 +14430,14 @@ struct VideoPlayerPage {
             .onClick(() => this.togglePP())
           Text(`${this.formatDuration(this.ct)} / ${this.formatDuration(this.dur)}`)
             .fontSize(12).fontColor('#EEEEEE').maxLines(1).id('feed-playback-time')
-        }.width('100%').height(40).padding({ left: 4, right: 12 })
+        }.width('100%').height(40)
         Slider({ value: this.ct, min: 0, max: Math.max(1, this.dur), style: SliderStyle.OutSet })
           .trackThickness(2).blockSize({ width: 5, height: 5 }).selectedColor('#D34E7E').blockColor('#D34E7E')
           .trackColor(bufferedTrack(this.bufferedUntil, this.dur, '#45494F'))
           .onChange((value: number, mode: SliderChangeMode) => {
             if (this.referenceVerticalSwipe || this.referenceFeedPanOwnsTouch) return;
             this.onSeekBarInteract_(mode === SliderChangeMode.Begin || mode === SliderChangeMode.Moving, value);
-          }).width('96%').height(20).id('feed-seek-bar')
+          }).width('100%').height(20).id('feed-seek-bar')
         Row() {
           Row() {
             // 连刷浮层弹幕输入入口：与评论页输入胶囊同款 capsule 材质、全圆角。
@@ -14409,17 +14449,23 @@ struct VideoPlayerPage {
               }.width('100%').height('100%').padding({ left: 12, right: 12 })
                 .onClick(() => { this.showDanmakuSheet = true; })
             }
-          }.layoutWeight(2)
-          ReferencePlayerAction({ icon: $r('app.media.ref_like'), label: this.fmtN(this.likeCount), selected: this.isLiked, light: this.referenceFeed, onAction: () => this.toggleLike() })
-          ReferencePlayerAction({ icon: this.isCoined ? $r('app.media.ref_apk_story_coined') : $r('app.media.ref_apk_story_coin'), label: this.fmtN(this.coinCount), selected: this.isCoined, light: this.referenceFeed, originalIcon: true, onAction: () => this.toggleCoin(1) })
-          ReferencePlayerAction({ icon: this.isFavorited ? $r('app.media.ref_apk_story_favorited') : $r('app.media.ref_apk_story_favorite'), label: this.fmtN(this.favoriteCount), selected: this.isFavorited, light: this.referenceFeed, originalIcon: true, onAction: () => this.toggleFavorite() })
-          ReferencePlayerAction({ icon: $r('app.media.ref_apk_story_comment'), label: this.fmtN(this.vd?.stat.reply || 0), selected: false, light: this.referenceFeed, originalIcon: true, onAction: () => {
-            this.referenceSetFeedComments(true);
-          } })
-        }.width('100%').padding({ left: 12, right: 6 })
-      }.width('100%').height(244 + this.navIndicatorHeight).padding({ bottom: this.navIndicatorHeight + 4 })
+          }.layoutWeight(1).constraintSize({ maxWidth: FEED_DANMAKU_MAX_W })
+          // 按钮组固定宽度靠右：输入框吃掉剩余宽度，四个按钮间距不随屏宽变化。
+          // 四个图标统一走同族单色 SVG（选中态由 fillColor 染成 #D34E7E），不再混用 APK 的
+          // story 位图（那套只有 PNG，墨迹留白 26%，和矢量的 15% 放一起必然一大一小）。
+          Row() {
+            ReferencePlayerAction({ icon: $r('app.media.ref_like'), label: this.fmtN(this.likeCount), selected: this.isLiked, light: this.referenceFeed, onAction: () => this.toggleLike() })
+            ReferencePlayerAction({ icon: $r('app.media.ref_coin'), label: this.fmtN(this.coinCount), selected: this.isCoined, light: this.referenceFeed, onAction: () => this.toggleCoin(1) })
+            ReferencePlayerAction({ icon: $r('app.media.ref_favorite'), label: this.fmtN(this.favoriteCount), selected: this.isFavorited, light: this.referenceFeed, onAction: () => this.toggleFavorite() })
+            ReferencePlayerAction({ icon: $r('app.media.ref_comment_fill'), label: this.fmtN(this.vd?.stat.reply || 0), selected: false, light: this.referenceFeed, onAction: () => {
+              this.referenceSetFeedComments(true);
+            } })
+          }.width(FEED_ACTION_ITEM_W * 4)
+        }.width('100%').justifyContent(FlexAlign.SpaceBetween)
+      }.width('100%').height(244 + this.referenceChromeInset()).justifyContent(FlexAlign.End)
+        .padding({ left: 8, right: 8, bottom: this.referenceChromeInset() })
         // 与滑入页信息层共用同一套位置计算：提交瞬间两层交接不会错位/跳一下。
-        .position({ x: 0, y: this.feedChromeTop(this.ar) }).zIndex(8)
+        .position({ x: 0, y: this.feedChromeTop() }).zIndex(8)
         .opacity(this.referenceFeedProgress * (1 - this.referenceFeedCommentAmount()))
         .hitTestBehavior(this.referenceFeedChromeHitTest())
         .translate({ y: (1 - this.referenceFeedProgress) * 28 })
@@ -14448,14 +14494,25 @@ struct ReferencePlayerAction {
   @Prop label: string = '';
   @Prop selected: boolean = false;
   @Prop light: boolean = false;
-  @Prop originalIcon: boolean = false;
   @Prop intro: boolean = false;
   onAction: () => void = () => {};
 
+  /**
+   * 图标光学尺寸。四个按钮的图标都来自同族单色 SVG（墨迹占视图框 85%~91%），同框即可等大；
+   * 之前混用 APK 的 story 位图（PNG 墨迹只占 74%，且点赞走 23vp 分支），才会一大一小、
+   * 还因 Column 内容高度不同把四个数字基线错开约 5vp。
+   * 简介统计行（intro，5 个入口）保持 22vp。
+   */
+  private actionIconSize(): number {
+    return this.intro ? 22 : 32;
+  }
+
   build() {
     Column({ space: this.intro ? 8 : 6 }) {
-      Image(this.icon).width(this.originalIcon ? 32 : this.intro ? 22 : 23).height(this.originalIcon ? 32 : this.intro ? 22 : 23)
-        .fillColor(this.originalIcon ? undefined : this.selected ? '#D34E7E' : (this.light ? '#FFFFFF' : '#A2A7AE'))
+      // Contain：评论气泡是 38×37 的非正方形视图框，Cover 会裁掉一条边。
+      Image(this.icon).width(this.actionIconSize()).height(this.actionIconSize())
+        .objectFit(ImageFit.Contain)
+        .fillColor(this.selected ? '#D34E7E' : (this.light ? '#FFFFFF' : '#A2A7AE'))
       Text(this.label).fontSize(10).fontColor(this.selected ? '#D34E7E' : (this.light ? '#FFFFFF' : '#A2A7AE')).maxLines(1)
     }.layoutWeight(1).height(this.intro ? 54 : 58).justifyContent(FlexAlign.Center).onClick(this.onAction)
   }
