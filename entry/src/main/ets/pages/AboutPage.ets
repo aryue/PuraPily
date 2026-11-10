@@ -8,6 +8,19 @@ import { PageWallpaper } from '../components/PageWallpaper';
  */
 import { bundleManager, common } from '@kit.AbilityKit';
 import { BusinessError } from '@kit.BasicServicesKit';
+import {
+  checkForUpdate, UpdateCheckResult, UpdateCheckStatus,
+  GITHUB_PROJECT_URL, GITHUB_RELEASE_PAGE_URL
+} from '../services/UpdateChecker';
+
+/** 检查更新 UI 状态机。 */
+enum UpdateUiState {
+  IDLE = 0,
+  CHECKING = 1,
+  LATEST = 2,
+  AVAILABLE = 3,
+  ERROR = 4
+}
 
 @Entry
 @Component
@@ -17,12 +30,76 @@ struct AboutPage {
   @StorageLink('statusBarHeight') statusBarHeight: number = 0;
   /** 版本不在页面里写死：运行时读取 AppScope/app.json5 打包后的 versionName。 */
   @State appVersion: string = '';
+  @State updateState: number = UpdateUiState.IDLE;
+  @State latestVersion: string = '';
+  @State releaseNotes: string = '';
+  @State releaseUrl: string = GITHUB_RELEASE_PAGE_URL;
+  @State updateError: string = '';
   // TODO: 替换为实际项目地址和 Issues 地址。
-  private readonly projectUrl: string = 'https://github.com/aryue/PuraPily';
+  private readonly projectUrl: string = GITHUB_PROJECT_URL;
   private readonly feedbackUrl: string = 'https://github.com/aryue/PuraPily/issues/';
 
   aboutToAppear(): void {
     this.loadAppVersion();
+    // 进入关于页即视为「已看过更新提示」，清掉「我的」页红点；随后静默复核（12h 缓存内不实发请求）。
+    AppStorage.setOrCreate('hasNewVersion', false);
+    this.runUpdateCheck(false);
+  }
+
+  private hostContext(): common.UIAbilityContext {
+    return this.getUIContext().getHostContext() as common.UIAbilityContext;
+  }
+
+  private async runUpdateCheck(force: boolean): Promise<void> {
+    if (this.updateState === UpdateUiState.CHECKING) {
+      return;
+    }
+    this.updateState = UpdateUiState.CHECKING;
+    try {
+      const result: UpdateCheckResult = await checkForUpdate(this.hostContext(), force);
+      this.applyCheckResult(result);
+    } catch (err) {
+      this.updateState = UpdateUiState.ERROR;
+      this.updateError = '检查失败，请检查网络后重试';
+    }
+  }
+
+  private applyCheckResult(result: UpdateCheckResult): void {
+    this.latestVersion = result.latestVersion;
+    this.releaseNotes = result.releaseNotes;
+    this.releaseUrl = result.releaseUrl;
+    if (result.status === UpdateCheckStatus.UPDATE_AVAILABLE) {
+      this.updateState = UpdateUiState.AVAILABLE;
+    } else if (result.status === UpdateCheckStatus.UP_TO_DATE) {
+      this.updateState = UpdateUiState.LATEST;
+    } else {
+      this.updateState = UpdateUiState.ERROR;
+      this.updateError = '检查失败，请检查网络后重试';
+    }
+  }
+
+  /** 可用状态下点行 = 前往下载；其余状态点行 = 重新检查。 */
+  private handleUpdateRowTap(): void {
+    if (this.updateState === UpdateUiState.AVAILABLE) {
+      this.openExternalUrl(this.releaseUrl);
+      return;
+    }
+    this.runUpdateCheck(true);
+  }
+
+  private updateSubtitle(): string {
+    switch (this.updateState) {
+      case UpdateUiState.CHECKING:
+        return '检查中…';
+      case UpdateUiState.LATEST:
+        return '当前已是最新版本';
+      case UpdateUiState.AVAILABLE:
+        return `发现新版本 v${this.latestVersion}，点击前往下载`;
+      case UpdateUiState.ERROR:
+        return this.updateError;
+      default:
+        return '点击检查是否有新版本';
+    }
   }
 
   private async loadAppVersion(): Promise<void> {
@@ -57,6 +134,59 @@ struct AboutPage {
       .onClick(() => this.openExternalUrl(url))
   }
 
+  @Builder
+  UpdateCard() {
+    Column() {
+      PageSurface({ radius: 14 }) {
+        Column() {
+          Row({ space: 12 }) {
+            Column({ space: 4 }) {
+              Text('检查更新')
+                .fontSize(16)
+                .fontColor(this.isDarkMode ? '#E7E9EB' : '#18191C')
+              Text(this.updateSubtitle())
+                .fontSize(12)
+                .fontColor(this.updateState === UpdateUiState.AVAILABLE ? '#D34E7E'
+                  : (this.isDarkMode ? '#C9CDD3' : '#606773'))
+            }.layoutWeight(1).alignItems(HorizontalAlign.Start)
+            if (this.updateState === UpdateUiState.CHECKING) {
+              LoadingProgress().width(20).height(20).color('#8E8E93')
+            } else {
+              Text('›').fontSize(18).fontColor('#8E8E93')
+            }
+          }
+          .width('100%')
+          .constraintSize({ minHeight: 64 })
+          .padding(16)
+          .onClick(() => this.handleUpdateRowTap())
+
+          if (this.updateState === UpdateUiState.AVAILABLE && this.releaseNotes.length > 0) {
+            Divider().strokeWidth(1).color(this.isDarkMode ? '#2A2D31' : '#F0F1F2')
+              .margin({ left: 16, right: 16 })
+            Text(this.releaseNotes)
+              .fontSize(12)
+              .fontColor(this.isDarkMode ? '#C9CDD3' : '#606773')
+              .maxLines(8)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+              .width('100%')
+              .padding({ left: 16, right: 16, top: 12, bottom: 4 })
+          }
+          if (this.updateState === UpdateUiState.AVAILABLE) {
+            Row() {
+              Text('重新检查')
+                .fontSize(13)
+                .fontColor(this.isDarkMode ? '#6FA8F5' : '#237CBD')
+            }
+            .width('100%')
+            .justifyContent(FlexAlign.End)
+            .padding({ left: 16, right: 16, top: 8, bottom: 14 })
+            .onClick(() => this.runUpdateCheck(true))
+          }
+        }.width('100%')
+      }
+    }.width('100%').margin({ top: 20 })
+  }
+
   build() {
     Stack() {
       PageWallpaper()
@@ -85,6 +215,9 @@ struct AboutPage {
           .fontSize(14)
           .fontColor(this.isDarkMode ? '#8E8E93' : '#8E8E93')
           .margin({ bottom: 4 })
+
+        // 检查更新（GitHub Release 比对）
+        this.UpdateCard()
 
         Column() {
           PageSurface({ radius: 14 }) {

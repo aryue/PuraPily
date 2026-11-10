@@ -58,6 +58,8 @@ export struct ProfilePage {
   @StorageLink('floatingBottomBar') floatingBottomBar: boolean = true;
   @StorageLink('bottomBarSmartGrip') bottomBarSmartGrip: boolean = false;
   @StorageLink('navIndicatorHeight') navIndicatorHeight: number = 0;
+  /** 启动静默更新检查结果（UpdateChecker 写入），关于入口红点。 */
+  @StorageLink('hasNewVersion') hasNewVersion: boolean = false;
   @StorageLink('themeMode') themeMode: string = 'system';
   @StorageLink('isDarkMode') isDarkMode: boolean = false;
   @StorageLink('bgp') referenceBackgroundPlay: boolean = false;
@@ -442,9 +444,12 @@ export struct ProfilePage {
 
   // 设置页「其它」分组使用：无前置图标，右侧沿用设置页统一的「›」文字箭头
   @Builder
-  MenuRowPlain(label: string, action: () => void) {
+  MenuRowPlain(label: string, action: () => void, showUpdateDot: boolean) {
     Row({ space: 14 }) {
       Text(label).fontSize(15).fontColor(this.isDarkMode ? '#E7E9EB' : '#18191C').layoutWeight(1)
+      if (showUpdateDot) {
+        Circle({ width: 8, height: 8 }).fill('#E64545')
+      }
       Text('›').fontSize(13).fontColor(this.isDarkMode ? '#C9CDD3' : '#50545A')
     }.width('100%').height(56).padding({ left: 16, right: 16 }).onClick(action)
   }
@@ -958,8 +963,8 @@ export struct ProfilePage {
               Text(this.cacheSizeText + ' ›').fontSize(13).fontColor(this.isDarkMode ? '#C9CDD3' : '#50545A')
             }.width('100%').constraintSize({ minHeight: 56 }).padding({ left: 16, right: 16, top: 12, bottom: 12 })
               .id('setting-clear-cache').onClick(() => this.clearCache())
-            this.MenuRowPlain('关于PuraPily', () => this.goToAbout())
-            if (this.isLoggedIn) { this.MenuRowPlain('退出登录', () => this.showLogoutConfirm()) }
+            this.MenuRowPlain('关于PuraPily', () => this.goToAbout(), this.hasNewVersion)
+            if (this.isLoggedIn) { this.MenuRowPlain('退出登录', () => this.showLogoutConfirm(), false) }
           }.width('100%').padding({ top: 4, bottom: 4 })
         }
         }.width('100%')

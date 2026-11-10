@@ -27,6 +27,7 @@ import { syncThemeConfiguration } from '../utils/ReferenceAppearance';
 import { initializeLoginCredentials } from '../utils/CredentialStore';
 import { StatusBarUtils } from '../utils/StatusBarUtils';
 import { BiliLinkParser, BiliLinkResult } from '../utils/BiliLinkParser';
+import { checkForUpdate, UpdateCheckStatus } from '../services/UpdateChecker';
 
 const DOMAIN = 0x0000;
 const TAG = 'EntryAbility';
@@ -119,6 +120,15 @@ export default class EntryAbility extends UIAbility {
     AppStorage.setOrCreate('appContext', this.context);
     initializeLoginCredentials(this.context).catch((error: Error) => {
       hilog.warn(DOMAIN, TAG, 'Startup credential restore failed: %{public}s', errMsg(error));
+    });
+    // 启动静默更新检查：12h 节流（见 UpdateChecker），失败无感不打扰；
+    // 结果写 AppStorage('hasNewVersion') 供「我的」页关于入口红点。
+    checkForUpdate(this.context, false).then((result) => {
+      if (result.status === UpdateCheckStatus.UPDATE_AVAILABLE) {
+        hilog.info(DOMAIN, TAG, 'startup update check: new version %{public}s available', result.latestVersion);
+      }
+    }).catch((error: Error) => {
+      hilog.warn(DOMAIN, TAG, 'startup update check failed: %{public}s', error.message);
     });
     PlayerService.setAppContext(this.context);
     HighRefreshService.getInstance().initialize(this.context);
