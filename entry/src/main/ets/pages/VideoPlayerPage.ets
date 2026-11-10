@@ -1093,7 +1093,16 @@ struct VideoPlayerPage {
    */
   private ovDanmakuCW(): number {
     if (this.referenceLayout && this.isLs && !this.fs) return this.referenceLandscapeViewportWidth();
-    if (this.referenceLayout && !this.fs && !this.isLs) return Math.max(1, this.referenceMediaWidth());
+    if (this.referenceLayout && !this.fs && !this.isLs) {
+      if (this.referenceFeed) {
+        // ⭐ 连刷：弹幕区 = 整屏宽，不随视频画幅收窄（「完整显示」的左右黑边、横片上下留白里都有弹幕）。
+        //    评论展开时按 amount 收回视频区宽度，避免弹幕盖住下方的评论列表。
+        const full = Math.max(1, this.cw);
+        const media = Math.max(1, this.referenceMediaWidth());
+        return full + (media - full) * this.referenceFeedCommentAmount();
+      }
+      return Math.max(1, this.referenceMediaWidth());
+    }
     if (this.fs) return Math.max(1, this.cw);
     if (this.isLs || this.isLandscapeVertical) return Math.max(1, this.lsvw);
     if (this.isLightsOff && !this.isLandscapeVertical) return Math.max(1, this.loVideoWidth());
@@ -1102,6 +1111,12 @@ struct VideoPlayerPage {
   private ovDanmakuCH(): number {
     if (this.referenceLayout && this.isLs && !this.fs) return this.referenceLandscapeAreaHeight();
     if (this.referenceLayout && !this.fs && !this.isLs) {
+      if (this.referenceFeed) {
+        // ⭐ 连刷：弹幕区高度 = 整屏减顶部安全区（底部到底），同样不随画幅收窄；评论展开按 amount 收回。
+        const full = Math.max(1, this.ch - this.referenceSafeTop());
+        const media = Math.max(1, this.referenceMediaHeight() - this.ovDanmakuSafeTopInset());
+        return full + (media - full) * this.referenceFeedCommentAmount();
+      }
       return Math.max(1, this.referenceMediaHeight() - this.ovDanmakuSafeTopInset());
     }
     if (this.fs) return Math.max(1, this.ch);
@@ -1123,6 +1138,38 @@ struct VideoPlayerPage {
   private ovDanmakuY(): number {
     if (this.referenceLayout && !this.fs && !this.isLs) return this.ovDanmakuSafeTopInset();
     return Math.max(0, (this.ovRectH() - this.ovDanmakuCH()) / 2);
+  }
+  /**
+   * ⭐ 连刷弹幕层的定位（层内坐标）：整屏口径下按「页面坐标」反推，不能沿用 ovDanmakuX/Y 的
+   *    「在常驻层内居中」口径 —— 连刷里常驻层原点就是视频区左上角，整屏画布必须向左上越出层边界
+   *    （常驻层 .clip(false)，越界可渲染；页面级 .clip(referenceFeed) 兜住不画出屏幕）。
+   *    x：页面 x=0 在层坐标系里的位置；y：安全区下沿在层坐标系里的位置（横片在层中部时为负）。
+   *    评论展开时随 amount 收回到原视频区矩形（与 ovDanmakuCW/CH 的混合同参）。
+   */
+  private dmPositionX(): number {
+    if (this.referenceLayout && !this.fs && !this.isLs && this.referenceFeed) {
+      return (this.cw - this.ovDanmakuCW()) / 2 - this.ovRectX();
+    }
+    return this.ovDanmakuX();
+  }
+  private dmPositionY(): number {
+    if (this.referenceLayout && !this.fs && !this.isLs && this.referenceFeed) {
+      const full = this.referenceSafeTop() - this.ovRectY();
+      const media = this.ovDanmakuY();
+      return full + (media - full) * this.referenceFeedCommentAmount();
+    }
+    return this.ovDanmakuY();
+  }
+  /**
+   * 弹幕画布的「固定基准 + scale」通道只保留给非连刷竖屏半屏（防面板拖动期逐帧重建 canvas surface）。
+   * 连刷弹幕画布本身就是恒定整屏尺寸（浏览/进连刷过渡期间宽高不变），直接量尺寸即可，不再跟视频
+   * surface 共用 portraitBase+scale —— 否则整屏口径会被 scale 因子重新压回视频画幅。
+   */
+  private dmTransformChannel(): boolean {
+    return this.portraitScaleByTransform() && !this.referenceFeed;
+  }
+  private dmScaleFactor(): number {
+    return this.dmTransformChannel() ? this.portraitScaleFactor() : 1;
   }
   /** ⭐ 首次 build 前同步估算常驻层矩形（首帧后由占位槽 onAreaChange 精确接管） */
   private initOverlayRectSync(): void {
@@ -9450,8 +9497,8 @@ struct VideoPlayerPage {
             isPlaying: this.play,
             cookie: AppStorage.get<string>('biliCookie') || '',
             // ⚠️ 传参必须与容器同源（同一套尺寸），否则又是两套尺寸
-            canvasWidth: this.portraitScaleByTransform() ? this.portraitBaseW() : this.ovDanmakuCW(),
-            canvasHeight: this.portraitScaleByTransform() ? this.portraitBaseH() : this.ovDanmakuCH(),
+            canvasWidth: this.dmTransformChannel() ? this.portraitBaseW() : this.ovDanmakuCW(),
+            canvasHeight: this.dmTransformChannel() ? this.portraitBaseH() : this.ovDanmakuCH(),
             config: $danmakuConfig,
             selfDanmaku: $selfDanmakuList,
           })
@@ -9468,17 +9515,17 @@ struct VideoPlayerPage {
         // ⭐ 缩小/还原动画期间用冻结尺寸（见 dmFreezeW 注释）：画布尺寸逐帧变化会让 ArkUI
         //    每帧重建 surface + 重建轨道（实测 300ms 内 19 次 → 掉帧）。
         // ⭐ 竖屏播放区缩放同理：固定基准画布 + scale，拖动面板时不再重建 canvas surface。
-        .width(this.shrinkAnimating && this.dmFreezeW > 0 ? this.dmFreezeW : (this.portraitScaleByTransform() ? this.portraitBaseW() : this.ovDanmakuCW()))
-        .height(this.shrinkAnimating && this.dmFreezeH > 0 ? this.dmFreezeH : (this.portraitScaleByTransform() ? this.portraitBaseH() : this.ovDanmakuCH()))
+        .width(this.shrinkAnimating && this.dmFreezeW > 0 ? this.dmFreezeW : (this.dmTransformChannel() ? this.portraitBaseW() : this.ovDanmakuCW()))
+        .height(this.shrinkAnimating && this.dmFreezeH > 0 ? this.dmFreezeH : (this.dmTransformChannel() ? this.portraitBaseH() : this.ovDanmakuCH()))
         .position({
           x: this.shrinkAnimating && this.dmFreezeW > 0
             ? Math.max(0, (this.ovRectW() - this.dmFreezeW) / 2)
-            : (this.portraitScaleByTransform() ? (this.ovRectW() - this.portraitBaseW()) / 2 : this.ovDanmakuX()),
+            : (this.dmTransformChannel() ? (this.ovRectW() - this.portraitBaseW()) / 2 : this.dmPositionX()),
           y: this.shrinkAnimating && this.dmFreezeH > 0
             ? Math.max(0, (this.ovRectH() - this.dmFreezeH) / 2)
-            : (this.portraitScaleByTransform() ? (this.ovRectH() - this.portraitBaseH()) / 2 : this.ovDanmakuY())
+            : (this.dmTransformChannel() ? (this.ovRectH() - this.portraitBaseH()) / 2 : this.dmPositionY())
         })
-        .scale({ x: this.portraitScaleFactor(), y: this.portraitScaleFactor() })
+        .scale({ x: this.dmScaleFactor(), y: this.dmScaleFactor() })
         .clip(true)   // 兜底：任何情况下都不画到视频画面外
       }
       VideoControls({
@@ -13615,13 +13662,29 @@ struct VideoPlayerPage {
     return imageUrlResize((matches ? detail.owner.face : this.vi.ownerFace) || '', 48);
   }
 
+  /** UP 主页入口的统一跳转（头像与昵称共用；mid 缺失时不跳） */
+  private referenceOpenUpSpace(): void {
+    if (this.vd?.owner.mid) router.pushUrl({ url: 'pages/UpSpacePage', params: {
+      mid: this.vd.owner.mid, upName: this.vd.owner.name, upFace: this.vd.owner.face
+    } });
+  }
+
   @Builder
   ReferenceUpRow(compact: boolean) {
     Row({ space: 10 }) {
       // 主页入口覆盖头像高度内的头像、资料及留白；关注按钮为独立的相邻触点。
+      // ⚠️ 连刷信息层（compact）例外：行内留白不能进空间 —— 连刷的单击语义是显隐信息层，
+      //    与详情页简介「整行进空间」不同，留白点击必须透传给页面级 referenceHandleFeedClick。
+      //    两层收窄（都只在 compact 生效，非 compact 保持 Default 整行入口）：
+      //    ① 入口行 hitTestBehavior(None)：只把容器自身移出触摸测试（onClick 随之失效），
+      //       子节点照常命中（见 referenceFeedChromeHitTest 注释）；
+      //    ② 主页触点必须是「头像 + 昵称 Text」本身 —— 不能挂在昵称 Column 上：
+      //       它 layoutWeight(1) 的命中框从头像铺到关注按钮，留白全在框里，
+      //       点哪里进空间、点哪里透传就变成「概率」行为（真机踩过）。
       Row({ space: 10 }) {
         if (compact) {
           FeedAvatarImage({ videoId: this.vi.bvid, face: this.referenceCurrentAvatarFace() })
+            .onClick(() => this.referenceOpenUpSpace())
         } else {
           // 详情页简介头部仍按原来的 URL 渲染，不参与连刷的位图交接。
           Image(getCachedPixelMap(imageUrlResize(this.vd?.owner.face || this.vi.ownerFace || '', 48)) ??
@@ -13632,17 +13695,15 @@ struct VideoPlayerPage {
           Text(this.vd?.owner.name || this.vi.ownerName || '').fontSize(compact ? 14 : 13)
             .fontColor(compact ? '#FFFFFF' : '#D34E7E').maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
+            .onClick(() => this.referenceOpenUpSpace())
           if (!compact && this.referenceIntroCard) {
             Text(`${this.fmtN(this.referenceIntroCard.card?.fans || 0)}粉丝  ${this.referenceIntroCard.archive_count || 0}视频`)
               .fontSize(10).fontColor('#757A81').maxLines(1)
           }
         }.layoutWeight(1).alignItems(HorizontalAlign.Start)
       }.layoutWeight(1).height(compact ? 34 : 28)
-        .onClick(() => {
-          if (this.vd?.owner.mid) router.pushUrl({ url: 'pages/UpSpacePage', params: {
-            mid: this.vd.owner.mid, upName: this.vd.owner.name, upFace: this.vd.owner.face
-          } });
-        })
+        .onClick(() => this.referenceOpenUpSpace())
+        .hitTestBehavior(compact ? HitTestMode.None : HitTestMode.Default)
       FollowGlassButton({ followed: this.isFollowed, buttonWidth: 72, buttonHeight: 26, fontSize: 12,
         accent: this.isFollowed ? '#45494F' : '#D34E7E', fill: this.isFollowed ? '#45494F' : '#D34E7E',
         onActivate: () => this.toggleFollow() })
