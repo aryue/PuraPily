@@ -47,4 +47,33 @@ export class PlaybackProgress {
     if (!entry) return -1;
     return PlaybackProgress.resume(entry.position, entry.duration, entry.completed);
   }
+
+  /**
+   * 按 cid 兜底查续播点（列表阶段用）：首页卡片的 id 可能是 aid（数字），而播放页
+   * 保存进度时 key 里用的是 bvid，两者拼出的 key 不同 —— 直接用 current() 会永远
+   * 查不到，预热实例因此按 0 秒准备，接管后还要 seek（首帧多花 ~900ms）。
+   * cid 是分P的唯一标识且固定在 key 末尾，按账号前缀 + cid 后缀匹配不会串集；
+   * 多条同 cid 记录取 updatedAt 最新的一条。返回 -1 表示没有记录。
+   */
+  static currentByCid(cid: number): number {
+    if (!(cid > 0)) return -1;
+    const cookie: string = AppStorage.get<string>('biliCookie') || '';
+    const account: RegExpMatchArray | null = cookie.match(/(?:^|;\s*)DedeUserID=(\d+)/);
+    // key 形如 `account:bvid|epN:cid`；未登录的 account 段是字面量 'guest'（见 key()）。
+    // 按段比对而不是拼前缀，避免账号缺省值与 epId 形态写错时整段匹配失效。
+    const accountPart: string = account ? account[1] : 'guest';
+    let entries: PlaybackProgressEntry[] = [];
+    try { entries = JSON.parse(AppStorage.get<string>('playbackProgressV1') || '[]') as PlaybackProgressEntry[]; }
+    catch (_e) { return -1; }
+    if (!Array.isArray(entries)) return -1;
+    let best: PlaybackProgressEntry | undefined = undefined;
+    for (const entry of entries) {
+      if (!entry || typeof entry.key !== 'string') continue;
+      const parts: string[] = entry.key.split(':');
+      if (parts.length < 3 || parts[0] !== accountPart || Number(parts[parts.length - 1]) !== cid) continue;
+      if (best === undefined || (entry.updatedAt ?? 0) >= (best.updatedAt ?? 0)) best = entry;
+    }
+    if (best === undefined) return -1;
+    return PlaybackProgress.resume(best.position, best.duration, best.completed);
+  }
 }

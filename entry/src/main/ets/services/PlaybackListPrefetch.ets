@@ -97,9 +97,14 @@ export class PlaybackListPrefetch {
     }
   }
 
-  /** 本地续播点（秒）：与播放页共用同一套 key/存储，列表阶段就能知道该预热哪一段。 */
+  /**
+   * 本地续播点（秒）：与播放页共用同一套存储，列表阶段就能知道该预热哪一段。
+   * ⚠️ 卡片 id 可能是 aid、播放页存的 key 却是 bvid，精确 key 查不到时按 cid 兜底，
+   *    否则预热永远按 0 秒准备，接管后还得 seek（真机实测首帧 125ms → 1031ms）。
+   */
   private resumeSec(item: RecommendItem): number {
-    const local: number = PlaybackProgress.current(item.id, item.cid || 0);
+    let local: number = PlaybackProgress.current(item.id, item.cid || 0);
+    if (local < 0) local = PlaybackProgress.currentByCid(item.cid || 0);
     return local > 0 ? local : 0;
   }
 
@@ -117,7 +122,10 @@ export class PlaybackListPrefetch {
       // 实例池只对准前 N 张可见卡：把这几条准备到「已 prepared、已解出首帧、paused」，
       // 点击时直接 surface 改绑 + play（warm 内部对同一 cid 幂等，重复调用无副作用）。
       if (i < this.warmIndex + slots && (item.cid || 0) > 0) {
-        IjkWarmPool.get().warm(item.cid, source).catch(() => {});
+        // 池实例要按「用户会看到的位置」准备首帧：只传续播点才能在 prepare 之前
+        // setPlaybackRange，避免接管后再 seek（seekDone 实测要 ~900ms 才回来）。
+        const resumeMs: number = Math.round(this.resumeSec(item) * 1000);
+        IjkWarmPool.get().warm(item.cid, source, resumeMs).catch(() => {});
       }
       if (this.prefixed.has(identity)) continue;
       if (IjkPrewarm.warm(source, this.resumeSec(item))) {

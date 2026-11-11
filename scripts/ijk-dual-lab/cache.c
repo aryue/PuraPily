@@ -29,7 +29,11 @@
 #define CACHE_BLOCK (64 * 1024)                 // 与官方 sub-segment 同量级
 #define CACHE_DIR_MAX 512
 #define CACHE_KEY_MAX 96
-#define CACHE_FILE_MAX (128LL * 1024 * 1024)   // 单条流最多缓存 128MB
+// 单条流只缓存「前 32MB」。4K 一条流能写到上百 MB，按 128MB 上限时三四条就
+// 把目录撑满，淘汰时整条流连首段一起删掉 —— 首帧最需要的那几 MB 反而保不住。
+// 超过这个范围的块走 read_uncached_direct 回源（播放期回源不受预算限制），
+// 相当于用「尾部不缓存」换「更多视频的首段常驻」。
+#define CACHE_FILE_MAX (32LL * 1024 * 1024)
 #define CACHE_MAX_BLOCKS (int)(CACHE_FILE_MAX / CACHE_BLOCK)
 #define CACHE_TOTAL_MAX (384LL * 1024 * 1024)  // 目录上限 384MB
 #define CACHE_EVICT_AT (300LL * 1024 * 1024)   // 超过 300MB 开始清理
@@ -170,13 +174,19 @@ static void evict_if_needed(void)
     }
     closedir(dir);
     if (total > CACHE_EVICT_AT && items) {
-        int64_t target = CACHE_TOTAL_MAX * 8 / 10;
+        // 目标必须明显低于触发线：原来取 CACHE_TOTAL_MAX*0.8=307MB > 触发线 300MB，
+        // 于是刚超限的 305MB 一次都不删，目录长期贴在 350MB 上下反复触发 evict。
+        int64_t target = CACHE_EVICT_AT * 8 / 10;
         for (size_t i = 0; i < count && total > target; i++) {
-            size_t oldest = i;
+            // 优先淘汰大文件（旧版 128MB 流、4K 尾部数据），小块的预热/首段尽量留着；
+            // 大小相近时再按 mtime 取最旧。.bin 被删时会连同 .idx 一起删。
+            size_t victim = i;
             for (size_t j = i + 1; j < count; j++) {
-                if (items[j].mtime < items[oldest].mtime) oldest = j;
+                int64_t dj = items[j].size, dv = items[victim].size;
+                if (dj > dv + CACHE_BLOCK ||
+                    (dj + CACHE_BLOCK >= dv && items[j].mtime < items[victim].mtime)) victim = j;
             }
-            struct Entry tmp = items[i]; items[i] = items[oldest]; items[oldest] = tmp;
+            struct Entry tmp = items[i]; items[i] = items[victim]; items[victim] = tmp;
             char full[CACHE_DIR_MAX + 200];
             snprintf(full, sizeof(full), "%s/%s", g_dir, items[i].name);
             // 预热/播放实例可能仍在读写。活动文件不能被淘汰，否则另一个实例

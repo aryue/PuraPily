@@ -6110,6 +6110,15 @@ struct VideoPlayerPage {
           this.startupSourceDurationMs_ = result.dash?.timelength || 0;
           this.applyServerResumePoint(result);
           PlaybackStartup.setPath('ijk-warm');
+          // 池实例在 prepare 之前已按列表阶段的历史进度 setPlaybackRange，解出的首帧
+          // 就是续播点的帧。与本次起播点一致时登记「续播点已预置」：applyPreparedState
+          // 会跳过 seek + 等 seekDone（真机实测这段要多花 ~900ms 才出首帧）。
+          // 不一致（历史进度刚被改写、服务端续播点覆盖）时退回原来的 seek 路径。
+          const warmResumeMs: number = ijkWarm.resumeMs;
+          if (warmResumeMs > 0 && Math.abs(warmResumeMs - this.initialProgress_ * 1000) < 100) {
+            this.startupResumePlayer_ = player;
+            this.startupResumeMs_ = warmResumeMs;
+          }
           const warmAdoptAt: number = Date.now();
           let warmFrameLogged: boolean = false;
           player.on('startRenderFrame', () => {
@@ -9020,7 +9029,11 @@ struct VideoPlayerPage {
       this.referencePause();
       return;
     }
-    if (this.referencePlaybackMode === 'loop') {
+    // 播放模式：自动连播 / 列表循环 / 单集循环 / 播完暂停。
+    // 前两者的区别只在队尾——自动连播停住，列表循环回到列表头（详见 referencePlayNextEpisode）。
+    const mode = this.referencePlaybackMode;
+    if (mode === 'single') return;
+    if (mode === 'loop') {
       await this.seek(0);
       if (!this.referenceAlive) return;
       try {
@@ -9030,14 +9043,91 @@ struct VideoPlayerPage {
         await this.avAudio?.play();
         this.play = true;
       } catch (_e) {}
-    } else if (this.referencePlaybackMode === 'continuous' && this.referencePortraitFeedActive()) {
+      return;
+    }
+    // 连刷且非番剧：自动连播 = story 队列的下一条（队列边看边追加；真的到队尾时兜底回队首）。
+    // 番剧进不了连刷（referenceNextVideo 会直接弹回），这里也把它挡在外面，让它走分集连播。
+    if (this.referencePortraitFeedActive() && !this.isPgc_) {
       const queue = await this.ensureReferenceRecommendQueue();
       const index = queue.findIndex((item: RecommendItem) => item.id === this.vi.bvid);
       if (index === queue.length - 1 && queue.length > 1) {
         this.referenceFeedQueue = [queue[index], ...queue.slice(0, index)];
       }
       await this.referenceNextVideo(1);
+      return;
     }
+    // 非连刷（竖屏详情/横屏分栏/全屏）：分P → 合集下一集，不接推荐
+    await this.referencePlayNextEpisode(this.referencePlaybackMode === 'listLoop');
+  }
+
+  /**
+   * 非连刷的连播顺序：当前稿件还有下一个分P → 合集还有下一集 → 队尾。
+   * 到队尾时 `wrap`（列表循环）回到列表头：有合集先回合集第一集，否则回本稿件第 1 个 P；
+   * 没有 `wrap`（自动连播）直接停住，不碰相关推荐。
+   */
+  private async referencePlayNextEpisode(wrap: boolean): Promise<void> {
+    if (!this.referenceAlive) return;
+    // 离线缓存只存了当前这一个文件：切集会拿旧文件去播新的 cid，宁可停在片尾
+    if (this.offlineVideoPath_.length > 0) {
+      logInfo('[VideoPlayer] 自动连播跳过：离线缓存播放');
+      return;
+    }
+    const pages = this.pagesForCurrentVideo();
+    if (pages.length > 1 && this.currentPageIndex + 1 < pages.length) {
+      logInfo(`[VideoPlayer] 自动连播 → 分P ${this.currentPageIndex + 2}/${pages.length}`);
+      this.referencePlaybackCompleted = false;   // 播完是终态，切下一条前必须解除，否则新片起播被拦
+      await this.switchEpisode(this.currentPageIndex + 1);
+      return;
+    }
+    const next = this.seasonNeighborEpisode(1);
+    if (next) {
+      logInfo(`[VideoPlayer] 自动连播 → 合集下一集 ${next.bvid}`);
+      this.referencePlaybackCompleted = false;
+      await this.switchSeasonEpisode(next);
+      return;
+    }
+    if (!wrap) {
+      logInfo('[VideoPlayer] 自动连播到底：列表结束，停在当前画面');
+      return;
+    }
+    // 只有当前剧集确实属于这个合集时才回第一集；不在合集里（seasonNeighborEpisode(0) 为空）就别乱跳
+    const first = this.seasonNeighborEpisode(0) ? this.seasonFirstEpisode() : null;
+    if (first && first.bvid && first.bvid !== this.vi.bvid) {
+      logInfo(`[VideoPlayer] 列表循环 → 回到合集第一集 ${first.bvid}`);
+      this.referencePlaybackCompleted = false;
+      await this.switchSeasonEpisode(first);
+      return;
+    }
+    if (pages.length > 1 && this.currentPageIndex !== 0) {
+      logInfo('[VideoPlayer] 列表循环 → 回到分P 1');
+      this.referencePlaybackCompleted = false;
+      await this.switchEpisode(0);
+    }
+  }
+
+  /** 合集扁平化后的相邻分集（step=1 下一集、-1 上一集；当前集不在合集里或越界返回 null） */
+  private seasonNeighborEpisode(step: number): SeasonEpisode | null {
+    const sections = this.vd?.ugc_season?.sections;
+    if (!sections || sections.length === 0) return null;
+    const flat: SeasonEpisode[] = [];
+    for (const section of sections) {
+      for (const ep of section.episodes || []) flat.push(ep);
+    }
+    const index = flat.findIndex((ep: SeasonEpisode) => this.isCurrentSeasonEpisode(ep));
+    if (index < 0) return null;
+    const target = index + step;
+    return target >= 0 && target < flat.length ? flat[target] : null;
+  }
+
+  /** 合集第一集（跨分区取第一个非空分区的首项） */
+  private seasonFirstEpisode(): SeasonEpisode | null {
+    const sections = this.vd?.ugc_season?.sections;
+    if (!sections) return null;
+    for (const section of sections) {
+      const episodes = section.episodes || [];
+      if (episodes.length > 0) return episodes[0];
+    }
+    return null;
   }
 
   private async referenceReplay(): Promise<void> {
@@ -14598,7 +14688,7 @@ struct VideoPlayerPage {
         onSubtitleLarge: (large: boolean) => { this.referenceSubtitleLarge = large; },
         quality: this.getQlLabel(this.qn),
         qualitySwitching: this.qs, qualities: this.getQlList(), sleepMinutes: $referenceSleepMinutes,
-        stopAtEnd: $referenceStopAtEnd, bottomInset: this.navIndicatorHeight, pgc: this.isPgc_,
+        stopAtEnd: $referenceStopAtEnd, bottomInset: this.navIndicatorHeight, feedMode: this.referenceFeed,
         onAction: (action: string) => { this.referencePortraitAction(action); },
         onRate: (rate: number) => { logInfo(`[ReferencePortrait] rate ${rate} state=${this.av?.state}`); this.setRate(rate, false); },
         onMode: (mode: string) => { this.referencePlaybackMode = mode; },

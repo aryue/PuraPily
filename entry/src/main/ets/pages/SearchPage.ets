@@ -14,7 +14,7 @@ import { VideoListItem, videoListPublished } from '../components/VideoListItem';
 import { VideoCardFeedback } from '../services/VideoCardFeedback';
 ﻿import { router, curves, display } from '@kit.ArkUI';
 import { logInfo, logWarn, logError } from '../utils/Logger';
-import { searchByType, searchLive, SearchType, SearchOrder, SEARCH_ORDER_KEYS, getSearchOrderLabel, getSearchTypeLabel, SearchTypeLabelMap, getFollowStatus, modifyFollow, prefetchVideoPlayback } from '../api/BilibiliApi';
+import { searchByType, searchLive, SearchType, SearchOrder, SEARCH_ORDER_KEYS, getSearchOrderLabel, getSearchTypeLabel, SearchTypeLabelMap, getFollowStatus, modifyFollow, prefetchVideoPlayback, prefetchPlayUrlsOnly } from '../api/BilibiliApi';
 import { fetchRecommendedLiveRooms, LiveFeedRoom } from '../api/LiveFeedApi';
 import { fetchHotSearch, fetchSearchDiscovery, fetchSearchSuggestions, HotSearchItem } from '../api/HotSearchService';
 import { RecommendItem } from '../model/RecommendItem';
@@ -562,6 +562,11 @@ struct SearchPage {
       this.activePage = page;
       this.activeHasMore = tab === 'live_user' ? collected.length >= 20 : items.length > 0;
       this.activeResults = reset ? collected : this.activeResults.concat(collected);
+      // 搜索结果没有首页那种列表阶段预取：点击瞬间才发取流请求，实测要多等 ~200ms。
+      // 结果一回来就把前几条的地址备好（只取地址，不下媒体、不建播放器）。
+      if (tab === 'video') {
+        prefetchPlayUrlsOnly(this.activeResults, AppStorage.get<number>('defaultVideoQn') ?? 116);
+      }
       this.showSkeleton = false;
       this.isLoading = false;
       this.cachedResults.set(tab, this.activeResults);

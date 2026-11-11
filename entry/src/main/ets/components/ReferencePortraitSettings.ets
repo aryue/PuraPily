@@ -43,7 +43,8 @@ export struct ReferencePortraitSettings {
   onToggle: (key: string, value: boolean) => void = () => {}
   onSleep: (minutes: number) => void = () => {}
   onQuality: (quality: number) => void = () => {}
-  @Prop pgc: boolean = false
+  /** 连刷模式：播放模式只有「自动连播/单集循环/播完暂停」，没有列表循环（story 队列本身就是无限流） */
+  @Prop feedMode: boolean = false
   @StorageLink('isDarkMode') private dark: boolean = true
   @State private panelWidth: number = 0
   @State private panelHeight: number = 0
@@ -64,11 +65,27 @@ export struct ReferencePortraitSettings {
     }
   }
 
+  /**
+   * 播放模式：连刷只有三项（story 队列无限追加，回头没有意义）；非连刷多一项「列表循环」，
+   * 与「自动连播」唯一的区别是到分P/合集队尾时是否回到列表头。
+   */
+  private playbackModeLabels(): string[] {
+    return this.feedMode ? ['自动连播', '单集循环', '播完暂停'] : ['自动连播', '列表循环', '单集循环', '播完暂停'];
+  }
+
+  private playbackModeLabel(mode: string): string {
+    if (mode === 'loop') return '单集循环';
+    if (mode === 'single') return '播完暂停';
+    // 连刷里没有列表循环：用户在普通页选了列表循环后滑进连刷，这里按自动连播呈现（值本身不丢，退出连刷还原）
+    if (mode === 'listLoop' && !this.feedMode) return '列表循环';
+    return '自动连播';
+  }
+
   private optionLabels(kind: string): string[] {
     if (kind === 'quality') return this.qualities.map((item: PortraitQuality) => item.label);
     if (kind === 'sleep') return ['不开启', '播完当前视频', '15分钟', '30分钟', '60分钟', '90分钟', '自定义'];
     if (kind === 'rate') return ['0.5', '0.75', '1', '1.25', '1.5', '2'];
-    if (kind === 'mode') return this.pgc ? ['单集循环', '播完暂停'] : ['列表循环', '单集循环', '播完暂停'];
+    if (kind === 'mode') return this.playbackModeLabels();
     if (kind === 'playback') return ['自动', '拉伸', '填充', '等高', '等宽'];
     if (kind === 'feedScale') return ['完整显示', '裁切铺满'];
     return ['仅 9:16 竖片', '所有竖片'];
@@ -79,7 +96,7 @@ export struct ReferencePortraitSettings {
     if (kind === 'quality') return this.quality;
     if (kind === 'sleep') return this.stopAtEnd ? '播完当前视频' : this.sleepMinutes > 0 ? `${this.sleepMinutes}分钟` : '不开启';
     if (kind === 'rate') return `${this.rate}`;
-    if (kind === 'mode') return this.mode === 'loop' ? '单集循环' : this.mode === 'single' ? '播完暂停' : '列表循环';
+    if (kind === 'mode') return this.playbackModeLabel(this.mode);
     if (kind === 'playback') return ['自动', '拉伸', '填充', '等高', '等宽'][['auto', 'stretch', 'fill', 'fitHeight', 'fitWidth'].indexOf(this.scaleMode)];
     if (kind === 'feedScale') return this.feedPortraitScaleMode === 'fill' ? '裁切铺满' : '完整显示';
     return this.feedPortraitScaleScope === 'all' ? '所有竖片' : '仅 9:16 竖片';
@@ -92,7 +109,8 @@ export struct ReferencePortraitSettings {
       const item = this.qualities[index];
       if (item) this.onQuality(item.qn);
     } else if (kind === 'rate') this.onRate(Number(value));
-    else if (kind === 'mode') this.onMode(value === '单集循环' ? 'loop' : value === '播完暂停' ? 'single' : 'continuous');
+    else if (kind === 'mode') this.onMode(value === '单集循环' ? 'loop' : value === '播完暂停' ? 'single'
+      : value === '列表循环' ? 'listLoop' : 'continuous');
     else if (kind === 'sleep') {
       this.customSleep = value === '自定义';
       if (!this.customSleep) {

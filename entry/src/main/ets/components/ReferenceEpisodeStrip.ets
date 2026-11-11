@@ -35,7 +35,7 @@ struct EpisodePlayingBars {
 @Component
 export struct ReferenceEpisodeStrip {
   @Prop @Watch('syncPages') pages: VideoPageItem[] = [];
-  @Prop selectedIndex: number = 0;
+  @Prop @Watch('followSelection') selectedIndex: number = 0;
   @Prop playing: boolean = true;
   @Prop isDarkMode: boolean = true;
   onSelect: (index: number) => void = () => {};
@@ -43,6 +43,8 @@ export struct ReferenceEpisodeStrip {
   private items: GenericDataSource<VideoPageItem> = new GenericDataSource<VideoPageItem>();
   private scroller: ListScroller = new ListScroller();
   @State availableWidth: number = 360;
+  /** 首次布局完成前 initialIndex 已经定位过，别再补一次滚动（否则会多跳一格） */
+  private laidOut: boolean = false;
 
   aboutToAppear(): void {
     this.syncPages();
@@ -53,6 +55,27 @@ export struct ReferenceEpisodeStrip {
     if (old.length === this.pages.length && old.every((item: VideoPageItem, i: number) =>
       item.cid === this.pages[i].cid && item.page === this.pages[i].page && item.part === this.pages[i].part)) return;
     this.items.reloadItems(this.pages.slice());
+    // 换了一条视频（或分集数组整体刷新）时列表停在旧偏移，重新对齐到当前集
+    if (this.laidOut) this.scrollToSelected(false);
+  }
+
+  /** 选中项变化（自动连播 / 选集面板跳转）后让列表跟上，否则选中项会停在屏幕外 */
+  private followSelection(): void {
+    this.scrollToSelected(true);
+  }
+
+  private scrollToSelected(smooth: boolean): void {
+    // 首帧布局尚未完成时 scrollToIndex 会被忽略；延后一帧，读到的是最新选中项
+    setTimeout(() => {
+      const index = this.selectedIndex;
+      if (index < 0) return;
+      try {
+        // AUTO：已完整可见就不动（点选可见项时列表保持原位），只把跑出屏外的选中项拉回来
+        this.scroller.scrollToIndex(index, smooth, ScrollAlign.AUTO);
+      } catch (_e) {
+        // 列表还没挂上（首次布局中/组件已销毁）时忽略
+      }
+    }, 0);
   }
 
   private itemWidth(): number {
@@ -88,6 +111,6 @@ export struct ReferenceEpisodeStrip {
         .id('reference-intro-episodes').accessibilityText('全部选集')
         .onClick(() => { this.onShowAll(); })
     }.width('100%').height(56)
-      .onAreaChange((_old: Area, area: Area) => { this.availableWidth = Number(area.width); })
+      .onAreaChange((_old: Area, area: Area) => { this.availableWidth = Number(area.width); this.laidOut = true; })
   }
 }

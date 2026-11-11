@@ -9,7 +9,8 @@ function between(source, start, end) {
   assert.ok(a >= 0 && b > a);
   return source.slice(a, b);
 }
-const context = { exports: {}, MIN_HEARTBEAT_PROGRESS_SEC: 15, logInfo() {}, logError() {}, errMsg: String };
+const context = { exports: {}, MIN_HEARTBEAT_PROGRESS_SEC: 15, logInfo() {}, logError() {}, errMsg: String,
+  setTimeout: (fn) => { fn(); return 1; }, ScrollAlign: { START: 0, CENTER: 1, END: 2, AUTO: 3 } };
 vm.runInNewContext(ts.transpileModule(`export class Page {
   ${between(page, '  private pagesForCurrentVideo(', '  // ⭐ 格式化时长')}
 }
@@ -68,15 +69,26 @@ async function main() {
   const s = new context.exports.Strip();
   let items = [], reloads = 0;
   s.items = { getRawItems: () => items, reloadItems: x => { items = x; reloads++; } };
+  s.scroller = { calls: [], scrollToIndex(index, smooth, align) { this.calls.push([index, smooth, align]); } };
   s.pages = Array.from({ length: 150 }, (_, i) => ({ cid: i, page: i + 1, part: `Song ${i}` }));
   s.syncPages();
+  assert.equal(s.scroller.calls.length, 0, 'first layout keeps the initialIndex position');
   s.selectedIndex = 1;
   s.pages = s.pages.map(p => ({ ...p }));
   s.syncPages();
   assert.equal(reloads, 1, 'selection and equal incoming pages retain the lazy list');
+  assert.equal(s.scroller.calls.length, 0, 'equal pages do not re-scroll');
+  // 自动连播/选集面板跳转：选中项变化必须把列表滚到该集，否则选中项留在屏外
+  s.selectedIndex = 42;
+  s.followSelection();
+  assert.deepEqual(s.scroller.calls, [[42, true, 3]], 'selection change scrolls the new episode into view (AUTO keeps visible rows still)');
+  s.scroller.calls = [];
+  s.laidOut = true;
   s.pages = [{ cid: 500, page: 1, part: 'New video' }];
+  s.selectedIndex = 0;
   s.syncPages();
   assert.equal(reloads, 2, 'a different video replaces the data');
+  assert.deepEqual(s.scroller.calls, [[0, false, 3]], 'a replaced episode list re-aligns without animation');
   console.log('PASS: immediate selection, latest queued episode, outgoing history, stable intro identity and lazy list reuse');
 }
 main().catch(e => { console.error(e); process.exitCode = 1; });

@@ -13,6 +13,12 @@ export interface IjkWarmTake {
   aspectRatio: number;
   /** 预热时用的宿主 surface，页面拿到后要改绑到自己的 surface。 */
   surfaceId: string;
+  /**
+   * 池实例 prepare 之前预置的续播点（毫秒，0 = 从头）。
+   * 与页面本次起播的续播点一致时，接管后不用再 seek —— 省掉「seek + 等 seekDone」那段
+   * 实测约 900ms 的首帧延迟（真机 2026-11-11：125ms → 1031ms 的差异全在这一段）。
+   */
+  resumeMs: number;
 }
 
 const TTL_MS: number = 25000;
@@ -26,6 +32,8 @@ class WarmSlot {
   cid: number = 0;
   quality: number = 0;
   createdAt: number = 0;
+  /** 本槽实例 prepare 前预置的续播点（毫秒）；列表阶段按当前历史进度确定。 */
+  resumeMs: number = 0;
   /** 正在为该 cid 构建（0 = 空闲）。 */
   building: number = 0;
   timer: number = -1;
@@ -67,8 +75,14 @@ export class IjkWarmPool {
     return Math.max(1, Math.min(MAX_SLOTS, n));
   }
 
-  /** 列表阶段调用：把这条视频准备到首帧。已在槽内或正在构建的 cid 会被忽略。 */
-  async warm(cid: number, result: PlayUrlResult): Promise<void> {
+  /**
+   * 列表阶段调用：把这条视频准备到「用户会看到的位置」的首帧。
+   * `resumeMs` 是该卡片当前的历史进度：FeedPlaybackSession 会在 prepare 之前
+   * setPlaybackRange 到这个点，池实例解出的首帧就是续播点的帧；页面接管时
+   * 因此不必再 seek（seek + 等 seekDone 实测要多花 ~900ms 才出首帧）。
+   * 已在槽内或正在构建的 cid 会被忽略。
+   */
+  async warm(cid: number, result: PlayUrlResult, resumeMs: number = 0): Promise<void> {
     if (cid <= 0) {
       log('skip cid=0');
       return;
@@ -87,7 +101,8 @@ export class IjkWarmPool {
     }
     this.dispose(target);
     target.building = cid;
-    const session = new FeedPlaybackSession(String(cid), WarmSurfaceHost.get(), result, 0);
+    const session = new FeedPlaybackSession(String(cid), WarmSurfaceHost.get(), result,
+      Math.max(0, Math.round(resumeMs)));
     try {
       const ok: boolean = await session.prepare(media.VideoScaleType.VIDEO_SCALE_TYPE_FIT,
         AppStorage.get<string>('biliCookie') || '');
@@ -99,9 +114,10 @@ export class IjkWarmPool {
       target.session = session;
       target.cid = cid;
       target.quality = result.dash?.quality ?? 0;
+      target.resumeMs = Math.max(0, Math.round(resumeMs));
       target.createdAt = Date.now();
       this.arm(target);
-      log(`ready cid=${cid} qn=${target.quality} slots=${this.readyCount()}/${this.slots.length}/${this.capacity()} host=${WarmSurfaceHost.get().slice(-6)}`);
+      log(`ready cid=${cid} qn=${target.quality} resume=${target.resumeMs}ms slots=${this.readyCount()}/${this.slots.length}/${this.capacity()} host=${WarmSurfaceHost.get().slice(-6)}`);
     } catch (e) {
       session.release().catch(() => {});
       log('failed ' + (e as Error).message);
@@ -131,13 +147,15 @@ export class IjkWarmPool {
       this.clearTimer(s);
       const surfaceId: string = s.session.surfaceId;
       const aspectRatio: number = s.session.aspectRatio;
+      const resumeMs: number = s.resumeMs;
       const age: number = Date.now() - s.createdAt;
       s.session = null;
       s.cid = 0;
       s.quality = 0;
+      s.resumeMs = 0;
       s.createdAt = 0;
-      log(`take cid=${cid} age=${age}ms left=${this.readyCount()}`);
-      return { handles, aspectRatio, surfaceId };
+      log(`take cid=${cid} age=${age}ms resume=${resumeMs}ms left=${this.readyCount()}`);
+      return { handles, aspectRatio, surfaceId, resumeMs };
     }
     const first: WarmSlot | undefined = this.slots.find((s: WarmSlot) => s.session !== null);
     if (first !== undefined) log(`miss cid=${cid} pool=${first.cid} building=${this.buildingCid()}`);
@@ -217,6 +235,7 @@ export class IjkWarmPool {
     s.session = null;
     s.cid = 0;
     s.quality = 0;
+    s.resumeMs = 0;
     s.createdAt = 0;
     s.building = 0;
     if (session !== null) session.release().catch(() => {});

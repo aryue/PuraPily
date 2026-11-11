@@ -1371,6 +1371,48 @@ export function prefetchVideoPlayback(id: string, cid: number, qn: number): void
   }).catch((error: Error) => { logWarn(`[Startup] 预取失败: ${error.message}`); });
 }
 
+/**
+ * 列表阶段只提前取播放地址：填进 playUrlCache，不建播放器、不下载任何媒体字节。
+ *
+ * 首页有 PlaybackListPrefetch 提前把地址备好（点击时 `url@20~67ms`）；搜索、合集等
+ * 入口只有「点击瞬间」的 prefetchVideoPlayback，于是取流 API 的 RTT 直接计进首帧
+ * （真机实测 `url@190~252ms`）。这里在结果回来后把前几条的地址先取好，点击时
+ * getVideoPlayUrl 直接 HIT，把这段等待藏到用户浏览列表的时间里。
+ *
+ * ⚠️ 绝不触发 IjkPrewarm / PlaybackWarmPlayer：媒体字节的投机预热受 NetworkGate
+ *    的预算与门控约束（512KiB/任务、1152KiB/30s、4 槽），不能借这个入口绕开。
+ *    并发 2、上限 6 条，和列表预取同量级，避免搜索翻页时打爆取流接口触发 412 风控。
+ */
+export function prefetchPlayUrlsOnly(items: RecommendItem[], qn: number, limit: number = 6): void {
+  const targets: RecommendItem[] = items.filter((item: RecommendItem) =>
+    /^(BV[0-9A-Za-z]+|[0-9]+)$/.test(item.id)).slice(0, limit);
+  logInfo(`[PlayURL] 列表地址预取 ${targets.length} 条 qn=${qn}`);
+  let index: number = 0;
+  let running: number = 0;
+  const pump = (): void => {
+    while (running < 2 && index < targets.length) {
+      const item: RecommendItem = targets[index++];
+      running++;
+      // ⚠️ 搜索 API 的条目通常只有 bvid、没有 cid（播放器要点开后才由详情补齐）。
+      //    第一版要求 cid>0，结果整批被过滤、一个请求都没发。这里把
+      //    「详情 → cid → 取流」这条原本点击后才串行的链提前跑完；详情本身有
+      //    缓存和 inflight 去重，缓存键与播放页 getVideoPlayUrl 完全一致。
+      const task: Promise<PlayUrlResult | null> = (item.cid || 0) > 0
+        ? getVideoPlayUrl(item.id, item.cid, qn)
+        : getVideoDetail(item.id).then((detail: VideoDetail | null) => {
+          const cid: number = detail?.cid || detail?.pages?.[0]?.cid || 0;
+          const bvid: string = detail?.bvid || item.id;
+          return cid > 0 ? getVideoPlayUrl(bvid, cid, qn) : null;
+        });
+      task.catch(() => {}).finally(() => {
+        running--;
+        pump();
+      });
+    }
+  };
+  pump();
+}
+
 /** Full-capability DASH probes race to the requested quality; merged streams are a fallback. */
 async function getVideoPlayUrlRaw(bvid: string, cid: number, qn: number, probe: LastPlayTimeProbe, preferDual: boolean): Promise<PlayUrlResult> {
   let actualBvid: string = bvid;
