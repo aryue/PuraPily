@@ -68,6 +68,45 @@ export class StatusBarUtils {
   }
 
   /**
+   * 播放页（视频/直播）状态栏压在视频画面上：内容恒白，与主题深浅无关。
+   * ⚠️ 状态栏内容色是窗口全局属性：首页 aboutToAppear / 设置页切主题 / 系统主题回调
+   *    在浅色模式下会把它改成黑字，播放页若不自行下发，黑字压黑色遮幅区什么也看不见。
+   * @param win 页面已持有的窗口对象可直接传入，省一次 getLastWindow 异步中转（返回转场里颜色跟手）。
+   */
+  static async setPlayerStatusBarContent(context: common.UIAbilityContext, win?: window.Window): Promise<void> {
+    try {
+      const target: window.Window = win ?? await window.getLastWindow(context);
+      await target.setWindowSystemBarProperties({
+        statusBarColor: '#00000000',
+        statusBarContentColor: '#FFFFFF',
+        navigationBarColor: '#00000000',
+      });
+    } catch (error) {
+      let err = error as BusinessError;
+      logError(`播放页状态栏内容色设置失败: ${err.code} - ${err.message}`);
+    }
+  }
+
+  /**
+   * 普通页面恢复主题口径：深色白字 / 浅色黑字（离开播放页时调用）。
+   * 单次 setWindowSystemBarProperties 落地，不走 updateStatusBarColor 的全屏布局重设。
+   */
+  static async restoreThemeStatusBarContent(context: common.UIAbilityContext, win?: window.Window): Promise<void> {
+    const dark = AppStorage.get<boolean>('isDarkMode') ?? true;
+    try {
+      const target: window.Window = win ?? await window.getLastWindow(context);
+      await target.setWindowSystemBarProperties({
+        statusBarColor: '#00000000',
+        statusBarContentColor: dark ? '#FFFFFF' : '#000000',
+        navigationBarColor: '#00000000',
+      });
+    } catch (error) {
+      let err = error as BusinessError;
+      logError(`恢复状态栏内容色失败: ${err.code} - ${err.message}`);
+    }
+  }
+
+  /**
    * 隐藏或显示状态栏
    * 始终保持全屏布局模式，让窗口内容延伸到系统栏后方，消除白边
    * @param context UIAbilityContext

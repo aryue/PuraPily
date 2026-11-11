@@ -24,13 +24,15 @@ async function main() {
           const mw = { async setPreferredOrientation(value) { orientation = value; } };
           const bars = { async setSystemBars(win, visible, nav) {
             assert.equal(win, mw); status = visible; navigation = nav;
-          } };
-          const context = { exports: {}, AppStorage: { get: key => storage.get(key) },
-            StatusBarUtils: bars, window: { Orientation } };
+          // 播放页退出还会恢复状态栏内容色（浅色黑字/深色白字），本用例只验显隐与方向。
+          }, async setPlayerStatusBarContent() {}, async restoreThemeStatusBarContent() {} };
+          const context = { exports: {}, AppStorage: {
+            get: key => storage.get(key), setOrCreate: (key, value) => storage.set(key, value)
+          }, StatusBarUtils: bars, window: { Orientation } };
           vm.runInNewContext(js, context);
           const page = new context.exports.Page();
           // A cached player preference must not override the current global preference.
-          Object.assign(page, { mw, sh_: !hidden });
+          Object.assign(page, { mw, sh_: !hidden, getUIContext: () => ({ getHostContext: () => ({}) }) });
           const homeShow = () => bars.setSystemBars(mw, !hidden, true);
           if (exitLast) { await homeShow(); await page.restoreS(); }
           else { await page.restoreS(); await homeShow(); }
@@ -64,7 +66,7 @@ async function main() {
   Object.assign(page, { mw: {}, referenceAlive: true, playerPageVisible: true,
     referenceLayout: true, isLs: true, fs: false, sh_: false, isLightsOff: false,
     rotationInProgress: false, contentVisible: true, resetFullscreenVideo() {},
-    onPlaybackViewportChanged() {}, getUIContext: () => ({ animateTo: (_options, callback) => callback() }) });
+    onPlaybackViewportChanged() {}, getUIContext: () => ({ getHostContext: () => ({}), animateTo: (_options, callback) => callback() }) });
   for (const rotating of [false, true]) {
     page.rotationInProgress = rotating;
     for (const fullscreen of [false, true, false, true, false]) {

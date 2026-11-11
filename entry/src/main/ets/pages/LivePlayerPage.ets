@@ -648,6 +648,9 @@ struct LivePlayerPage {
     const fullscreen = fullscreenOverride === undefined ? this.liveFullscreen : fullscreenOverride;
     const hide = !this.landscapeLayout() || fullscreen;
     AppStorage.setOrCreate('isFullscreen', hide);
+    // ⭐ 状态栏内容色不在这里下发：首次进入时 applySystemBars 经 aboutToAppear 调用，
+    //    跑在 push 转场首帧之前，会让上一个页面满屏时状态栏就变白。统一由 onPageShow
+    //    与 applySystemBars 同拍下发（见 onPageShow）。
     if (!this.mw) return;
     StatusBarUtils.setSystemBars(this.mw, !hide, false);
   }
@@ -1000,6 +1003,10 @@ struct LivePlayerPage {
   }
 
   aboutToAppear() {
+    // ⭐ 存活播放页计数（与 VideoPlayerPage 共用）：退出时若还有别的播放页活着，
+    //    内容色必须回到白字而不是主题口径，否则浅色模式下层播放页被恢复成黑字。
+    AppStorage.setOrCreate('immersivePlayerAliveCount',
+      Math.max(0, (AppStorage.get<number>('immersivePlayerAliveCount') ?? 0)) + 1);
     // 横屏进页（含推荐卡片 push 的新直播页）默认纯净观看，控件隐藏；竖屏信息层仍默认显示
     this.informationVisible = this.defaultInformationVisible();
     this.informationProgress = this.informationVisible ? 0 : 1;
@@ -1103,6 +1110,18 @@ struct LivePlayerPage {
   aboutToDisappear() {
     AppContinuation.unregister(this);
     this.disposed = true;
+    // ⭐ 存活计数先减自己：还有别的播放页活着（如直播页下面压着的视频播放页）就不能恢复
+    //    主题口径——下层实例的 onPageShow 已设白字，这次恢复若后到会让浅色模式下层播放页
+    //    闪黑；改为主动回写白字，保证最后一个写窗口的是白。直用 this.mw，不等 getLastWindow。
+    const remaining = Math.max(0, (AppStorage.get<number>('immersivePlayerAliveCount') ?? 1) - 1);
+    AppStorage.setOrCreate('immersivePlayerAliveCount', remaining);
+    if (remaining > 0) {
+      StatusBarUtils.setPlayerStatusBarContent(
+        this.getUIContext().getHostContext() as common.UIAbilityContext, this.mw ?? undefined);
+    } else {
+      StatusBarUtils.restoreThemeStatusBarContent(
+        this.getUIContext().getHostContext() as common.UIAbilityContext, this.mw ?? undefined);
+    }
     this.stopLiveChat();
     this.playGeneration++;
     // ⭐ 注销系统音量变化监听
@@ -1141,6 +1160,18 @@ struct LivePlayerPage {
   /** ⭐ 页面隐藏（切后台/跳转）：后台播放开启则保持播放，否则暂停 */
   onPageHide(): void {
     this.pageHidden = true;
+    // ⭐ 提前一步恢复状态栏内容色：pop 出栈或被普通页面覆盖时，此刻路由栈已指向目标页，
+    //    立即恢复主题口径（目标页还是播放页则交给对方 onPageShow 强制白字）。
+    //    切后台时栈顶仍是本页，不会误发。
+    try {
+      const state = this.getUIContext().getRouter().getState();
+      const raw = state.path.endsWith('/') ? `${state.path}${state.name}` : state.path;
+      const top = raw.startsWith('/') ? raw.substring(1) : raw;
+      if (top !== 'pages/LivePlayerPage' && top !== 'pages/VideoPlayerPage') {
+        StatusBarUtils.restoreThemeStatusBarContent(
+          this.getUIContext().getHostContext() as common.UIAbilityContext, this.mw ?? undefined);
+      }
+    } catch (_e) {}
     this.stopLiveChat();
     this.finishLevelGesture();
     this.clearPreview();
@@ -1171,6 +1202,12 @@ struct LivePlayerPage {
     //    "后台播放"模式下播放从未中断，不会有 stateChange('playing') 去触发 onVideoStart。
     this.updateKeepScreen();
     this.applySystemBars();
+    // ⭐ 状态栏内容色强制白字：横屏分栏时状态栏压在视频/封面上，浅色模式的全局黑字（首页口径）
+    //    会看不见。与 applySystemBars 同拍同步下发：转场启动帧内发出窗口属性，IPC 落地在
+    //    首帧后 1~3 帧（对齐原版节奏）；更早（aboutToAppear 链）会在上一个页面满屏时变色，
+    //    延迟中段下发则会触发 avoidArea 重算顿掉转场一拍。已持有 mw 就直传，省一跳中转。
+    StatusBarUtils.setPlayerStatusBarContent(
+      this.getUIContext().getHostContext() as common.UIAbilityContext, this.mw ?? undefined);
     // 从其它页面回到仍处于横屏全屏的直播间：补发方向锁，避免新页面的全局方向设置把它带成竖屏
     if (this.liveFullscreen && this.liveFullscreenLocked && this.mw) {
       try { this.mw.setPreferredOrientation(window.Orientation.AUTO_ROTATION_LANDSCAPE).catch(() => {}); } catch (_e) {}

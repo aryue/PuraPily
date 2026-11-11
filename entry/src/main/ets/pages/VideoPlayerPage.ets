@@ -185,7 +185,9 @@ interface MinimizedVideoState {
   seasonId: number;               // ⭐ PGC 季 id
 }
 
-PersistentStorage.persistProp('defaultVideoQn', 116)
+// 画质偏好（Wi-Fi / 移动网络两档）由 QualityPreferenceService 在 EntryAbility.onCreate 里同步写入
+// AppStorage 的 defaultVideoQn；这里不再 persistProp —— 持久化会让上次链路解析出的生效值反过来
+// 覆盖本次换网后的判定（模块加载时 persistProp 会顶掉 AppStorage 里的新值）。
 PersistentStorage.persistProp('playbackProgressV1', '[]')
 PersistentStorage.persistProp('continuousRecommendationsV1', '[]')
 PersistentStorage.persistProp('bgp', false)
@@ -633,6 +635,19 @@ struct VideoPlayerPage {
   @State sm: string = 'auto'; @State vw: number = 0; @State vh: number = 0
   @State ar: number = 16 / 9; @State cw: number = 0; @State ch: number = 0
   @State lsvw: number = 0; @State lsvh: number = 0
+  /**
+   * ar 的来源：true = 路由参数/详情给的**显示尺寸**（已按 rotate 交换过），
+   * false = 解码器或 DASH 元数据给的**编码尺寸**。
+   *
+   * ⚠️ 两者不能无条件互相覆盖：rotate=90 的源（手机竖拍很常见）编码尺寸是 1920x1080、
+   *    显示尺寸是 1080x1920，两个比例恰好互为倒数。硬解帧是 AV_PIX_FMT_OHCODEC，
+   *    不过 libavfilter（见 ff_ffplay.c 的 queue_picture 注释），autorotate 的 rotate
+   *    filter 被绕过，上报的仍是编码尺寸；拿它盖掉显示尺寸，竖屏画面就会被塞进
+   *    16:9 的 surface 里横向拉扁 —— 这是"被压成 16:9"的另一条成因。
+   */
+  private arFromMeta_: boolean = false;
+  /** meta 对应的 cid：切集后旧详情不再算数，解码尺寸可以重新接管。 */
+  private arMetaCid_: number = 0;
   /** ⭐ cardMargin 安全化：Preferences/AppStorage 可能出现 NaN/undefined/字符串，统一兜底为 12 */
   private safeCM(): number {
     const v = Number(this.cardMargin);
@@ -3187,6 +3202,11 @@ struct VideoPlayerPage {
   }
 
   async aboutToAppear() {
+    // ⭐ 存活播放页计数（与 LivePlayerPage 共用）：退出时若还有别的播放页活着
+    //    （播放页里点相关推荐 push 出下层实例），内容色必须回到白字而不是主题口径，
+    //    否则下层播放页在浅色模式下被恢复成黑字（onPageShow 的白字会被这次恢复覆盖）。
+    AppStorage.setOrCreate('immersivePlayerAliveCount',
+      Math.max(0, (AppStorage.get<number>('immersivePlayerAliveCount') ?? 0)) + 1);
     this.startHdrUiBrightness();
     this.playbackProfile = PlaybackStartup.page();
     this.playbackStartupAt = Date.now();
@@ -3312,10 +3332,13 @@ struct VideoPlayerPage {
       const videoWidth = p['videoWidth'] as number;
       const videoHeight = p['videoHeight'] as number;
       if (Number.isFinite(videoWidth) && Number.isFinite(videoHeight) && videoWidth > 0 && videoHeight > 0) {
-        this.ar = videoWidth / videoHeight;
-        this.updateIsLandscapeVertical();
-        this.updateLSVSize();
-        this.updateVideoSize();
+        // 路由尺寸在 RecommendItem / 详情解析时已按 rotate 交换过，属于显示尺寸：
+        // 记成 meta 来源，后续解码尺寸（编码尺寸）不能把它盖成横版。
+        if (this.setAspectFromMeta(videoWidth / videoHeight, this.vi.cid)) {
+          this.updateIsLandscapeVertical();
+          this.updateLSVSize();
+          this.updateVideoSize();
+        }
       }
       this.vi.ownerName = (p['ownerName'] as string) || '';
       this.vi.ownerFace = (p['ownerFace'] as string) || '';
@@ -3627,6 +3650,10 @@ struct VideoPlayerPage {
       // ⭐ 恢复横屏竖屏视频模式和宽高比
       this.isLandscapeVertical = ps.playerState.isLandscapeVertical;
       this.ar = ps.playerState.videoAspectRatio;
+      // 恢复的是一路算下来的显示尺寸：打上 meta 标记，避免 setupL 的画幅快照在
+      // rotate=90 的源上把竖屏比例改成编码尺寸（1.778）——那是同一条源的另一种写法。
+      this.arFromMeta_ = this.ar > 0.05 && this.ar < 20;
+      this.arMetaCid_ = this.vi.cid;
 
       // 接管播放器引用
       this.av = ps.videoPlayer;
@@ -4111,6 +4138,14 @@ struct VideoPlayerPage {
     const topOnHide = this.currentTopPage();
     this.pageCoveredByRoute_ = topOnHide.length > 0 &&
       (topOnHide !== 'pages/VideoPlayerPage' || !this.isTopPlayerPageInstance());
+    // ⭐ 提前一步恢复状态栏内容色：pop 出栈或被普通页面覆盖时，此刻路由栈已指向目标页，
+    //    立即恢复主题口径（直用 this.mw，少一次 getLastWindow 中转），别等 aboutToDisappear
+    //    ——那时转场动画已经跑起来，颜色切换会明显滞后。目标页还是播放页（同路由另一实例
+    //    或直播页）则交给对方的 onPageShow 强制白字，这里不下发主题口径。
+    if (topOnHide.length > 0 && topOnHide !== 'pages/VideoPlayerPage' && topOnHide !== 'pages/LivePlayerPage') {
+      StatusBarUtils.restoreThemeStatusBarContent(
+        this.getUIContext().getHostContext() as common.UIAbilityContext, this.mw ?? undefined);
+    }
     this.playbackListPrefetch.pause();
     this.releaseReferenceFeedPreview();
     // ⭐ 页面隐藏即释放屏幕常亮（后台播放/跳页时屏幕可正常锁屏）
@@ -4237,6 +4272,13 @@ struct VideoPlayerPage {
     this.referenceWarmUpcomingFrames();
     logInfo('[VideoPlayer] onPageShow → manageSB(force=true)');
     if (this.mw) this.manageSB(true);
+    // ⭐ 状态栏内容色强制白字：状态栏压在视频画面上，浅色模式的全局黑字（首页口径）会消失。
+    //    必须与 manageSB 同拍同步下发：转场启动帧内发出窗口属性，IPC 落地在首帧后 1~3 帧
+    //    （对齐原版「动画开始没几帧就变色」）。不能延迟中段下发——转场跑一半时再触发
+    //    avoidArea 重算会顿掉动画一拍（观感「点击后没立即跳转」）；也不能更早（initW
+    //    跑在转场首帧之前，会变成首页满屏时就变色）。已持有 mw 就直传，省一跳中转。
+    StatusBarUtils.setPlayerStatusBarContent(
+      this.getUIContext().getHostContext() as common.UIAbilityContext, this.mw ?? undefined);
     // ⭐ 延迟 1s 再次强制恢复，覆盖系统在窗口完全显示后（~568ms）才发的避让区通知
     setTimeout(() => {
       logInfo('[VideoPlayer] onPageShow → delayed manageSB');
@@ -4783,8 +4825,21 @@ struct VideoPlayerPage {
   }
 
   private async restoreS() {
+    // ⭐ 存活计数先减自己：还有别的播放页活着（相关推荐 push 出的下层实例）就不能恢复
+    //    主题口径——下层实例的 onPageShow 已设白字，这次恢复若后到会让浅色模式下层播放页
+    //    闪黑；改为主动回写白字，保证最后一个写窗口的是白。
+    const remaining = Math.max(0, (AppStorage.get<number>('immersivePlayerAliveCount') ?? 1) - 1);
+    AppStorage.setOrCreate('immersivePlayerAliveCount', remaining);
     if (!this.mw) return;
     try {
+      const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
+      if (remaining > 0) {
+        await StatusBarUtils.setPlayerStatusBarContent(context, this.mw);
+      } else {
+        // ⭐ 回到普通页面恢复主题口径的状态栏内容色（浅色黑字/深色白字），首页等普通页面靠它。
+        //    播放页期间强制白字压视频，不恢复会让浅色模式下的普通页面也变成看不见的白字。
+        await StatusBarUtils.restoreThemeStatusBarContent(context, this.mw);
+      }
       // 退出后由全局偏好决定显隐，不能用播放页尚未恢复的横屏尺寸覆盖首页。
       const hideStatusBar = AppStorage.get<boolean>('hideStatusBar') ?? false;
       await StatusBarUtils.setSystemBars(this.mw, !hideStatusBar, true);
@@ -5759,6 +5814,8 @@ struct VideoPlayerPage {
       this.mw = await window.getLastWindow(this.getUIContext().getHostContext() as common.Context);
       this.mw.off('avoidAreaChange', this.onPlaybackAvoidAreaChanged);
       this.mw.on('avoidAreaChange', this.onPlaybackAvoidAreaChanged);
+      // ⭐ 状态栏内容色不在这里下发：initW 跑在 push 转场首帧之前，立即设白会让首页还
+      //    满屏时状态栏就变色。统一由 onPageShow 延迟一拍下发（见 onPageShow）。
       this.updatePlaybackPanelInset(this.mw.getWindowAvoidArea(window.AvoidAreaType.TYPE_SYSTEM));
       // ⭐ 窗口背景色与页面底色一致：旋转瞬间不再露出系统默认底色（闪白）
       try {
@@ -6035,6 +6092,14 @@ struct VideoPlayerPage {
           } catch (e) {
             logWarn('[VideoPlayer] IJK 预热实例改绑 surface 失败: ' + errMsg(e));
           }
+          // ⚠️ 池实例在 prepare 阶段就把 videoSizeChange 发完了（ff_ffplay.c 在 prepared
+          //    之前用 codecpar 发一次、videothread 首帧 alloc 再发一次），take() 时
+          //    FeedPlaybackSession.detachListeners 把监听摘掉；页面 setupL 重新注册时
+          //    事件已经过去，之后除非解码器真改尺寸否则不会再发。
+          //    ⇒ 画幅必须在这里主动回灌，否则 ar 停在默认 16/9，而 IJK 是把帧铺满
+          //      surface 的（videoScaleType 只存字段、不下发 native），竖屏画面就被
+          //      拉伸成一条 16:9 的横条。
+          this.adoptWarmAspect(player, ijkWarm.aspectRatio);
           // 换完 surface 立刻 seek 一下：渲染线程是「被帧唤醒」的，
           // 停在 paused 时窗口换了也没人重建 EGL，屏幕会一直黑。
           try {
@@ -6197,6 +6262,9 @@ struct VideoPlayerPage {
     this.dashBridge_ = warm.bridge;
     this.isDashStream_ = true;
     this.sId = surfaceId;
+    // 同一个坑：预热实例的 videoSizeChange 在池里就发完了，页面注册时收不到。
+    // AVPlayer 的 width/height 在 prepared 之后由系统填好，直接拿它回灌。
+    this.adoptWarmAspect(player, 0);
     this.startupSourceDurationMs_ = result.dash?.timelength || 0;
     this.applyServerResumePoint(result);
     PlaybackStartup.setPath('warm');
@@ -6220,6 +6288,9 @@ struct VideoPlayerPage {
 
   /** 已 prepared 后的统一收尾：冷启动与预热接管共用，避免两套逻辑漂移。 */
   private async applyPreparedState(player: PlaybackPlayer, generation: number): Promise<void> {
+    // 冷启动这里 ar 已被 videoSizeChange 修正过（delta≈0，无操作）；
+    // 预热接管则靠这一次把池里错过的画幅补上。
+    this.syncAspectFromPlayer(player);
     this.playbackProfile?.once('prepared');
     PlaybackStartup.trace('prepared', this.playbackStartupAt);
     this.ld = false;
@@ -6653,10 +6724,18 @@ struct VideoPlayerPage {
       this.vw = w;
       this.vh = h;
       if (w > 0 && h > 0) {
+        const aspect = w / h;
+        // ⚠️ 解码尺寸不是永远比已有画幅可信：rotate=90 的源上报的是编码尺寸，
+        //    而路由/详情给的是显示尺寸，两者互为倒数。meta 仍对当前 cid 有效时
+        //    保留显示画幅，否则竖屏会被这条事件改回 16:9 横版。
+        if (this.decoderAspectIgnored(aspect)) {
+          logInfo(`[VideoPlayer] 保留显示画幅 ${this.ar.toFixed(4)}，忽略解码画幅 ${aspect.toFixed(4)}`);
+          return;
+        }
         // 解码尺寸会修正初始 16:9 比例，视频和简介面板共同过渡，避免面板突然跳位。
         this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: this.referenceLayout && !this.waitingForFirstFrame && !this.referenceFeedPreviewPinned && !this.fs && !this.isLs ? 220 : 0,
           curve: Curve.EaseOut }, () => {
-          this.ar = w / h;
+          this.ar = aspect;
           this.updateIsLandscapeVertical();
           this.updateLSVSize();
           this.updateVideoSize();
@@ -6667,6 +6746,9 @@ struct VideoPlayerPage {
         logWarn('[VideoPlayer] Video size is 0x0, video stream may not be ready');
       }
     });
+    // 监听注册完再看一眼播放器当前尺寸：预热接管 / 浮窗恢复 / 切集都可能在这之前
+    // 就已经把尺寸定好了，事件过去了就永远等不到。幂等，冷启动时 delta≈0 无操作。
+    this.syncAspectFromPlayer(player);
   }
 
   private preparingPlayer_: PlaybackPlayer | null = null;
@@ -7893,8 +7975,8 @@ struct VideoPlayerPage {
       this.qn = result.actualQn;
       this.ql = this.getQlLabel(this.qn);
       // 手动切画质只作用于本次会话：后续连刷沿用这一档，但绝不写 defaultVideoQn。
-      // 设置页偏好只能由设置项（ProfilePage.saveDefaultQn）修改；该键已被
-      // PersistentStorage.persistProp 绑定，AppStorage.set 会直接落盘，等于替用户改设置。
+      // defaultVideoQn 是 QualityPreferenceService 按当前链路解析出的生效值，只有设置页里
+      // 「Wi-Fi 画质 / 移动网络画质」两个菜单能改，这里写它等于替用户改设置。
       this.preferredQn = n;
       profile.mark('surface-swapped', handles.video.currentTime);
       // Keep the exiting native buffer alive through the Surface role update.
@@ -11487,9 +11569,82 @@ struct VideoPlayerPage {
     const page = detail.pages?.find((item: VideoPageItem) => item.cid === this.vi.cid);
     const dimension = page?.dimension || (detail.cid === this.vi.cid || !this.vi.cid ? detail.dimension : undefined);
     if (!dimension || !Number.isFinite(dimension.width) || !Number.isFinite(dimension.height) ||
-      dimension.width <= 0 || dimension.height <= 0 || !this.waitingForFirstFrame) return;
+      dimension.width <= 0 || dimension.height <= 0) return;
+    // 连刷的画幅由静帧/解码提交（committedRatio）单独管理，首帧后不要插进来改几何；
+    // 普通播放页必须允许迟到修正：原来这里卡着 waitingForFirstFrame，预热命中后
+    // 几百毫秒就置 false，详情稍晚返回就被丢掉，ar 便永久停在 16:9。
+    if (this.referenceFeed && !this.waitingForFirstFrame) return;
     const rotated = Math.abs(dimension.rotate || 0) % 180 === 90;
-    this.ar = rotated ? dimension.height / dimension.width : dimension.width / dimension.height;
+    if (!this.setAspectFromMeta(rotated ? dimension.height / dimension.width : dimension.width / dimension.height,
+      this.vi.cid)) return;
+    this.updateIsLandscapeVertical();
+    this.updateLSVSize();
+    this.updateVideoSize();
+  }
+
+  /**
+   * 记录来自路由参数/详情的「显示尺寸」，返回是否真的改了 ar（决定要不要重算几何）。
+   * 只要拿到过显示尺寸就打标：之后解码尺寸想覆盖，必须先过 decoderAspectIgnored。
+   */
+  private setAspectFromMeta(aspect: number, cid: number): boolean {
+    if (!Number.isFinite(aspect) || aspect <= 0.05 || aspect >= 20) return false;
+    this.arFromMeta_ = true;
+    this.arMetaCid_ = cid;
+    if (Math.abs(aspect / this.ar - 1) <= 0.005) return false;
+    this.ar = aspect;
+    return true;
+  }
+
+  /**
+   * 解码/元数据尺寸是否该被忽略。
+   *
+   * 只在「显示尺寸仍对当前 cid 有效」时拦截：比例互为倒数（rotate=90）或只差取整
+   * 误差（编码补边）都属于同一条源，不该动已提交的画幅；差异真的很大（例如切集后
+   * 详情还没回来、旧 meta 已过期）则放行，让解码尺寸纠正。
+   */
+  private decoderAspectIgnored(aspect: number): boolean {
+    if (!this.arFromMeta_ || this.arMetaCid_ !== this.vi.cid) return false;
+    if (!Number.isFinite(aspect) || aspect <= 0) return false;
+    return Math.abs(aspect * this.ar - 1) <= 0.02 || Math.abs(aspect / this.ar - 1) <= 0.02;
+  }
+
+  /**
+   * 预热实例的画幅回灌。
+   *
+   * 池实例在 prepare 阶段就把 videoSizeChange 发完了（ff_ffplay.c 在 prepared 之前
+   * 用 codecpar 发一次、videothread 首帧 alloc 再发一次），take() 后监听被摘掉，
+   * 页面注册时已经收不到。这里用播放器当前尺寸（IJK 在 load 时按 DASH 元数据填好、
+   * 400 事件后更新；AVPlayer 在 prepared 后由系统填好），拿不到再用会话实测值。
+   */
+  private adoptWarmAspect(player: PlaybackPlayer, measured: number): void {
+    if (this.referenceFeed) return;   // 连刷有自己的画幅提交
+    const w: number = player.width || 0;
+    const h: number = player.height || 0;
+    let aspect: number = 0;
+    if (w > 0 && h > 0) aspect = w / h;
+    // 会话值是 videoSizeChange 实测，但初始值为 1（正方形）——不能拿它当"未知"用。
+    else if (Number.isFinite(measured) && Math.abs(measured - 1) > 0.001) aspect = measured;
+    if (!(aspect > 0.05 && aspect < 20)) return;
+    if (this.decoderAspectIgnored(aspect)) return;
+    if (Math.abs(aspect / this.ar - 1) <= 0.002) return;
+    logInfo(`[VideoPlayer] 预热画幅回灌 ${this.ar.toFixed(4)} -> ${aspect.toFixed(4)} (${w}x${h})`);
+    this.ar = aspect;
+    this.updateIsLandscapeVertical();
+    this.updateLSVSize();
+    this.updateVideoSize();
+  }
+
+  /** 用播放器当前尺寸补一次画幅：预热接管 / 浮窗恢复 / 切集后事件已过期的情况。 */
+  private syncAspectFromPlayer(player: PlaybackPlayer | null): void {
+    if (!player || this.referenceFeed) return;
+    const w: number = player.width || 0;
+    const h: number = player.height || 0;
+    if (!(w > 0 && h > 0)) return;
+    const aspect: number = w / h;
+    if (this.decoderAspectIgnored(aspect)) return;
+    if (Math.abs(aspect / this.ar - 1) <= 0.002) return;
+    logInfo(`[VideoPlayer] 播放器画幅快照 ${this.ar.toFixed(4)} -> ${aspect.toFixed(4)} (${w}x${h})`);
+    this.ar = aspect;
     this.updateIsLandscapeVertical();
     this.updateLSVSize();
     this.updateVideoSize();

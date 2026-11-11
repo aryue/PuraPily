@@ -41,7 +41,9 @@ const context = { exports: {}, logInfo() {}, logWarn() {}, logError() {},
   getRoomPlayInfo: async () => ({ qualities: [{ qn: 250, desc: '超清' }] }),
   getLiveStreamUrl: async id => ({ url: `stream-${id}`, currentQn: 250, acceptQuality: [250] }),
   fetchLiveRoomsByArea: async () => [],
-  LiveViewHelper: { updatePlayState() {} }
+  LiveViewHelper: { updatePlayState() {} },
+  // 进出前台会接管状态栏内容色（浅色/深色口径），本用例只验播放状态与画面帧。
+  StatusBarUtils: { setPlayerStatusBarContent() {}, restoreThemeStatusBarContent() {}, setSystemBars() {} }
 };
 vm.runInNewContext(ts.transpileModule(`export class Page {${methods}}`, {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 }
@@ -57,7 +59,7 @@ function page() {
     audioOutputMonitor: { bind() {} }, finishLevelGesture() {}, startLiveChat() {}, stopLiveChat() {}, applyStreamQuality() {}, setupLiveView_() {}, updateKeepScreen() {}, registerContinuation() {},
     onVideoPrepared() {}, onVideoStart() { this.isPlaying = true; }, onVideoPause() { this.isPlaying = false; },
     initPlayback: async () => { p.fallback = true; }, handlePlayError() { p.failed = true; },
-    getUIContext: () => ({ animateTo: (options, action) => { action(); options.onFinish?.(); } }) });
+    getUIContext: () => ({ getHostContext: () => ({}), animateTo: (options, action) => { action(); options.onFinish?.(); } }) });
   return p;
 }
 function flushTimers() { const pending = [...timers.values()]; timers.clear(); pending.forEach(cb => cb()); }
@@ -72,7 +74,7 @@ function tap(p) { p.onTD({ touches: [{ windowX: 200, windowY: 400 }] }); p.onTU(
   assert.equal(p.previewReady, false, 'playing is not proof of a rendered frame');
   await next.frame(); assert.equal(p.previewReady, true);
   let finish;
-  p.getUIContext = () => ({ animateTo: (options, action) => { action(); finish = options.onFinish; } });
+  p.getUIContext = () => ({ getHostContext: () => ({}), animateTo: (options, action) => { action(); finish = options.onFinish; } });
   const old = p.av, transition = p.switchRoom(1);
   assert.equal(p.roomId, 1); assert.equal(old.volume, 1);
   assert.equal(next.volume, 0, 'outgoing owns sound throughout drag and settle');

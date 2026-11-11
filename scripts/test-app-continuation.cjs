@@ -79,6 +79,12 @@ const ability = compile(read('entry/src/main/ets/entryability/EntryAbility.ets')
   if (name.endsWith('/PlayerService')) return { PlayerService: { getInstance: () => hosted, setAppContext() {} } };
   if (name.endsWith('/FloatingPiP')) return { FloatingPiP: { getInstance: () => ({ detach: async () => calls.push(['detach']) }) } };
   if (name.endsWith('/HighRefreshService')) return { HighRefreshService: { getInstance: () => ({ setMainWindow() {}, initialize() {} }) } };
+  if (name.endsWith('/QualityPreferenceService')) return { QualityPreferenceService: { getInstance: () => ({ initialize() {} }) } };
+  // 2.0.3 起启动时有静默更新检查，本用例只验接续，桩成「已是最新」即可。
+  if (name.endsWith('/UpdateChecker')) return { checkForUpdate: async () => ({ status: 0 }),
+    UpdateCheckStatus: { UP_TO_DATE: 0, UPDATE_AVAILABLE: 1, ERROR: 2 } };
+  // 字号/密度在 loadContent 之前由 AppScaleService 下发，本用例不关心，全部空实现。
+  if (name.endsWith('/AppScaleService')) return { AppScaleService: { watchSystemFontScale() {}, applyFromPrefsAtStartup: async () => {} } };
   if (name.endsWith('/ErrorLogCollector')) return { setErrorLogContext() {} };
   if (name.endsWith('/Logger')) return { errMsg: String };
   return {};
@@ -140,6 +146,8 @@ async function main() {
   assert.equal(a.pendingUri, null);
   assert.ok(calls.some(c => c[0] === 'restore'));
   await a.restoreContinuationWindow(stage);
+  // 字号/密度下发挪到了 loadContent 之前（多一拍 await），恢复回调晚一拍微任务才清 pendingContinuation。
+  await new Promise(resolve => setImmediate(resolve));
   assert.equal(a.pendingContinuation, null);
   assert.ok(calls.findIndex(c => c[0] === 'release') < calls.findIndex(c => c[0] === 'load'));
   const destination = calls.find(c => c[0] === 'push')[1];
@@ -148,6 +156,7 @@ async function main() {
   const pushes = calls.filter(c => c[0] === 'push').length;
   a.receiveContinuation({ parameters: { [key]: '{bad' } });
   await a.restoreContinuationWindow(stage);
+  await new Promise(resolve => setImmediate(resolve));
   assert.equal(calls.filter(c => c[0] === 'push').length, pushes);
   if (process.argv.includes('--compiled')) await testCompiledPages();
   console.log('PASS: continuation payload, privacy filtering, current-content capture, version guard and lifecycle restore');
