@@ -2,8 +2,9 @@ import type { PlaybackPlayer } from '../services/PlaybackPlayer';
 import { audio } from '@kit.AudioKit';
 import { media } from '@kit.MediaKit';
 import { manager, remoteDevice, constant } from '@kit.NearLinkKit';
-import { connection } from '@kit.ConnectivityKit';
+import { a2dp, connection } from '@kit.ConnectivityKit';
 import { abilityAccessCtrl, common, Permissions } from '@kit.AbilityKit';
+import { logInfo } from './Logger';
 import { headphoneIconName } from './HeadphoneIcons';
 
 // Ask only when a selected wireless route needs metadata, at most once per process.
@@ -32,16 +33,45 @@ function selectedNearLinkName(route: audio.AudioDeviceDescriptor): string {
   return candidates.length === 1 ? candidates[0].name : '';
 }
 
+/**
+ * 蓝牙路由的 name/address 常同时为空（真机实测），耳机名在 dmDeviceInfo 里——
+ * 它是运行时字段（SDK typings 无声明）且是纯字符串（仅蓝牙有值，星闪为空串）。
+ */
+function descriptorBluetoothName(device: audio.AudioDeviceDescriptor): string {
+  if (device.name) return device.name;
+  try {
+    const dm = (device as object as Record<string, Object>)['dmDeviceInfo'];
+    if (typeof dm === 'string') return dm;
+  } catch (_) {}
+  return '';
+}
+
+/**
+ * 最后一层兜底：播放流式 descriptor 会把蓝牙设备隐藏成 name/address/dmDeviceInfo 全空
+ * （真机实测，与 preferred 查询不同，后者 dmDeviceInfo 有名字）。此时若 A2DP 已连接
+ * 设备唯一，按它反查名字——与 AudioOutputLab 实验页同源旁证。
+ */
+function uniqueA2dpPeerName(): string {
+  try {
+    const connected = a2dp.createA2dpSrcProfile().getConnectedDevices();
+    if (connected.length !== 1) return '';
+    return connection.getRemoteDeviceName(connected[0]);
+  } catch (_) { return ''; }
+}
+
 export function outputHeadphoneIcon(devices: audio.AudioDeviceDescriptors): string {
   const selected = devices.filter((device: audio.AudioDeviceDescriptor) => isHeadphoneOutput([device]));
   if (selected.length !== 1) return 'headphones_fill';
   const route = selected[0];
   // NearLink audio descriptors may contain the phone's displayName, not the peer's name.
   if (route.deviceType === audio.DeviceType.NEARLINK) return headphoneIconName(selectedNearLinkName(route));
-  let name = route.name || '';
-  if (!name && route.address && (route.deviceType === audio.DeviceType.BLUETOOTH_A2DP ||
+  let name = descriptorBluetoothName(route);
+  if (!name && (route.deviceType === audio.DeviceType.BLUETOOTH_A2DP ||
     route.deviceType === audio.DeviceType.BLUETOOTH_SCO)) {
-    try { name = connection.getRemoteDeviceName(route.address); } catch (_) {}
+    if (route.address) {
+      try { name = connection.getRemoteDeviceName(route.address); } catch (_) {}
+    }
+    if (!name) name = uniqueA2dpPeerName();
   }
   return headphoneIconName(name);
 }
@@ -93,14 +123,19 @@ export class PlaybackAudioOutputMonitor {
 
   private update(devices: audio.AudioDeviceDescriptors): void {
     this.devices = devices;
+    // 联调诊断：verboseLog on 时打印 descriptor 原始字段与解析结果，定位蓝牙名字来源。
+    logInfo('AudioOutput update devices=', JSON.stringify(devices),
+      '→ icon=', outputHeadphoneIcon(devices));
     this.publish();
     const nearlink = devices.some((device: audio.AudioDeviceDescriptor) => device.deviceType === audio.DeviceType.NEARLINK);
     if (nearlink) {
       this.requestMetadata('ohos.permission.ACCESS_NEARLINK');
       this.startMetadataPoll(true);
     } else {
-      const namelessBluetooth = devices.some((device: audio.AudioDeviceDescriptor) => !device.name &&
-        (device.deviceType === audio.DeviceType.BLUETOOTH_A2DP || device.deviceType === audio.DeviceType.BLUETOOTH_SCO));
+      // dmDeviceInfo 已带名字的不算无名字（免权限申请与轮询）；name/address/dmDeviceInfo 全空才需要兜底解析。
+      const namelessBluetooth = devices.some((device: audio.AudioDeviceDescriptor) =>
+        (device.deviceType === audio.DeviceType.BLUETOOTH_A2DP ||
+          device.deviceType === audio.DeviceType.BLUETOOTH_SCO) && !descriptorBluetoothName(device));
       if (namelessBluetooth) {
         this.requestMetadata('ohos.permission.ACCESS_BLUETOOTH');
       }
@@ -159,6 +194,7 @@ export class PlaybackAudioOutputMonitor {
     if (this.hasActualRoute) return;
     try {
       const rendererInfo: audio.AudioRendererInfo = player.audioRendererInfo ?? { usage: fallbackUsage, rendererFlags: 0 };
+      logInfo('AudioOutput bind seed usage=', String(rendererInfo.usage), ' hasActualRoute=', String(this.hasActualRoute));
       const devices: audio.AudioDeviceDescriptors = audio.getAudioManager().getRoutingManager()
         .getPreferredOutputDeviceForRendererInfoSync(rendererInfo);
       if (this.player === player && !this.hasActualRoute) this.update(devices);

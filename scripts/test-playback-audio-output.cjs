@@ -43,9 +43,16 @@ const remoteDevice = { createRemoteDevice: address => {
 const timers = new Map(); let timerId = 0;
 let resolvePermission, permissionRequests = 0;
 let remoteName = 'FreeBuds Studio', remoteNameFailure = false;
+let a2dpConnectedDevices = [], a2dpFailure = false;
+const a2dpProfile = { getConnectedDevices: () => {
+  if (a2dpFailure) throw Error('a2dp query failed');
+  return a2dpConnectedDevices;
+}, getPlayingState: () => 0 };
 const context = { exports: {}, setInterval: fn => { timers.set(++timerId, fn); return timerId; },
   clearInterval: id => timers.delete(id), require: name => {
     if (name.includes('HeadphoneIcons')) return iconContext.exports;
+    if (name.includes('Logger')) return {
+      logInfo: () => {}, logWarn: () => {}, logError: () => {}, setVerboseLog: () => {} };
     if (name.includes('nearlink.manager')) return { default: manager };
     if (name.includes('nearlink.remoteDevice')) return { default: remoteDevice };
     if (name.includes('nearlink.constant')) return { default: { ConnectionState: { STATE_CONNECTED: 1 } } };
@@ -53,6 +60,8 @@ const context = { exports: {}, setInterval: fn => { timers.set(++timerId, fn); r
       if (remoteNameFailure) throw Error('bluetooth stack not ready');
       return remoteName;
     } } };
+    if (name.includes('bluetooth.a2dp')) return { default: { createA2dpSrcProfile: () => a2dpProfile,
+      PlayingState: { STATE_PLAYING: 1, STATE_NOT_PLAYING: 0 } } };
     if (name.includes('abilityAccessCtrl')) return { default: { createAtManager: () => ({
       requestPermissionsFromUser: () => { permissionRequests++; return new Promise(resolve => { resolvePermission = resolve; }); }
     }) } };
@@ -77,6 +86,26 @@ peers = [peer]; peerFailure = true;
 assert.equal(outputHeadphoneIcon(nearlinkRoute), 'headphones_fill'); peerFailure = false;
 assert.equal(outputHeadphoneIcon([{ deviceType: 8, name: 'FreeArc' }]), 'earphone_16661');
 assert.equal(outputHeadphoneIcon([{ deviceType: 8, name: '', address: peer.address }]), 'earphone_roc');
+// 真机形态：蓝牙路由 name/address 同时为空，耳机名只在 dmDeviceInfo（纯字符串）里。
+remoteNameFailure = true;
+assert.equal(outputHeadphoneIcon([{ deviceType: 8, name: '', address: '',
+  dmDeviceInfo: 'HUAWEI FreeBuds Pro 5' }]), 'earphone_16643', 'dmDeviceInfo string carries the name when name/address are empty');
+assert.equal(outputHeadphoneIcon([{ deviceType: 8, name: '', address: '',
+  dmDeviceInfo: '' }]), 'headphones_fill', 'empty dmDeviceInfo without address stays generic');
+remoteNameFailure = false;
+assert.equal(outputHeadphoneIcon([{ deviceType: 8, name: '', address: peer.address,
+  dmDeviceInfo: '' }]), 'earphone_roc', 'empty dmDeviceInfo still falls back to connection query');
+// 真机播放流形态：蓝牙设备 name/address/dmDeviceInfo 全空；唯一 A2DP 已连接设备反查名字。
+a2dpConnectedDevices = [peer.address];
+assert.equal(outputHeadphoneIcon([{ deviceType: 8, name: '', address: '' }]), 'earphone_roc',
+  'nameless stream route resolves via the unique connected A2DP peer');
+a2dpConnectedDevices = [peer.address, 'AA:BB:CC:DD:EE:02'];
+assert.equal(outputHeadphoneIcon([{ deviceType: 8, name: '', address: '' }]), 'headphones_fill',
+  'ambiguous A2DP peers keep the generic icon');
+a2dpFailure = true; a2dpConnectedDevices = [peer.address];
+assert.equal(outputHeadphoneIcon([{ deviceType: 8, name: '', address: '' }]), 'headphones_fill',
+  'a2dp query failure keeps the generic icon');
+a2dpFailure = false; a2dpConnectedDevices = [];
 assert.equal(isHeadphoneOutput([]), false);
 assert.equal(isHeadphoneOutput(devices(DeviceType.SPEAKER)), false);
 for (const type of [3,4,7,8,22,31]) assert.equal(isHeadphoneOutput(devices(type)), true);
@@ -146,6 +175,16 @@ assert.equal(timers.size, 0);
   await Promise.resolve(); await Promise.resolve();
   assert.equal(values.length, count, 'permission callback cannot update disposed player');
   assert.equal(timers.size, 0);
+  // 真机形态：dmDeviceInfo 带名字 → 立即解析具体图标，不申请权限也不开重试轮询。
+  route = [{ deviceType: 8, name: '', address: '', dmDeviceInfo: 'HUAWEI FreeBuds Pro 5' }];
+  remoteNameFailure = true;
+  const dmMonitor = new PlaybackAudioOutputMonitor((...args) => values.push(args), () => ({}));
+  dmMonitor.bind(player(4), 4);
+  assert.equal(permissionRequests, 1, 'dmDeviceInfo name needs no ACCESS_BLUETOOTH prompt');
+  assert.equal(values.at(-1)[1], 'earphone_16643', 'dmDeviceInfo name resolves immediately');
+  assert.equal(timers.size, 0, 'dmDeviceInfo name needs no retry polling');
+  dmMonitor.dispose();
+  remoteNameFailure = false;
   // 冷启动蓝牙栈晚于首次 publish 就绪：无名字蓝牙先给通用图标，周期重试解析成功即停。
   route = [{ deviceType: 8, name: '', address: 'AA:BB:CC:DD:EE:09' }];
   remoteNameFailure = true;

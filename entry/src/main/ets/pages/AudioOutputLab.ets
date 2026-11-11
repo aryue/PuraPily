@@ -1,5 +1,6 @@
 import { audio } from '@kit.AudioKit';
 import { manager, remoteDevice, constant } from '@kit.NearLinkKit';
+import { a2dp, connection, constant as btConstant } from '@kit.ConnectivityKit';
 import { abilityAccessCtrl, common } from '@kit.AbilityKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { LengthMetrics } from '@kit.ArkUI';
@@ -19,6 +20,22 @@ interface NearLinkLabDevice {
 
 interface NearLinkLabSnapshot {
   devices: NearLinkLabDevice[];
+  complete: boolean;
+  text: string;
+}
+
+interface BluetoothLabDevice {
+  address: string;
+  name: string;
+  majorClass: number;
+  classOfDevice: number;
+  a2dpConnected: boolean;
+  playing: boolean;
+  details: string;
+}
+
+interface BluetoothLabSnapshot {
+  devices: BluetoothLabDevice[];
   complete: boolean;
   text: string;
 }
@@ -59,6 +76,8 @@ struct AudioOutputLab {
   @State private updated: string = '';
   @State private nearLinkDevices: string = '请点击“授权读取星闪信息”';
   @State private nearLinkPermission: string = '星闪信息需要 ACCESS_NEARLINK 权限，与蓝牙权限独立';
+  @State private btDevices: string = '请点击“授权读取蓝牙信息”';
+  @State private btMatching: string = '等待对照';
   @State private matching: string = '等待对照';
   private timer: number = -1;
   private active: boolean = false;
@@ -122,6 +141,72 @@ struct AudioOutputLab {
     }).join('\n\n');
   }
 
+  private readBluetooth(): BluetoothLabSnapshot {
+    const devices: BluetoothLabDevice[] = [];
+    let complete: boolean = true;
+    let profile: a2dp.A2dpSourceProfile | null = null;
+    const connected: Set<string> = new Set<string>();
+    try {
+      profile = a2dp.createA2dpSrcProfile();
+      for (const id of profile.getConnectedDevices()) connected.add(id);
+    } catch (error) {
+      profile = null;
+      complete = false;
+    }
+    try {
+      for (const address of connection.getPairedDevices()) {
+        let name: string = '';
+        let majorClass: number = -1;
+        let classOfDevice: number = -1;
+        const lines: string[] = [`address=${address}`];
+        try { name = connection.getRemoteDeviceName(address); lines.push(`name=${JSON.stringify(name)}`); }
+        catch (error) { complete = false; lines.push(`name: ${this.errorText(error as BusinessError)}`); }
+        try {
+          const cls = connection.getRemoteDeviceClass(address);
+          majorClass = cls.majorClass;
+          classOfDevice = cls.classOfDevice;
+          lines.push(`class=${classOfDevice} (0x${classOfDevice.toString(16)}) ` +
+            `major=0x${majorClass.toString(16)} ${btConstant.MajorClass[majorClass] ?? ''}`);
+        } catch (error) { complete = false; lines.push(`class: ${this.errorText(error as BusinessError)}`); }
+        const a2dpConnected: boolean = connected.has(address);
+        let playing: boolean = false;
+        if (a2dpConnected && profile) {
+          try { playing = profile.getPlayingState(address) === a2dp.PlayingState.STATE_PLAYING; }
+          catch (error) { lines.push(`playing: ${this.errorText(error as BusinessError)}`); }
+        }
+        lines.push(`a2dp=${a2dpConnected ? '已连接' : '未连接'}${a2dpConnected ? (playing ? '，正在播放' : '，未在播放') : ''}`);
+        devices.push({ address: address, name: name, majorClass: majorClass, classOfDevice: classOfDevice,
+          a2dpConnected: a2dpConnected, playing: playing, details: lines.join('\n') });
+      }
+      return { devices: devices, complete: complete,
+        text: devices.length === 0 ? '蓝牙已配对设备列表为空' : devices.map((device: BluetoothLabDevice) => device.details).join('\n\n') };
+    } catch (error) {
+      return { devices: devices, complete: false,
+        text: `蓝牙读取失败（蓝牙未开机或无 ACCESS_BLUETOOTH 权限时常见）：${this.errorText(error as BusinessError)}` };
+    }
+  }
+
+  private matchBluetooth(outputs: audio.AudioDeviceDescriptors, snapshot: BluetoothLabSnapshot): string {
+    const routes = outputs.filter((device: audio.AudioDeviceDescriptor) =>
+      device.deviceType === audio.DeviceType.BLUETOOTH_A2DP || device.deviceType === audio.DeviceType.BLUETOOTH_SCO);
+    if (routes.length === 0) return '此来源未返回 BLUETOOTH 输出，不推测蓝牙设备。';
+    if (!snapshot.complete) return '蓝牙设备信息读取不完整，暂不推测匹配；请检查蓝牙开关、授权或字段错误。';
+    const candidates = snapshot.devices.filter((device: BluetoothLabDevice) => device.a2dpConnected);
+    return routes.map((route: audio.AudioDeviceDescriptor): string => {
+      const sameAddress = candidates.filter((device: BluetoothLabDevice) =>
+        route.address.length > 0 && device.address.toUpperCase() === route.address.toUpperCase());
+      if (sameAddress.length === 1) return `音频 id=${route.id}：地址一致 → ${sameAddress[0].name || '未返回名称'}` +
+        `${sameAddress[0].playing ? '（A2DP 正在播放）' : '（A2DP 未在播放）'}\n` +
+        '两侧地址一致；A2DP 播放状态是比星闪多一层的旁证，仍需对照真实输出切换验证。';
+      if (route.address.length > 0) return `音频 id=${route.id}：未找到唯一地址一致的 A2DP 已连接设备，不推测。`;
+      if (candidates.length === 1) return `音频 id=${route.id}：推测匹配 → ${candidates[0].name || '未返回名称'}\n` +
+        `候选地址=${candidates[0].address}${candidates[0].playing ? '，A2DP 正在播放' : '，A2DP 未在播放'}\n` +
+        '依据：BLUETOOTH 输出 + 唯一 A2DP 已连接设备；音频地址为空，未经精确对应。';
+      return `音频 id=${route.id}：未确定，A2DP 已连接候选 ${candidates.length} 个。\n` +
+        candidates.map((device: BluetoothLabDevice) => `${device.name || '未返回名称'} · ${device.address}`).join('\n');
+    }).join('\n\n');
+  }
+
   private errorText(error: BusinessError): string {
     return `错误 ${error.code ?? '未知'}：${error.message ?? String(error)}`;
   }
@@ -174,17 +259,23 @@ struct AudioOutputLab {
     try {
       const snapshot = this.readNearLink();
       this.nearLinkDevices = snapshot.text;
+      const btSnapshot = this.readBluetooth();
+      this.btDevices = btSnapshot.text;
       const comparisons: string[] = [];
+      const btComparisons: string[] = [];
       try {
         const preferred = audio.getAudioManager().getRoutingManager()
           .getPreferredOutputDeviceForRendererInfoSync({ usage: audio.StreamUsage.STREAM_USAGE_MOVIE, rendererFlags: 0 });
         this.preferred = this.deviceText(preferred);
         comparisons.push(`媒体首选路由（不是实际播放证明）\n${this.matchNearLink(preferred, snapshot)}`);
+        btComparisons.push(`媒体首选路由（不是实际播放证明）\n${this.matchBluetooth(preferred, btSnapshot)}`);
       } catch (error) {
         this.preferred = this.errorText(error as BusinessError);
         comparisons.push(`媒体首选路由读取失败：${this.preferred}`);
+        btComparisons.push(`媒体首选路由读取失败：${this.preferred}`);
       }
       this.matching = comparisons.join('\n\n');
+      this.btMatching = btComparisons.join('\n\n');
       try {
         this.available = this.deviceText(audio.getAudioManager().getRoutingManager()
           .getDevicesSync(audio.DeviceFlag.OUTPUT_DEVICES_FLAG));
@@ -196,11 +287,16 @@ struct AudioOutputLab {
           infos.map((info: audio.AudioRendererChangeInfo): string =>
             `streamId=${info.streamId}\nrendererInfo=${JSON.stringify(info.rendererInfo)}\n` +
             this.deviceText(info.deviceDescriptors)).join('\n\n');
-        if (infos.length === 0) comparisons.push('没有可见播放流，无法核对实际播放输出。');
+        if (infos.length === 0) {
+          comparisons.push('没有可见播放流，无法核对实际播放输出。');
+          btComparisons.push('没有可见播放流，无法核对实际播放输出。');
+        }
         for (const info of infos) {
           comparisons.push(`播放流 ${info.streamId}（归属、播放状态未确认）\n${this.matchNearLink(info.deviceDescriptors, snapshot)}`);
+          btComparisons.push(`播放流 ${info.streamId}（归属、播放状态未确认）\n${this.matchBluetooth(info.deviceDescriptors, btSnapshot)}`);
         }
         this.matching = comparisons.join('\n\n');
+        this.btMatching = btComparisons.join('\n\n');
       } catch (error) {
         if (this.active && generation === this.generation) this.streams = this.errorText(error as BusinessError);
       }
@@ -250,6 +346,8 @@ struct AudioOutputLab {
           Text(this.nearLinkPermission).fontSize(12).fontColor('#8E8E93').width('100%')
           AudioOutputLabSection({ title: '路由与星闪设备对照 · 实验推测', value: this.matching })
           AudioOutputLabSection({ title: '星闪已配对设备 · 名称／类别／连接／型号', value: this.nearLinkDevices })
+          AudioOutputLabSection({ title: '路由与蓝牙设备对照 · 实验推测', value: this.btMatching })
+          AudioOutputLabSection({ title: '蓝牙已配对设备 · 名称／类别／A2DP／播放', value: this.btDevices })
           AudioOutputLabSection({ title: '星闪类型声明', value: this.compatibility })
           AudioOutputLabSection({ title: '媒体首选输出 · MOVIE', value: this.preferred })
           AudioOutputLabSection({ title: '播放流及其实际输出设备', value: this.streams })

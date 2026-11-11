@@ -36,6 +36,7 @@ const TAG = 'EntryAbility';
 export default class EntryAbility extends UIAbility {
   private pendingUri: string | null = null;
   private pendingIjkLab: boolean = false;
+  private pendingAudioLab: boolean = false;
   private pendingSurfaceLab: string = '';
   private pendingContinuation: ContinuationSnapshot | null = null;
   /** --ps cellularPrefetch 只覆盖本次启动，不写偏好文件；设置页里的开关才是持久值。 */
@@ -169,6 +170,10 @@ export default class EntryAbility extends UIAbility {
     if (want.parameters?.['ijkLab'] !== undefined) {
       this.pendingIjkLab = true;
     }
+    // 联调入口：--ps audioLab true 冷启动直达音频输出测试页。aa start 传的是字符串，不能用 === true 判断。
+    if (String(want.parameters?.['audioLab']) === 'true') {
+      this.pendingAudioLab = true;
+    }
     // 联调开关：aa start --ps prewarmSeek 30000 强制按该时间点预热，用于验证 sidx 段选择。
     if (want.parameters?.['prewarmSeek'] !== undefined) {
       const ms = Math.max(0, Math.round(Number(String(want.parameters['prewarmSeek'])) || 0));
@@ -281,6 +286,11 @@ export default class EntryAbility extends UIAbility {
     }
     if (want.parameters?.['levelBarLab'] === true) {
       this.context.windowStage.getMainWindowSync().getUIContext().getRouter().pushUrl({ url: 'pages/LevelBarLab' });
+      return;
+    }
+    // 联调入口：aa start --ps audioLab true 直达音频输出测试页（路由与星闪/蓝牙设备对照）。
+    if (String(want.parameters?.['audioLab']) === 'true') {
+      this.context.windowStage.getMainWindowSync().getUIContext().getRouter().pushUrl({ url: 'pages/AudioOutputLab' });
       return;
     }
     if (want.parameters?.['surfaceLab'] !== undefined) {
@@ -554,6 +564,17 @@ export default class EntryAbility extends UIAbility {
         const labBvid: string = this.pendingSurfaceLab;
         this.pendingSurfaceLab = '';
         setTimeout(() => { this.openSurfaceLab(labBvid); }, 700);
+      }
+
+      if (this.pendingAudioLab) {
+        this.pendingAudioLab = false;
+        setTimeout(() => {
+          windowStage.getMainWindowSync().getUIContext().getRouter()
+            .pushUrl({ url: 'pages/AudioOutputLab' })
+            .catch((error: BusinessError) => {
+              hilog.error(DOMAIN, TAG, 'audio lab navigation failed: %{public}s', errMsg(error));
+            });
+        }, 700);
       }
     });
   }

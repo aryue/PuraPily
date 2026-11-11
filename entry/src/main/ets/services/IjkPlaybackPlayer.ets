@@ -46,6 +46,13 @@ export class IjkPlaybackPlayer implements PlaybackPlayer {
   private streamManager: audio.AudioStreamManager | null = null;
   private rendererChanged = (renderers: audio.AudioRendererChangeInfoArray): void => {
     if (this.state === 'released') return;
+    // 联调诊断：verboseLog on 时打印系统里全部渲染流与设备，核对「基线差集猜流」是否命中真正出声的流。
+    const dump: string = renderers.map((item: audio.AudioRendererChangeInfo): string => {
+      const devs: string = item.deviceDescriptors.map((d: audio.AudioDeviceDescriptor): string =>
+        `t${d.deviceType}/id${d.id}/${String((d as object as Record<string, Object>)['dmDeviceInfo'] ?? '')}`).join('|');
+      return `${item.streamId}(u${item.rendererInfo.usage}): ${devs}`;
+    }).join(' ; ');
+    logInfo('[IJK] rendererChange picked=', this.rendererId, ' all=', dump);
     if (this.rendererId < 0) {
       const added = renderers.filter(item => !this.rendererBaseline.includes(item.streamId));
       if (added.length === 1) this.rendererId = added[0].streamId;

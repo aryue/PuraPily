@@ -9,6 +9,12 @@ export function clampWallpaperScrim(value: number): number {
   return Number.isFinite(value) ? Math.max(0, Math.min(60, Math.round(value))) : 0;
 }
 
+/** 壁纸不透明度下限 20%：再低就等同于「没有壁纸」，滑条也不允许拖到 0。 */
+export const WALLPAPER_OPACITY_MIN: number = 0.2;
+export function clampWallpaperOpacity(value: number): number {
+  return Number.isFinite(value) ? Math.max(WALLPAPER_OPACITY_MIN, Math.min(1, value)) : 0.7;
+}
+
 export function wallpaperEndpoint(source: string, portrait: boolean): string {
   if (source === 'picsum') return portrait ? 'https://picsum.photos/1080/1920' : 'https://picsum.photos/1920/1080';
   if (source === 'pipw') return portrait ? 'https://img-api.pipw.top/?phone=true' : 'https://img-api.pipw.top';
@@ -94,7 +100,7 @@ export class PageWallpaperService {
     AppStorage.setOrCreate('pageWallpaperLocal', local);
     AppStorage.setOrCreate('pageWallpaperSource', ['pipw', 'picsum', 'local'].includes(source) ? source : 'none');
     const opacity = await this.pref.get('opacity', 0.7) as number;
-    AppStorage.setOrCreate('pageWallpaperOpacity', Number.isFinite(opacity) ? Math.max(0.2, Math.min(1, opacity)) : 0.7);
+    AppStorage.setOrCreate('pageWallpaperOpacity', clampWallpaperOpacity(opacity));
     const scrim = await this.pref.get('scrim', 0) as number;
     AppStorage.setOrCreate('pageWallpaperScrim', clampWallpaperScrim(scrim));
     AppStorage.setOrCreate('pageWallpaperEnabled', false);
@@ -153,10 +159,21 @@ export class PageWallpaperService {
       this.publish(source, source === 'local' || portrait ? path : other, source === 'local' || !portrait ? path : other);
     } finally { this.busy = false; AppStorage.setOrCreate('pageWallpaperBusy', false); }
   }
+  /**
+   * 拖动预览：只改 AppStorage（PageWallpaper 的 StorageLink 立即重绘整页壁纸），**不落盘**。
+   * 松手（End/Click）再走 setOpacity/setScrim 持久化，避免每帧 flush 一次 preferences。
+   */
+  previewOpacity(value: number): void {
+    AppStorage.setOrCreate('pageWallpaperOpacity', clampWallpaperOpacity(value));
+  }
+  previewScrim(value: number): void {
+    AppStorage.setOrCreate('pageWallpaperScrim', clampWallpaperScrim(value));
+  }
   async setOpacity(value: number): Promise<void> {
+    const opacity = clampWallpaperOpacity(value);
+    AppStorage.setOrCreate('pageWallpaperOpacity', opacity);
     if (!this.pref) return;
-    await this.pref.put('opacity', value); await this.pref.flush();
-    AppStorage.setOrCreate('pageWallpaperOpacity', value);
+    await this.pref.put('opacity', opacity); await this.pref.flush();
   }
   /** 壁纸遮罩强度（0–60），深浅色共用；持久化在 page_wallpaper 的 scrim 键。 */
   async setScrim(value: number): Promise<void> {

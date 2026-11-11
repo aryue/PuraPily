@@ -4,7 +4,7 @@ import { pageBackgroundColor, secondaryTextColor, tertiaryTextColor } from '../u
 import { PageHeader } from '../components/PageHeader';
 import { PageSurface } from '../components/PageSurface';
 import { NativeGlassCapsule } from '../components/NativeGlassCapsule';
-import { PageWallpaperService } from '../services/PageWallpaperService';
+import { PageWallpaperService, clampWallpaperOpacity, clampWallpaperScrim } from '../services/PageWallpaperService';
 // ProfilePage.ets - 个人中心与当前设置页。
 import { deviceInfo } from '@kit.BasicServicesKit';
 import { common } from '@kit.AbilityKit';
@@ -36,6 +36,9 @@ export struct ProfilePage {
   @StorageLink('pageWallpaperBusy') pageWallpaperBusy: boolean = false;
   @StorageLink('pageWallpaperOpacity') pageWallpaperOpacity: number = 0.7;
   @StorageLink('pageWallpaperScrim') pageWallpaperScrim: number = 0;
+  /** 壁纸滑条草稿（百分比）：拖动中即时生效（只改 AppStorage），松手才落盘。 */
+  @State wallpaperOpacityDraft: number = 70;
+  @State wallpaperScrimDraft: number = 0;
   @StorageLink('isLandscape') wallpaperLandscape: boolean = false;
   @StorageLink('playbackKernel') playbackKernel: string = 'system';
   @State cacheSizeText: string = '计算中…';
@@ -106,6 +109,9 @@ export struct ProfilePage {
     this.appFontScale = fontSetting.scale;
     // 滑条草稿与「当前真实生效的字号」对齐：跟随系统时是系统倍率，不是上次自定义值
     this.fontScaleDraft = AppScaleService.entryCustomScale(fontSetting.followSystem, fontSetting.scale);
+    // 壁纸两条滑条的草稿对齐已生效值（服务写入 AppStorage 前已夹过区间）
+    this.wallpaperOpacityDraft = Math.round(clampWallpaperOpacity(this.pageWallpaperOpacity) * 100);
+    this.wallpaperScrimDraft = clampWallpaperScrim(this.pageWallpaperScrim);
     // 进设置页时重算一次「当前链路 → 生效画质」：后台期间换过网、事件没送到时靠这一次兜底，
     // 顺带刷新「当前网络」那一行的判定文案。
     QualityPreferenceService.getInstance().refresh('settings-page');
@@ -824,23 +830,34 @@ export struct ProfilePage {
               .id('setting-wallpaper-refresh').onClick(() => this.applyPageWallpaper(this.pageWallpaperSource, true))
             }
             if (this.pageWallpaperEnabled) {
+              // 两条滑条都实时生效：Moving 只改 AppStorage（PageWallpaper 立即重绘背景），
+              // End/Click 才落盘。滑条值绑草稿而不是 StorageLink，避免「写回 0.55 → 读回 55.0000001」
+              // 让滑块在拖动中自己抖一档。
               Column() {
-                Text('壁纸透明度 ' + Math.round(this.pageWallpaperOpacity * 100) + '%')
+                Text('壁纸透明度 ' + Math.round(this.wallpaperOpacityDraft) + '%')
                 .fontSize(13).fontColor(this.isDarkMode ? '#E7E9EB' : '#18191C').width('100%')
-                Slider({ value: this.pageWallpaperOpacity * 100, min: 20, max: 100, step: 5 })
-                .selectedColor('#D34E7E').onChange((value: number, mode: SliderChangeMode) => {
+                Slider({ value: this.wallpaperOpacityDraft, min: 20, max: 100, step: 5 })
+                .selectedColor('#D34E7E').id('setting-wallpaper-opacity')
+                .onChange((value: number, mode: SliderChangeMode) => {
+                  this.wallpaperOpacityDraft = Math.round(value);
                   if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
-                    PageWallpaperService.getInstance().setOpacity(value / 100).catch(() => {});
+                    PageWallpaperService.getInstance().setOpacity(this.wallpaperOpacityDraft / 100).catch(() => {});
+                  } else {
+                    PageWallpaperService.getInstance().previewOpacity(this.wallpaperOpacityDraft / 100);
                   }
                 })
               }.width('100%').padding({ left: 16, right: 16 })
               Column() {
-                Text('壁纸遮罩 ' + Math.round(this.pageWallpaperScrim) + '%')
+                Text('壁纸遮罩 ' + Math.round(this.wallpaperScrimDraft) + '%')
                   .fontSize(13).fontColor(this.isDarkMode ? '#E7E9EB' : '#18191C').width('100%')
-                Slider({ value: this.pageWallpaperScrim, min: 0, max: 60, step: 1 })
-                  .selectedColor('#D34E7E').onChange((value: number, mode: SliderChangeMode) => {
+                Slider({ value: this.wallpaperScrimDraft, min: 0, max: 60, step: 1 })
+                  .selectedColor('#D34E7E').id('setting-wallpaper-scrim')
+                  .onChange((value: number, mode: SliderChangeMode) => {
+                    this.wallpaperScrimDraft = Math.round(value);
                     if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
-                      PageWallpaperService.getInstance().setScrim(value).catch(() => {});
+                      PageWallpaperService.getInstance().setScrim(this.wallpaperScrimDraft).catch(() => {});
+                    } else {
+                      PageWallpaperService.getInstance().previewScrim(this.wallpaperScrimDraft);
                     }
                   })
               }.width('100%').padding({ left: 16, right: 16, bottom: 10 })
