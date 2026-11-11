@@ -147,8 +147,11 @@ export class DanmakuRenderer {
         if (this.isInViewport(item)) {
           this.drawDanmakuOptimized(item)
           scrollCount++
-        } else {
-          // 完全移出屏幕的弹幕标记为不可见
+        } else if (item.x + item.width < 0) {
+          // ⭐ 只有【真正出屏】（尾巴越过左边界）才冻结。
+          //   右侧（x > canvasWidth）不能冻结：画布变窄 / 刚分配时它还在右边界外，
+          //   一旦置 visible=false，渲染循环会连"推进位置"一起跳过，它就永久卡在那里
+          //   （控制器虽然把它保留在可见列表里，也只能等下一次时间回调才把 visible 复位）。
           item.visible = false
         }
       } else {
@@ -201,7 +204,11 @@ export class DanmakuRenderer {
     // 计算speed（如果TrackManager没有设置）
     // 7000 = 官方滚动穿越时长默认 7 秒（与 DanmakuTrackManager.DANMAKU_SCROLL_DURATION 一致）
     if (item.speed === 0) {
-      const duration = item.duration > 0 ? item.duration : 7000
+      const base = (typeof this.config.scrollDuration === 'number' && this.config.scrollDuration >= 1000)
+        ? this.config.scrollDuration : 7000
+      const rate = this.config.speed > 0 ? this.config.speed : 1
+      // duration 走的是"墙钟毫秒"口径（speed 已含倍速），这里的兜底也换算成墙钟
+      const duration = item.duration > 0 ? item.duration : base / rate
       item.speed = (this.canvasWidth + item.width) / duration
     }
     

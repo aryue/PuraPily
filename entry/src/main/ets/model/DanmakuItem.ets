@@ -108,6 +108,13 @@ export class DanmakuItem {
   //   ⚠️ seek / 重置时会整体清掉（见 DanmakuController.resetScrollingState）。
   missed: boolean = false
 
+  // ⭐ 实际上屏时间（播放时间轴毫秒）：轨道分配成功、x 被摆到入口位置的那一刻。
+  //   为什么不能用 `time` 当生存期锚点：`time` 是弹幕在视频里的打卡时间，而它真正上屏
+  //   要等下一次时间回调（`timeUpdate` 约 1Hz，还可能撞上 `INJECT_GRACE_MS` 容差），
+  //   两者差值几百毫秒到 1 秒 —— 用 `time` 算生存期，每条弹幕都会凭空少活这一段，
+  //   叠加窗口上限后就会在屏幕中间被整条抹掉。
+  shownAt: number = 0
+
   // 高级弹幕属性
   isAdvanced: boolean = false       // 是否为高级弹幕
   duration: number = 0              // 持续时间（毫秒）

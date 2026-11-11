@@ -54,7 +54,7 @@ export class DanmakuController {
   private currentTime: number = 0                  // 当前播放时间（毫秒）
   private videoDuration: number = 0                // 视频总时长（毫秒）
   private isPlaying: boolean = false               // 是否播放中
-  private canvasWidth: number = 0                  // 弹幕画布宽度（剔除已出屏弹幕时需要）
+  private canvasWidth: number = 0                  // 弹幕画布宽度（画布/轨道重算时同步；出屏判定已改为纯位置口径，见 scrollingGone）
 
   // 帧间增量时间：每帧按真实时间差推进弹幕位置，独立于currentTime的更新频率
   private lastFrameTimestamp: number = 0
@@ -460,6 +460,79 @@ export class DanmakuController {
     }
   }
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // ⭐ 可见性判定的纯函数区（无状态、不碰 this，回归脚本直接切片执行：
+  //    scripts/test-danmaku-exit-authority.cjs）
+  //
+  //    为什么要把它们抠出来：弹幕"提前消失"类 bug 的根因几乎都在口径上
+  //    （播放时间 vs 墙钟时间、窗口 vs 生存期），必须能用数值断言锁死。
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * 候选窗口（播放时间轴毫秒）。
+   *
+   * 口径：滚动弹幕的**播放时间穿越时长恒等于 `scrollDuration`** ——
+   *   speed(px/墙钟ms) = (画布宽 + 文字宽) / scrollDuration × 倍速
+   *   ⇒ 墙钟穿越 = scrollDuration / 倍速，播放时间穿越 = scrollDuration。
+   * 所以这里**不能**再除以 `config.speed`（旧实现就是除的，倍速越高窗口越小），
+   * 也不能写死 7000（面板"弹幕速度"可选 3000~14000ms）。
+   *
+   * 下限 11s 保证"打卡后最晚 1s 才上屏 + 1s 时间回调抖动"也有富余；
+   * 上限 30s 只是为了控制分桶扫描量（超过部分由 carryOver 兜住，见下）。
+   */
+  static trailWindowMs(scrollDuration: number): number {
+    const dur = (typeof scrollDuration === 'number' && scrollDuration >= 1000) ? scrollDuration : 7000
+    return Math.min(30000, Math.max(11000, Math.ceil(dur) + 3000))
+  }
+
+  /**
+   * 已上屏的滚动弹幕是否应当从可见列表里移除。
+   *
+   * **唯一判据是位置**：整条尾巴（x + width）越过左边界才算真正出屏。
+   * 右侧（x > canvasW）一律保留 —— 画布尺寸变化后它还要继续滚进来，
+   * 此时把它剔除会让它的 x 永久冻结、再也回不来（旧实现就有这个洞）。
+   *
+   * `lifeMs` 是极宽松的时间兜底（≥60s 播放时间），只用来清理"位置真的不再推进"的
+   * 幽灵项；锚点是 `shownAt`（真正上屏那一刻），不是 `time`（视频里的打卡时间）。
+   */
+  static scrollingGone(item: DanmakuItem, now: number, lifeMs: number): boolean {
+    if (item.x + item.width > 0) {
+      const anchor = item.shownAt > 0 ? item.shownAt : item.time
+      return now > anchor + lifeMs
+    }
+    return true
+  }
+
+  /**
+   * 从上一轮的可见列表里挑出"还需要续命"的弹幕：已经上屏、此刻仍在屏内，
+   * 但打卡时间已经落在候选窗口之外。
+   *
+   * 这是候选窗口的安全阀：窗口只是取档手段，不能当生存期上限。
+   * 返回项全部满足 `time < minTime`，拼到候选数组前面仍保持 time 升序。
+   */
+  static carryOver(prev: DanmakuItem[], minTime: number): DanmakuItem[] {
+    const out: DanmakuItem[] = []
+    for (let i = 0; i < prev.length; i++) {
+      const it = prev[i]
+      if (it.track >= 0 && it.x + it.width > 0 && it.time < minTime) {
+        out.push(it)
+      }
+    }
+    return out
+  }
+
+  /** 滚动弹幕穿越时长（播放时间轴毫秒；面板可调，非法值退回官方默认 7s） */
+  private get scrollDurationMs(): number {
+    const v = this.config.scrollDuration
+    return (typeof v === 'number' && v >= 1000) ? v : 7000
+  }
+
+  /** 静止弹幕（顶部/底部）停留时长（播放时间轴毫秒；面板可调，非法值退回官方默认 4s） */
+  private get staticDurationMs(): number {
+    const v = this.config.staticDuration
+    return (typeof v === 'number' && v >= 500) ? v : 4000
+  }
+
   /**
    * 更新可见弹幕列表（优化版）
    */
@@ -468,14 +541,14 @@ export class DanmakuController {
     const timeDiff = Math.abs(this.currentTime - this.lastUpdateTime)
     const useCache = timeDiff < 100 && this.cachedCandidates.length > 0
 
-    // ⭐ 候选窗口按【实际滚动耗时】计算，不再固定前后各 30 秒。
-    //   滚动弹幕穿越屏幕耗时 = (canvasWidth + width) / speed
-    //                          = 7000 / config.speed 毫秒（与宽度无关，因为速度随宽度同比放大）
-    //   7000 = 官方 `danmakuDuration` 默认 7 秒（原来是 8000）。
-    //   ⚠️ 收窄是安全的：弹幕一旦超过这个时长必然已滚出屏幕，"再晚显示"也没有意义；
-    //   同时把 maxCount 与轨道配额的竞争范围缩小，反而更贴近 B 站"该出现的时刻就出现"。
-    const rollCrossMs = this.config.speed > 0 ? 7000 / this.config.speed : 7000
-    const trailWindow = Math.min(30000, Math.max(11000, Math.ceil(rollCrossMs) + 3000))
+    // ⭐ 候选窗口（播放时间轴毫秒）：按**用户设置的穿越时长**推算，不能用固定常量。
+    //   ① 口径要搞清楚：speed = (画布宽 + 文字宽) / scrollDuration × 倍速（px / 墙钟毫秒），
+    //      ⇒ 墙钟穿越 = scrollDuration / 倍速，而【播放时间】穿越恒等于 scrollDuration
+    //      （倍速越高墙钟越快、播放时间不变）。旧公式写成 `7000 / config.speed`，
+    //      把墙钟口径当播放口径用，倍速越高窗口反而越小。
+    //   ② 也不能写死 7000：面板里"弹幕速度"可选 3000~14000ms（极慢 = 14000）。
+    //      写死 7000 时极慢档的弹幕滚到 ~78% 就被这个窗口丢出候选集 —— 见下方 filter 的注释。
+    const trailWindow = DanmakuController.trailWindowMs(this.config.scrollDuration)
     // ⭐ 前向窗口只需要很小的容差：下面的可见性判定要求 currentTime >= item.time，
     //   任何"未来弹幕"都会被直接丢弃。原先也开 30 秒，等于每次白收集一半用不上的弹幕
     //   （分桶扫描量翻倍），纯浪费。
@@ -503,6 +576,18 @@ export class DanmakuController {
         }
       }
 
+      // ⭐ 续命：候选窗口只是**取档手段**，绝不能当生存期上限。
+      //   已经上屏、此刻仍在屏内的弹幕，即使打卡时间早于 minTime 也必须留在候选里 ——
+      //   否则"窗口 < 实际穿越时长"时它会被静默丢掉：位置还在屏幕中间，整条人就没了。
+      //   窗口不够用的场景都是偶发的：极慢档（14000ms）、固定速度模式下的超宽弹幕、
+      //   声画同步临时把视频拉到 2x 而弹幕仍按 1x 走、渲染链被卡住导致位置落后于播放时间。
+      //   这也正是用户看到的"有时候第一个字离屏幕边缘还很远就消失"。
+      const carried = DanmakuController.carryOver(this.visibleDanmaku, minTime)
+      if (carried.length > 0) {
+        // carried 里全是 time < minTime 的旧弹幕，拼在前面仍保持 time 升序（maxCount 依赖这个顺序）
+        candidates = carried.concat(candidates)
+      }
+
       // 更新缓存
       this.cachedCandidates = candidates
       this.lastUpdateTime = this.currentTime
@@ -511,12 +596,15 @@ export class DanmakuController {
     // ⭐ 单次遍历同时完成「时间窗口筛选」和「出屏弹幕剔除」（原先分两趟 filter，
     //   候选集上千条时每 100ms 就要多走一趟，白白多一遍回调开销）。
     //
-    //   为什么必须剔除出屏弹幕：时间窗口是"滚动弹幕最多滚多久"的经验值，它会让
-    //   【窗口内出现过的所有弹幕】都留在候选里，而其中大多数早已滚出屏幕。
+    //   为什么必须剔除出屏弹幕：候选里会残留大量早已滚出屏幕的弹幕，
     //   这些幽灵弹幕会占满 maxCount 配额，把真正该显示的新弹幕挤掉，
     //   表现为"密集时段新弹幕反而不出现"。
     const now = this.currentTime
-    const canvasW = this.canvasWidth
+    // ⭐ 已上屏弹幕的【时间兜底】故意取得极宽松（≥60s 播放时间），正常永远由位置判定收尾。
+    //   它唯一的职责是清理"x 真的不再推进"的幽灵弹幕（渲染链停摆、画布重建后被遗忘的项），
+    //   绝不能用来判"该出屏了"—— 原先这里是「窗口 = 11000ms 播放时间」，
+    //   任何穿越时长比它长的弹幕都会在屏幕中间被整条抹掉（用户反馈的现象）。
+    const scrollLifeMs = Math.max(this.scrollDurationMs * 4, 60000)
     const visible = candidates.filter((item: DanmakuItem) => {
       // 出现时间未到 → 一律不可见（顺带把未来弹幕挡在窗口外）
       if (now < item.time) {
@@ -526,7 +614,7 @@ export class DanmakuController {
       // ⭐ 未分配过轨道的弹幕必须处在自己的【注入窗口】内，否则永久跳过。
       //   对齐官方/PiliPlus：一条弹幕只在它自己的时间点（100ms 桶）尝试上屏一次，
       //   轨道放不下就丢弃，**不会**在几秒后轨道空出来时再补显示。
-      //   没有这条限制时，过去 11~30 秒内所有分配失败的旧弹幕会持续重试，
+      //   没有这条限制时，过去十几秒内所有分配失败的旧弹幕会持续重试，
       //   一旦轨道空出来就集体涌入 → 屏幕上冒出与当前画面无关的迟到弹幕。
       //   容差 1000ms 是留给"分段数据晚到"的（网络往返导致的几百毫秒延迟不算迟到）。
       if (item.track < 0 && (item.missed || now - item.time > INJECT_GRACE_MS)) {
@@ -534,24 +622,22 @@ export class DanmakuController {
       }
 
       if (item.isScrolling()) {
-        // ⭐ 用"这条弹幕自己的穿越时长"兜底：scrollFixedVelocity 模式下宽弹幕的实际 duration
-        //    会超过全局 trailWindow，只按全局值判定会让它滚到屏幕中间被剔除（凭空消失）。
-        //    取 max —— 任何情况下都不会早于它自己的生存期被移除。
-        const life = item.duration > 0 ? item.duration + 1000 : trailWindow
-        if (now > item.time + Math.max(trailWindow, life)) {
-          return false
-        }
         // 未分配过轨道的还无从判断位置，保留（下一段会尝试分配轨道）
         if (item.track < 0) {
           return true
         }
-        // 完全离开视口：尾部已越过左边界，或整体仍在右边界之外
-        return !(item.x + item.width < 0 || item.x > canvasW)
+        // ⭐ 已上屏的滚动弹幕：**唯一的出屏判据是位置**（整条尾巴越过左边界）。
+        //   不能再用"时间窗口"参与判定 —— 视频倍速、弹幕速度档位（3000~14000ms）、
+        //   音画同步临时 2x、渲染链落帧都会让"播放时间"与"实际走了多远"脱钩，
+        //   一旦两者错配，窗口就会在弹幕还在屏幕中间时把它删掉。
+        return !DanmakuController.scrollingGone(item, now, scrollLifeMs)
       }
 
       // 静止弹幕（顶部/底部）：按各自的停留时长判定（默认 4 秒，对齐官方 staticDuration）
-      const duration = item.duration > 0 ? item.duration : 4000
-      return now <= item.time + duration
+      // 锚点用 shownAt（真正上屏那一刻），不能用 time —— 否则晚注入几百毫秒就少显示这么久。
+      const anchor = item.shownAt > 0 ? item.shownAt : item.time
+      const duration = item.duration > 0 ? item.duration : this.staticDurationMs
+      return now <= anchor + duration
     })
 
     this.visibleDanmaku = visible

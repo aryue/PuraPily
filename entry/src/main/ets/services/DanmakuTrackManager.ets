@@ -332,6 +332,8 @@ export class DanmakuTrackManager {
     // ⭐ 设置弹幕穿越屏幕的时长，用于 updateVisibleDanmaku 判断可见性窗口
     // 避免长弹幕在滚动途中被 8 秒硬限制提前移除
     item.duration = duration
+    // ⭐ 生存期锚点 = 真正上屏的这一刻（不是打卡时间 item.time，见 DanmakuItem.shownAt 注释）
+    item.shownAt = currentTime
 
     return bestTrack
   }
@@ -414,6 +416,7 @@ export class DanmakuTrackManager {
     item.x = -item.width
     item.y = this.calculateTrackY(bestTrack, 'scroll')
     item.duration = duration
+    item.shownAt = currentTime
     // 逆向弹幕不居中（安全起见显式复位，避免复用对象时带上居中标记）
     item.centerAligned = false
 
@@ -473,6 +476,7 @@ export class DanmakuTrackManager {
         item.centerAligned = true
         item.y = this.calculateTrackY(i, 'top')
         item.duration = duration
+        item.shownAt = currentTime
         
         return i
       }
@@ -504,6 +508,7 @@ export class DanmakuTrackManager {
         item.centerAligned = true
         item.y = this.calculateTrackY(i, 'bottom')
         item.duration = duration
+        item.shownAt = currentTime
         
         return i
       }
