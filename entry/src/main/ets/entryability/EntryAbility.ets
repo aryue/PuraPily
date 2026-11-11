@@ -21,6 +21,7 @@ import { PlayerService } from '../services/PlayerService';
 import { FloatingPiP } from '../services/FloatingPiP';
 import { AppScaleService } from '../services/AppScaleService';
 import { HighRefreshService } from '../services/HighRefreshService';
+import { QualityPreferenceService } from '../services/QualityPreferenceService';
 import { errMsg, setVerboseLog } from '../utils/Logger';
 import { redactPrivateLog } from '../utils/PrivacyLog';
 import { syncThemeConfiguration } from '../utils/ReferenceAppearance';
@@ -132,6 +133,16 @@ export default class EntryAbility extends UIAbility {
     });
     PlayerService.setAppContext(this.context);
     HighRefreshService.getInstance().initialize(this.context);
+    // 联调开关：--ps qualityNetwork hotspot|cellular|wifi|ethernet 强制按该链路解析画质档位
+    // （模拟器没有蜂窝/热点，用来验证两档偏好与设置页「当前网络」文案）。只覆盖本次启动。
+    if (want.parameters?.['qualityNetwork'] !== undefined) {
+      AppStorage.setOrCreate('qualityNetworkOverride', String(want.parameters['qualityNetwork']));
+    }
+    // 画质偏好：Wi-Fi 与移动网络各一档，这里按当前链路同步解析出生效值（写入 AppStorage
+    // 的 defaultVideoQn）并开始监听换网。必须在首屏列表预取之前完成，否则冷启缓存键会按旧档生成。
+    QualityPreferenceService.getInstance().initialize(this.context);
+    // 字体大小设置页在运行中切回「跟随系统」后要靠系统配置回调继续跟，注册一次即可（API 24+）。
+    AppScaleService.watchSystemFontScale(this.context);
     // 必须在 loadCardSettings() 之前解析：恢复持久化开关是异步的，否则会反过来覆盖本次启动的命令行值。
     if (want.parameters?.['cellularPrefetch'] !== undefined) {
       this.cellularPrefetchLaunchOverride = String(want.parameters['cellularPrefetch']) !== 'off';
@@ -409,13 +420,8 @@ export default class EntryAbility extends UIAbility {
   private async loadCardSettings(): Promise<void> {
     try {
       const pref = await preferences.getPreferences(this.context, 'my_app_settings');
-      // 画质必须以偏好文件为准：VideoPlayerPage 是懒加载模块，只在它模块顶层 persistProp 的话，
-      // 冷启首页第一次列表预取时 AppStorage 还没有这个键，会回落到 116；
-      // 播放页模块加载后才恢复成 120 —— 两边缓存键不同（bvid_cid_qn_kernel），预取全部作废。
-      const savedQn = await pref.get('defaultVideoQn', 116) as number;
-      const resolvedQn: number = savedQn > 0 ? Math.round(savedQn) : 116;
-      PersistentStorage.persistProp('defaultVideoQn', resolvedQn);
-      AppStorage.setOrCreate('defaultVideoQn', resolvedQn);
+      // 画质两档偏好的读取与「当前链路 → 生效档」解析已由 QualityPreferenceService 在 onCreate 里
+      // 同步完成（必须早于首屏列表预取）；这里不再碰 defaultVideoQn，避免按旧档覆盖。
       const kernel = await pref.get('playbackKernel', 'system');
       AppStorage.setOrCreate('playbackKernel', kernel === 'ijk' ? 'ijk' : 'system');
       const landscapeSide = await pref.get('landscapePlaybackSide', 'left');
@@ -495,6 +501,20 @@ export default class EntryAbility extends UIAbility {
     // ★ 在 loadContent 之前设置全屏模式，避免首帧渲染时状态栏/胶囊闪烁
     // （首帧 statusBarHeight 由 onCreate 中持久化的默认值 40 兜底，不再依赖异步 getWindowAvoidArea）
     this.setupImmersiveWindow();
+    this.loadContentWithScale(windowStage);
+  }
+
+  /**
+   * 字号/显示密度必须在 loadContent 之前下发：setFontSizeScale 放到首帧之后，
+   * 整屏文字会先按标准字号排一遍再跳档（自定义字号冷启动能看到一次抽动）。
+   * 这里绝不能把 loadContent 堵死：读偏好失败也要照常起首页。
+   */
+  private async loadContentWithScale(windowStage: window.WindowStage): Promise<void> {
+    try {
+      await AppScaleService.applyFromPrefsAtStartup(this.context, windowStage);
+    } catch (error) {
+      hilog.error(DOMAIN, TAG, 'apply scale before loadContent failed: %{public}s', errMsg(error));
+    }
     windowStage.loadContent('pages/Index', (err, data) => {
       if (err.code) {
         hilog.error(DOMAIN, TAG, 'Failed to load the content. Cause: %{public}s', redactPrivateLog(errMsg(err) ?? ''));
@@ -503,7 +523,6 @@ export default class EntryAbility extends UIAbility {
       hilog.info(DOMAIN, TAG, 'Succeeded in loading the content. Data: %{public}s', JSON.stringify(data) ?? '');
       this.applyOrientationLockFromPrefs();
       AppStorage.setOrCreate('appWindowStage', windowStage);
-      this.applyAppScale(windowStage);
 
       const snapshot = this.pendingContinuation;
       this.pendingContinuation = null;
@@ -537,11 +556,6 @@ export default class EntryAbility extends UIAbility {
         setTimeout(() => { this.openSurfaceLab(labBvid); }, 700);
       }
     });
-  }
-
-  /** 启动时应用「应用比例调节」的自定义比例（system 模式由 engine 默认跟随，无需调用） */
-  private async applyAppScale(windowStage: window.WindowStage): Promise<void> {
-    await AppScaleService.applyFromPrefsAtStartup(this.context, windowStage);
   }
 
   /** 从 Preferences 读取并应用屏幕旋转锁定（冷启动时调用，保证重启后立即生效） */

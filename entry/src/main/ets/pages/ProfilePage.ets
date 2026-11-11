@@ -1,6 +1,6 @@
 import { FavoritesDataService } from '../services/FavoritesDataService';
 import { extractMidFromCookie } from '../api/FeedbackService';
-import { pageBackgroundColor } from '../utils/SurfaceColors';
+import { pageBackgroundColor, secondaryTextColor, tertiaryTextColor } from '../utils/SurfaceColors';
 import { PageHeader } from '../components/PageHeader';
 import { PageSurface } from '../components/PageSurface';
 import { NativeGlassCapsule } from '../components/NativeGlassCapsule';
@@ -19,18 +19,15 @@ import { getUserInfo } from '../api/BilibiliApi';
 import { logoutSession } from '../services/LoginSession';
 import { getLoginAccessKey } from '../utils/CredentialStore';
 import { HighRefreshService } from '../services/HighRefreshService';
+import { AppScaleService, FONT_SCALE_MIN, FONT_SCALE_MAX, FONT_SCALE_STEP, FONT_SCALE_DEFAULT } from '../services/AppScaleService';
+import { QualityPreferenceService, QualityBucket } from '../services/QualityPreferenceService';
+import {
+  QUALITY_OPTIONS, QualityOption, DEFAULT_QUALITY_QN, DEFAULT_CELLULAR_QUALITY_QN, qualityLabel
+} from '../utils/QualityCatalog';
 
-interface QualityItem { qn: number; label: string; }
-const QUALITY_LIST: QualityItem[] = [
-  { qn: 16, label: '360P' }, { qn: 32, label: '480P' },
-  { qn: 64, label: '720P' }, { qn: 80, label: '1080P' },
-  { qn: 112, label: '1080P+' }, { qn: 116, label: '1080P60' }, { qn: 120, label: '4K' }
-];
-const DEFAULT_QN: number = 116;
 const ROTATION_OPTIONS: string[] = ['跟随系统', '自动旋转', '锁定竖屏', '锁定横屏'];
-function labelByQn(qn: number): string {
-  return QUALITY_LIST.find(q => q.qn === qn)?.label ?? '1080P60';
-}
+/** 字号拖动预览的最小下发间隔：setFontSizeScale 会重排整页，太密会明显掉帧。 */
+const FONT_PREVIEW_INTERVAL_MS: number = 80;
 
 @Component({ freezeWhenInactive: true })
 export struct ProfilePage {
@@ -46,6 +43,13 @@ export struct ProfilePage {
   @StorageLink('highRefreshRate') highRefreshRate: number = 0;
   @StorageLink('highRefreshSupportedRates') highRefreshSupportedRates: number[] = [];
   @StorageLink('highRefreshAvailable') highRefreshAvailable: boolean = true;
+  /** 字体大小：system=跟随系统 / custom=按滑条倍率（appFontScale 为已生效倍率）。 */
+  @StorageLink('fontSizeMode') fontSizeMode: string = 'system';
+  @StorageLink('appFontScale') appFontScale: number = 1;
+  /** 滑条拖动中的草稿值：立即反映到行右侧百分比，同时作为实时下发的目标值。 */
+  @State fontScaleDraft: number = FONT_SCALE_DEFAULT;
+  /** 拖动预览的节流时间戳（ms）。 */
+  private lastFontPreviewAt: number = 0;
   @StorageLink('videoCardGlassThickness') videoCardGlassThickness: string = 'thin';
   @StorageLink('videoCardEdgeLight') videoCardEdgeLight: boolean = false;
   @StorageLink('videoCardGlassTint') videoCardGlassTint: boolean = true;
@@ -67,7 +71,12 @@ export struct ProfilePage {
   @StorageLink('vibrateEnabled') referenceVibrate: boolean = true;
   @StorageLink('landscapePlaybackSide') landscapePlaybackSide: string = 'left';
   @StorageLink('screenOrientationLock') screenOrientationLock: string = '跟随系统';
-  @StorageLink('defaultVideoQn') defaultVideoQn: number = DEFAULT_QN;
+  /** 画质偏好分两档：Wi-Fi（含以太网/不计费）与移动网络（蜂窝、计费 Wi-Fi、手机热点）。 */
+  @StorageLink('videoQnWifi') videoQnWifi: number = DEFAULT_QUALITY_QN;
+  @StorageLink('videoQnCellular') videoQnCellular: number = DEFAULT_CELLULAR_QUALITY_QN;
+  /** 当前链路类别/计费判定，由 QualityPreferenceService 每次换网后写回。 */
+  @StorageLink('networkClass') networkClass: string = 'unknown';
+  @StorageLink('networkMetered') networkMetered: boolean = true;
   @StorageLink('recommendApiSource') recommendApiSource: string = 'App';
   @StorageLink('danmakuApiSource') danmakuApiSource: string = 'grpc';
   @StorageProp('refreshHomeFlag') @Watch('onLoginStateChanged') refreshHomeFlag: number = 0;
@@ -88,6 +97,16 @@ export struct ProfilePage {
     this.danmakuApiSource = await this.dataPreferences.get('danmakuApiSource', 'grpc') as string;
     const side = await this.dataPreferences.get('landscapePlaybackSide', 'left');
     this.landscapePlaybackSide = side === 'right' ? 'right' : 'left';
+    // 系统字号可能在应用进后台期间被改过，进设置页时先对齐（只有原生跟随态才读得回系统值）
+    AppScaleService.refreshSystemScale(this.getUIContext().getHostContext() as common.UIAbilityContext);
+    const fontSetting = await AppScaleService.loadFontSetting(this.getUIContext().getHostContext() as common.UIAbilityContext);
+    this.fontSizeMode = fontSetting.followSystem ? 'system' : 'custom';
+    this.appFontScale = fontSetting.scale;
+    // 滑条草稿与「当前真实生效的字号」对齐：跟随系统时是系统倍率，不是上次自定义值
+    this.fontScaleDraft = AppScaleService.entryCustomScale(fontSetting.followSystem, fontSetting.scale);
+    // 进设置页时重算一次「当前链路 → 生效画质」：后台期间换过网、事件没送到时靠这一次兜底，
+    // 顺带刷新「当前网络」那一行的判定文案。
+    QualityPreferenceService.getInstance().refresh('settings-page');
     if (this.settingsOnly) await this.calcCacheSize();
     await this.restoreCachedProfile();
     this.onLoginStateChanged();
@@ -229,13 +248,24 @@ export struct ProfilePage {
     await this.saveThemeMode(isOn ? 'dark' : 'light');
   }
 
-  private async saveDefaultQn(qn: number): Promise<void> {
+  /** 画质偏好按链路分档落盘；当前链路正好是这一档时立刻生效（写 AppStorage）。 */
+  private saveQuality(bucket: QualityBucket, qn: number): void {
     try {
-      const pref = await preferences.getPreferences(this.getUIContext().getHostContext() as common.UIAbilityContext, 'my_app_settings');
-      await pref.put('defaultVideoQn', qn);
-      await pref.flush();
-      this.defaultVideoQn = qn;
-    } catch (error) { logError('保存默认画质失败', error); }
+      QualityPreferenceService.getInstance().setQn(bucket, qn);
+    } catch (error) {
+      logError('保存画质偏好失败', error);
+      this.getUIContext().getPromptAction().showToast({ message: '保存失败，请重试' });
+    }
+  }
+
+  /** 「当前网络」行右侧：链路类别（Wi-Fi / 移动热点 / 移动网络 / 以太网）。 */
+  private networkClassText(): string {
+    return QualityPreferenceService.classLabel(this.networkClass);
+  }
+
+  /** 「当前网络」行副标题：这条链路按哪一档取流。 */
+  private networkDetailText(): string {
+    return QualityPreferenceService.networkDetail(this.networkClass, this.networkMetered);
   }
 
   private async saveApiSource(key: string, source: string): Promise<void> {
@@ -602,6 +632,72 @@ export struct ProfilePage {
     }
   }
 
+  /** 字体大小当前值文案（跟随系统时不显示滑条倍率）。 */
+  private fontSizeValueLabel(): string {
+    if (this.fontSizeMode !== 'custom') return '跟随系统';
+    return AppScaleService.formatFontScale(this.fontScaleDraft);
+  }
+
+  /**
+   * 菜单切模式。
+   * 切到自定义：从**当前真实生效的字号**起步——跟随系统时生效的是系统倍率，
+   *   用上次的自定义值会让滑条和画面字号对不上（且此时不会重新下发，画面不变）。
+   * 切到跟随系统：立刻拉回系统倍率（setFontSizeScale 撤不回来，只能下发系统值）。
+   */
+  private async selectFontSizeMode(custom: boolean): Promise<void> {
+    if (!custom) {
+      this.fontScaleDraft = this.appFontScale;
+      await this.saveFontSize(true, this.appFontScale);
+      return;
+    }
+    const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    AppScaleService.refreshSystemScale(context);
+    const seed = AppScaleService.entryCustomScale(this.fontSizeMode !== 'custom', this.appFontScale);
+    this.fontScaleDraft = seed;
+    await this.saveFontSize(false, seed);
+  }
+
+  /**
+   * 拖动中的实时预览：节流下发（不落盘），松手才落盘。
+   * 节流是为了拖动时整树重排不至于每帧一次——setFontSizeScale 会重排整页，高频调用会明显掉帧。
+   */
+  private previewFontScale(scale: number): void {
+    if (Math.abs(scale - this.appFontScale) < 1e-6) return;
+    const now = Date.now();
+    if (now - this.lastFontPreviewAt < FONT_PREVIEW_INTERVAL_MS) return;
+    this.lastFontPreviewAt = now;
+    this.fontSizeMode = 'custom';
+    this.appFontScale = scale;
+    AppScaleService.applyFontScale(this.getUIContext().getHostContext() as common.UIAbilityContext, scale);
+  }
+
+  /**
+   * 字体大小：落盘 + 立即下发。
+   * 跟随系统下发的是系统倍率（setFontSizeScale 撤不回来），下次冷启动才回到引擎原生跟随。
+   */
+  private async saveFontSize(followSystem: boolean, scale: number): Promise<void> {
+    const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    const prevMode = this.fontSizeMode;
+    const prevScale = this.appFontScale;
+    const next = followSystem ? this.appFontScale : scale;
+    // 拖动预览已经下发过同一个值就不再下发（重复下发等于整树重排两遍，会闪一下）
+    const needApply = followSystem || Math.abs(next - this.appFontScale) > 1e-6;
+    this.fontSizeMode = followSystem ? 'system' : 'custom';
+    this.appFontScale = next;
+    this.fontScaleDraft = next;
+    const saved = await AppScaleService.saveFontSetting(context, followSystem, next);
+    if (!saved) {
+      this.fontSizeMode = prevMode;
+      this.appFontScale = prevScale;
+      this.fontScaleDraft = prevScale;
+      this.getUIContext().getPromptAction().showToast({ message: '保存字体大小失败，请重试' });
+      return;
+    }
+    if (needApply && !AppScaleService.applyFontSetting(context, followSystem, next)) {
+      this.getUIContext().getPromptAction().showToast({ message: '字体大小设置失败，请重试' });
+    }
+  }
+
   private settingLabels(kind: string): string[] {
     if (kind === 'kernel') return ['系统 AVPlayer', 'IJK 双轨直连（实验）'];
     if (kind === 'theme') return ['跟随系统', '浅色', '深色'];
@@ -609,7 +705,10 @@ export struct ProfilePage {
     if (kind === 'rotation') return ROTATION_OPTIONS;
     if (kind === 'side') return ['左侧', '右侧'];
     if (kind === 'refresh') return ['跟随系统', ...this.highRefreshSupportedRates.map((rate: number) => `${rate} Hz`)];
-    if (kind === 'quality') return QUALITY_LIST.map((item: QualityItem) => item.label);
+    if (kind === 'fontSize') return ['跟随系统', '自定义'];
+    if (kind === 'qualityWifi' || kind === 'qualityCellular') {
+      return QUALITY_OPTIONS.map((item: QualityOption) => item.label);
+    }
     if (kind === 'recommend') return ['App', 'Web'];
     if (kind === 'danmaku') return ['gRPC Protobuf', 'XML'];
     return ['超薄', '薄', '常规', '厚', '超厚'];
@@ -622,7 +721,9 @@ export struct ProfilePage {
     if (kind === 'rotation') return ROTATION_OPTIONS.indexOf(this.screenOrientationLock);
     if (kind === 'side') return this.landscapePlaybackSide === 'right' ? 1 : 0;
     if (kind === 'refresh') return [0, ...this.highRefreshSupportedRates].indexOf(this.highRefreshRate);
-    if (kind === 'quality') return QUALITY_LIST.findIndex((item: QualityItem) => item.qn === this.defaultVideoQn);
+    if (kind === 'fontSize') return this.fontSizeMode === 'custom' ? 1 : 0;
+    if (kind === 'qualityWifi') return QUALITY_OPTIONS.findIndex((item: QualityOption) => item.qn === this.videoQnWifi);
+    if (kind === 'qualityCellular') return QUALITY_OPTIONS.findIndex((item: QualityOption) => item.qn === this.videoQnCellular);
     if (kind === 'recommend') return this.recommendApiSource === 'Web' ? 1 : 0;
     if (kind === 'danmaku') return this.danmakuApiSource === 'xml' ? 1 : 0;
     return ['ultra-thin', 'thin', 'regular', 'thick', 'ultra-thick'].indexOf(
@@ -639,9 +740,11 @@ export struct ProfilePage {
       else await this.applyPageWallpaper(['pipw', 'picsum', 'local', 'none'][index]);
     } else if (kind === 'rotation') await this.referenceSaveRotation(ROTATION_OPTIONS[index]);
     else if (kind === 'side') await this.saveLandscapePlaybackSide(index === 1 ? 'right' : 'left');
-    else if (kind === 'quality') await this.saveDefaultQn(QUALITY_LIST[index].qn);
+    else if (kind === 'qualityWifi') this.saveQuality('wifi', QUALITY_OPTIONS[index].qn);
+    else if (kind === 'qualityCellular') this.saveQuality('cellular', QUALITY_OPTIONS[index].qn);
     else if (kind === 'recommend') await this.saveApiSource('recommendApiSource', index === 0 ? 'App' : 'Web');
     else if (kind === 'danmaku') await this.saveApiSource('danmakuApiSource', index === 0 ? 'grpc' : 'xml');
+    else if (kind === 'fontSize') await this.selectFontSizeMode(index === 1);
     else if (kind === 'refresh') {
       try { HighRefreshService.getInstance().choose([0, ...this.highRefreshSupportedRates][index]); }
       catch (error) {
@@ -725,9 +828,6 @@ export struct ProfilePage {
               Column() {
                 Text('壁纸遮罩 ' + Math.round(this.pageWallpaperScrim) + '%')
                   .fontSize(13).fontColor(this.isDarkMode ? '#E7E9EB' : '#18191C').width('100%')
-                Text('深色压黑 · 浅色提白，独立于透明度')
-                  .fontSize(11).fontColor(this.isDarkMode ? '#C9CDD3' : '#50545A').width('100%')
-                  .margin({ bottom: 2 })
                 Slider({ value: this.pageWallpaperScrim, min: 0, max: 60, step: 1 })
                   .selectedColor('#D34E7E').onChange((value: number, mode: SliderChangeMode) => {
                     if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
@@ -743,6 +843,40 @@ export struct ProfilePage {
         this.SectionTitle('显示与方向')
         PageSurface() {
           Column() {
+            // 字体大小：菜单选「跟随系统 / 自定义」，选自定义才展开滑条（拖动中实时生效）。
+            // ⚠️ 行高必须写死 height：拖动时字号变化会重排整页，minHeight 会让本行跟着长高，
+            // 滑条被顶离手指（拖动到小字号时反向收缩、拖动中断）。固定后滑条位置不动。
+            Row({ space: 12 }) {
+              Column({ space: 4 }) {
+                Text('字体大小').fontSize(15).maxFontScale(1.2)
+                  .fontColor(this.isDarkMode ? '#E7E9EB' : '#18191C')
+              }.layoutWeight(1).alignItems(HorizontalAlign.Start)
+              Text(this.fontSizeValueLabel() + ' ›').fontSize(13).maxFontScale(1.2)
+                .fontColor(this.isDarkMode ? '#C9CDD3' : '#50545A')
+            }.width('100%').height(72).padding({ left: 16, right: 16, top: 12, bottom: 12 })
+              .id('setting-font-size').bindMenu(this.SettingsOptions('fontSize'), this.settingsMenuOptions())
+            if (this.fontSizeMode === 'custom') {
+              Column() {
+                Slider({
+                  value: this.fontScaleDraft,
+                  min: FONT_SCALE_MIN,
+                  max: FONT_SCALE_MAX,
+                  step: FONT_SCALE_STEP
+                })
+                  .selectedColor('#D34E7E')
+                  .blockColor(this.isDarkMode ? '#E7E9EB' : '#FFFFFF')
+                  .id('setting-font-scale-slider')
+                  .onChange((value: number, mode: SliderChangeMode) => {
+                    const scale = Math.round(value * 100) / 100;
+                    this.fontScaleDraft = scale;
+                    if (mode === SliderChangeMode.End || mode === SliderChangeMode.Click) {
+                      this.saveFontSize(false, scale);
+                    } else {
+                      this.previewFontScale(scale);
+                    }
+                  })
+              }.width('100%').padding({ left: 16, right: 16, bottom: 10 })
+            }
             Row({ space: 12 }) {
               Column({ space: 4 }) {
                 Text('高刷模式').fontSize(15).fontColor(this.isDarkMode ? '#E7E9EB' : '#18191C')
@@ -912,10 +1046,25 @@ export struct ProfilePage {
               Toggle({ type: ToggleType.Switch, isOn: this.referenceBackgroundPlay }).selectedColor('#D34E7E')
               .onChange((value: boolean) => this.referenceSaveBoolean('bgp', value))
             }.width('100%').height(56).padding({ left: 16, right: 16 })
+            // 画质偏好按链路分两档：Wi-Fi（含以太网/不计费）与移动网络（蜂窝、计费 Wi-Fi、手机热点）。
+            // 热点走 Wi-Fi 承载却记在蜂窝套餐上，判定为计费后自动切到「移动网络」档。
             Row() {
-              Text('默认播放画质').fontSize(15).fontColor(this.isDarkMode ? '#E7E9EB' : '#18191C').layoutWeight(1)
-              Text(labelByQn(this.defaultVideoQn) + ' ›').fontSize(13).fontColor(this.pageWallpaperEnabled ? (this.isDarkMode ? '#C9CDD3' : '#50545A') : '#757A81')
-            }.width('100%').height(56).padding({ left: 16, right: 16 }).bindMenu(this.SettingsOptions('quality'), this.settingsMenuOptions())
+              Text('Wi-Fi 画质').fontSize(15).fontColor(this.isDarkMode ? '#E7E9EB' : '#18191C').layoutWeight(1)
+              Text(qualityLabel(this.videoQnWifi) + ' ›').fontSize(13).fontColor(secondaryTextColor(this.isDarkMode))
+            }.width('100%').height(56).padding({ left: 16, right: 16 })
+              .id('setting-quality-wifi').bindMenu(this.SettingsOptions('qualityWifi'), this.settingsMenuOptions())
+            Row() {
+              Text('移动网络画质').fontSize(15).fontColor(this.isDarkMode ? '#E7E9EB' : '#18191C').layoutWeight(1)
+              Text(qualityLabel(this.videoQnCellular) + ' ›').fontSize(13).fontColor(secondaryTextColor(this.isDarkMode))
+            }.width('100%').height(56).padding({ left: 16, right: 16 })
+              .id('setting-quality-cellular').bindMenu(this.SettingsOptions('qualityCellular'), this.settingsMenuOptions())
+            Row({ space: 12 }) {
+              Column({ space: 4 }) {
+                Text('当前网络').fontSize(15).fontColor(this.isDarkMode ? '#E7E9EB' : '#18191C')
+              }.layoutWeight(1).alignItems(HorizontalAlign.Start)
+              Text(this.networkClassText()).fontSize(13).fontColor(secondaryTextColor(this.isDarkMode))
+            }.width('100%').constraintSize({ minHeight: 72 }).padding({ left: 16, right: 16, top: 12, bottom: 12 })
+              .id('setting-quality-network')
           }.width('100%').padding({ top: 4, bottom: 4 })
         }
         }.width('100%').margin({ bottom: 18 })
