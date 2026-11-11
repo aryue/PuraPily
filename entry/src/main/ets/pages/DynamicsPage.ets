@@ -1348,7 +1348,8 @@ export struct DynamicsPage {
             .onClick(() => this.openUpSpace(item))
             Column({ space: 4 }) {
               Text(item.authorName).fontSize(16).fontWeight(FontWeight.Medium)
-              .fontColor('#D34E7E').maxLines(1)
+              // ⭐ UP 名字颜色与正文一致（详情页 authorRow 同口径），不再用粉色高亮
+              .fontColor(this.isDarkMode ? '#FFFFFF' : '#000000').maxLines(1)
               .textOverflow({ overflow: TextOverflow.Ellipsis })
               .onClick(() => this.openUpSpace(item))
               Text(`${fmtPubdate(item.pubTs)}${item.video ? ' · 投稿了视频' : ''}`)

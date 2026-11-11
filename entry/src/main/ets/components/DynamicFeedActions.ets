@@ -41,7 +41,8 @@ export struct DynamicFeedActions {
         .id(`dynamic-comment-${this.actionId}`)
         .onClick(() => { if (this.onComment) this.onComment(); })
       Row({ space: 6 }) {
-        Image($r('app.media.ref_like'))
+        // ⭐ 未赞用空心轮廓、已赞用实心（与动态详情 Dock / 评论区同款图标惯例）
+        Image(this.like.liked ? $r('app.media.comment_liked') : $r('app.media.comment_like_outline'))
           .width(22).height(22)
           .fillColor(this.like.liked ? '#D34E7E' : this.actionColor())
         Text(this.like.count > 0 ? this.countText(this.like.count) : '赞')

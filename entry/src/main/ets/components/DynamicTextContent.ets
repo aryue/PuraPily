@@ -22,7 +22,14 @@ export struct DynamicTextContent {
   /** 正文字号：详情页可以更大 */
   @Prop fontSize: number = 14;
   @StorageLink('isDarkMode') isDarkMode: boolean = false;
-  @StorageLink('customThemeColor') customThemeColor: string = '#007DFF';
+
+  /**
+   * ⭐ 话题 / @ / 全文 的链接蓝：**固定 B 站风格，不跟随自定义主题色**（2026-11-11 用户拍板，
+   *    主题色是粉色时话题曾跟着变粉）。深色用淡蓝保证对比度，浅色用 B 站评论链接蓝。
+   */
+  private linkBlue(): string {
+    return this.isDarkMode ? '#4FA9DD' : '#008AC5';
+  }
 
   /** ⭐ 点击正文里的 #话题#：本工程没有话题详情页，带关键词进搜索页（与"长按选词→搜索"同一入口） */
   private openTopicTag(topicText: string): void {
@@ -71,10 +78,10 @@ export struct DynamicTextContent {
             ImageSpan(seg.emoteUrl)
               .width(20).height(20).verticalAlign(ImageSpanAlignment.CENTER)
           } else if (seg.kind === 'topic') {
-            Span(seg.text).fontColor(this.customThemeColor)
+            Span(seg.text).fontColor(this.linkBlue())
               .onClick(() => { this.openTopicTag(seg.text); })
           } else if (seg.kind === 'at') {
-            Span(seg.text).fontColor(this.customThemeColor)
+            Span(seg.text).fontColor(this.linkBlue())
               .onClick(() => { this.openMentionedUp(seg); })
           } else {
             Span(seg.text)
@@ -90,7 +97,7 @@ export struct DynamicTextContent {
       .textOverflow({ overflow: TextOverflow.Ellipsis })
       .onAreaChange((_old: Area, area: Area) => { this.updateOverflow(Number(area.width)); })
       if (this.collapsed && this.overflowed) {
-        Text('全文').fontSize(this.fontSize).fontColor(this.customThemeColor)
+        Text('全文').fontSize(this.fontSize).fontColor(this.linkBlue())
           .id('dynamic-open-full')
           .onClick(() => { this.onOpenFull?.(); })
       }

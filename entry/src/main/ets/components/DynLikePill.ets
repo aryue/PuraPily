@@ -20,7 +20,8 @@ export struct DynLikePill {
 
   build() {
     Row({ space: 4 }) {
-      Image($r('app.media.ref_like'))
+      // ⭐ 未赞空心、已赞实心（与动态操作栏/评论区同款图标惯例）
+      Image(this.like.liked ? $r('app.media.comment_liked') : $r('app.media.comment_like_outline'))
         .width(16).height(16)
         .fillColor(this.like.liked ? '#D34E7E' : (this.isDarkMode ? '#FFFFFF' : '#000000'))
       Text(fmtCount(this.like.count))
