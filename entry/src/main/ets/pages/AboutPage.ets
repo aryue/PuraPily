@@ -163,13 +163,19 @@ struct AboutPage {
           if (this.updateState === UpdateUiState.AVAILABLE && this.releaseNotes.length > 0) {
             Divider().strokeWidth(1).color(this.isDarkMode ? '#2A2D31' : '#F0F1F2')
               .margin({ left: 16, right: 16 })
-            Text(this.releaseNotes)
-              .fontSize(12)
-              .fontColor(this.isDarkMode ? '#C9CDD3' : '#606773')
-              .maxLines(8)
-              .textOverflow({ overflow: TextOverflow.Ellipsis })
-              .width('100%')
-              .padding({ left: 16, right: 16, top: 12, bottom: 4 })
+            // 更新说明过长时在卡片内滚动，不做截断。
+            Scroll() {
+              Text(this.releaseNotes)
+                .fontSize(12)
+                .fontColor(this.isDarkMode ? '#C9CDD3' : '#606773')
+                .width('100%')
+            }
+            .constraintSize({ maxHeight: 220 })
+            .scrollBar(BarState.Auto)
+            .edgeEffect(EdgeEffect.Spring)
+            .align(Alignment.Top)
+            .width('100%')
+            .padding({ left: 16, right: 16, top: 12, bottom: 4 })
           }
           if (this.updateState === UpdateUiState.AVAILABLE) {
             Row() {
