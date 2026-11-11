@@ -40,6 +40,8 @@ export struct ProfilePage {
   @StorageLink('playbackKernel') playbackKernel: string = 'system';
   @State cacheSizeText: string = '计算中…';
   @Prop settingsOnly: boolean = false;
+  /** 设置页层级：root=一级入口卡，appearance=外观与交互，playback=播放设置。 */
+  @Prop settingsSection: string = 'root';
   @StorageLink('highRefreshRate') highRefreshRate: number = 0;
   @StorageLink('highRefreshSupportedRates') highRefreshSupportedRates: number[] = [];
   @StorageLink('highRefreshAvailable') highRefreshAvailable: boolean = true;
@@ -107,7 +109,7 @@ export struct ProfilePage {
     // 进设置页时重算一次「当前链路 → 生效画质」：后台期间换过网、事件没送到时靠这一次兜底，
     // 顺带刷新「当前网络」那一行的判定文案。
     QualityPreferenceService.getInstance().refresh('settings-page');
-    if (this.settingsOnly) await this.calcCacheSize();
+    if (this.settingsOnly && this.settingsSection === 'root') await this.calcCacheSize();
     await this.restoreCachedProfile();
     this.onLoginStateChanged();
   }
@@ -489,6 +491,12 @@ export struct ProfilePage {
       .catch((error: Error) => { logError('打开设置失败', error); });
   }
 
+  /** 设置页二级分区：外观与交互 / 播放设置，共用同一个分区页。 */
+  private openSettingsSection(section: string): void {
+    this.getUIContext().getRouter().pushUrl({ url: 'pages/SettingsSectionPage', params: { section: section } })
+      .catch((error: Error) => { logError('打开设置分区失败', error); });
+  }
+
   @Builder
   SectionTitle(title: string) {
     Text(title).fontSize(13).fontWeight(FontWeight.Medium)
@@ -785,8 +793,9 @@ export struct ProfilePage {
       .menuItemDivider({ strokeWidth: LengthMetrics.vp(0.5), color: this.isDarkMode ? '#24FFFFFF' : '#18000000', startMargin: LengthMetrics.vp(16), endMargin: LengthMetrics.vp(16) })
   }
 
+  /** 二级页：外观与交互（主题与壁纸 / 显示与方向 / 底栏与手势 / 视频卡片 / 其它内容卡片）。 */
   @Builder
-  ReferenceSettings() {
+  SettingsAppearanceLevel() {
     Scroll() {
       Column() {
         Column({ space: 6 }) {
@@ -1024,7 +1033,18 @@ export struct ProfilePage {
             }
           }.width('100%').padding({ top: 4, bottom: 4 })
         }
-        }.width('100%').margin({ bottom: 18 })
+        }.width('100%')
+      }.width('100%').constraintSize({ maxWidth: 760 }).padding({ left: 16, right: 16, top: this.statusBarHeight + 60, bottom: 32 + this.navIndicatorHeight })
+    }.width('100%').height('100%').scrollBar(BarState.Off)
+    .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
+    .backgroundColor(this.pageWallpaperEnabled ? Color.Transparent : pageBackgroundColor(this.isDarkMode))
+  }
+
+  /** 二级页：播放设置（播放 / 内容来源 / 网络与流量）。 */
+  @Builder
+  SettingsPlaybackLevel() {
+    Scroll() {
+      Column() {
         Column({ space: 6 }) {
         this.SectionTitle('播放')
         PageSurface() {
@@ -1102,11 +1122,31 @@ export struct ProfilePage {
             //   .width('100%').padding({ left: 16, right: 16, bottom: 12 })
           }.width('100%').padding({ top: 4, bottom: 4 })
         }
-        }.width('100%').margin({ bottom: 18 })
-        Column({ space: 6 }) {
-        this.SectionTitle('其它')
+        }.width('100%')
+      }.width('100%').constraintSize({ maxWidth: 760 }).padding({ left: 16, right: 16, top: this.statusBarHeight + 60, bottom: 32 + this.navIndicatorHeight })
+    }.width('100%').height('100%').scrollBar(BarState.Off)
+    .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
+    .backgroundColor(this.pageWallpaperEnabled ? Color.Transparent : pageBackgroundColor(this.isDarkMode))
+  }
+
+  /** 一级入口行：右侧沿用设置页统一的「›」文字箭头。 */
+  @Builder
+  SettingsEntryRow(label: string, entryId: string, action: () => void) {
+    Row({ space: 14 }) {
+      Text(label).fontSize(15).fontColor(this.isDarkMode ? '#E7E9EB' : '#18191C').layoutWeight(1)
+      Text('›').fontSize(13).fontColor(this.isDarkMode ? '#C9CDD3' : '#50545A')
+    }.width('100%').height(56).padding({ left: 16, right: 16 }).id(entryId).onClick(action)
+  }
+
+  /** 设置一级：不带标题的单张卡片，只留两个分区入口与清理/关于/退出。 */
+  @Builder
+  SettingsRoot() {
+    Scroll() {
+      Column() {
         PageSurface() {
           Column() {
+            this.SettingsEntryRow('外观与交互', 'setting-entry-appearance', () => this.openSettingsSection('appearance'))
+            this.SettingsEntryRow('播放设置', 'setting-entry-playback', () => this.openSettingsSection('playback'))
             Row() {
               Text('清除缓存').fontSize(15).fontColor(this.isDarkMode ? '#E7E9EB' : '#18191C').layoutWeight(1)
               Text(this.cacheSizeText + ' ›').fontSize(13).fontColor(this.isDarkMode ? '#C9CDD3' : '#50545A')
@@ -1116,17 +1156,21 @@ export struct ProfilePage {
             if (this.isLoggedIn) { this.MenuRowPlain('退出登录', () => this.showLogoutConfirm(), false) }
           }.width('100%').padding({ top: 4, bottom: 4 })
         }
-        }.width('100%')
       }.width('100%').constraintSize({ maxWidth: 760 }).padding({ left: 16, right: 16, top: this.statusBarHeight + 60, bottom: 32 + this.navIndicatorHeight })
     }.width('100%').height('100%').scrollBar(BarState.Off)
     .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
     .backgroundColor(this.pageWallpaperEnabled ? Color.Transparent : pageBackgroundColor(this.isDarkMode))
-
   }
 
   build() {
     if (this.settingsOnly) {
-      this.ReferenceSettings()
+      if (this.settingsSection === 'appearance') {
+        this.SettingsAppearanceLevel()
+      } else if (this.settingsSection === 'playback') {
+        this.SettingsPlaybackLevel()
+      } else {
+        this.SettingsRoot()
+      }
     } else {
       this.ReferenceProfile()
     }

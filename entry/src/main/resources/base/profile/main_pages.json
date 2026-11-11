@@ -24,6 +24,7 @@
     "pages/DashPocPage",
     "pages/MessagesPage",
     "pages/SettingsPage",
+    "pages/SettingsSectionPage",
     "pages/LocalWallpaperPage"
   ]
 }
