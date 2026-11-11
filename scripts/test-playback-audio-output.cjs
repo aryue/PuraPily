@@ -42,13 +42,17 @@ const remoteDevice = { createRemoteDevice: address => {
 } };
 const timers = new Map(); let timerId = 0;
 let resolvePermission, permissionRequests = 0;
+let remoteName = 'FreeBuds Studio', remoteNameFailure = false;
 const context = { exports: {}, setInterval: fn => { timers.set(++timerId, fn); return timerId; },
   clearInterval: id => timers.delete(id), require: name => {
     if (name.includes('HeadphoneIcons')) return iconContext.exports;
     if (name.includes('nearlink.manager')) return { default: manager };
     if (name.includes('nearlink.remoteDevice')) return { default: remoteDevice };
     if (name.includes('nearlink.constant')) return { default: { ConnectionState: { STATE_CONNECTED: 1 } } };
-    if (name.includes('bluetooth.connection')) return { default: { getRemoteDeviceName: () => 'FreeBuds Studio' } };
+    if (name.includes('bluetooth.connection')) return { default: { getRemoteDeviceName: () => {
+      if (remoteNameFailure) throw Error('bluetooth stack not ready');
+      return remoteName;
+    } } };
     if (name.includes('abilityAccessCtrl')) return { default: { createAtManager: () => ({
       requestPermissionsFromUser: () => { permissionRequests++; return new Promise(resolve => { resolvePermission = resolve; }); }
     }) } };
@@ -142,5 +146,31 @@ assert.equal(timers.size, 0);
   await Promise.resolve(); await Promise.resolve();
   assert.equal(values.length, count, 'permission callback cannot update disposed player');
   assert.equal(timers.size, 0);
-  console.log('PASS: compiled model rules/resources; selected audio route; NearLink candidate/address/ambiguity/disconnect/error cases; permission lifecycle; metadata refresh; DASH handoff; stale callbacks and cleanup.');
+  // 冷启动蓝牙栈晚于首次 publish 就绪：无名字蓝牙先给通用图标，周期重试解析成功即停。
+  route = [{ deviceType: 8, name: '', address: 'AA:BB:CC:DD:EE:09' }];
+  remoteNameFailure = true;
+  const btMonitor = new PlaybackAudioOutputMonitor((...args) => values.push(args), () => ({}));
+  btMonitor.bind(player(4), 4);
+  assert.equal(permissionRequests, 2, 'nameless bluetooth requested ACCESS_BLUETOOTH once');
+  assert.equal(values.at(-1)[1], 'headphones_fill', 'stack not ready keeps the generic icon');
+  assert.equal(timers.size, 1, 'unresolved bluetooth names schedule retries');
+  remoteNameFailure = false;
+  for (const tick of timers.values()) tick();
+  assert.equal(values.at(-1)[1], 'earphone_roc', 'retry resolves once the stack reports the name');
+  assert.equal(timers.size, 0, 'retry stops once the name resolves');
+  btMonitor.dispose();
+  assert.equal(timers.size, 0);
+  // 名字永远拿不到：重试到上限后放弃，不再无限轮询。
+  route = [{ deviceType: 8, name: '', address: 'AA:BB:CC:DD:EE:0A' }];
+  remoteNameFailure = true;
+  const stuckMonitor = new PlaybackAudioOutputMonitor((...args) => values.push(args));
+  stuckMonitor.bind(player(4), 4);
+  let retryTicks = 0;
+  while (timers.size > 0 && retryTicks < 30) { retryTicks++; for (const tick of [...timers.values()]) tick(); }
+  assert.equal(retryTicks, 12, 'unresolvable names retry at most twelve times');
+  assert.equal(timers.size, 0, 'unresolvable names stop retrying at the limit');
+  stuckMonitor.dispose();
+  assert.equal(timers.size, 0);
+  remoteNameFailure = false;
+  console.log('PASS: compiled model rules/resources; selected audio route; NearLink candidate/address/ambiguity/disconnect/error cases; permission lifecycle; metadata refresh; bluetooth cold-start name retry; DASH handoff; stale callbacks and cleanup.');
 })().catch(error => { console.error(error); process.exitCode = 1; });

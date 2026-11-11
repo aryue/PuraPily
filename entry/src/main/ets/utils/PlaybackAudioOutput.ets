@@ -64,6 +64,8 @@ export class PlaybackAudioOutputMonitor {
   private context: (() => common.UIAbilityContext | undefined) | undefined;
   private devices: audio.AudioDeviceDescriptors = [];
   private metadataTimer: number = -1;
+  private metadataUnlimited: boolean = false;
+  private metadataAttempts: number = 0;
   private generation: number = 0;
   private hasActualRoute: boolean = false;
 
@@ -95,14 +97,45 @@ export class PlaybackAudioOutputMonitor {
     const nearlink = devices.some((device: audio.AudioDeviceDescriptor) => device.deviceType === audio.DeviceType.NEARLINK);
     if (nearlink) {
       this.requestMetadata('ohos.permission.ACCESS_NEARLINK');
-      if (this.metadataTimer < 0) this.metadataTimer = setInterval(() => { this.publish(); }, 2500);
+      this.startMetadataPoll(true);
     } else {
-      if (this.metadataTimer >= 0) clearInterval(this.metadataTimer);
-      this.metadataTimer = -1;
-      if (devices.some((device: audio.AudioDeviceDescriptor) => !device.name &&
-        (device.deviceType === audio.DeviceType.BLUETOOTH_A2DP || device.deviceType === audio.DeviceType.BLUETOOTH_SCO))) {
+      const namelessBluetooth = devices.some((device: audio.AudioDeviceDescriptor) => !device.name &&
+        (device.deviceType === audio.DeviceType.BLUETOOTH_A2DP || device.deviceType === audio.DeviceType.BLUETOOTH_SCO));
+      if (namelessBluetooth) {
         this.requestMetadata('ohos.permission.ACCESS_BLUETOOTH');
       }
+      // 冷启动蓝牙栈常晚于首次 publish 才就绪，getRemoteDeviceName 那一刻拿不到名字；
+      // 只要耳机路由还没解析出具体设备图标就周期重试，解析成功或到上限后停止。
+      if (namelessBluetooth && isHeadphoneOutput(devices) &&
+        outputHeadphoneIcon(devices) === 'headphones_fill') {
+        this.startMetadataPoll(false);
+      } else {
+        this.stopMetadataPoll();
+      }
+    }
+  }
+
+  /** NearLink 沿用无限轮询；蓝牙名字晚到只有限重试（12 次 ≈ 30s），解析成功即停。 */
+  private startMetadataPoll(unlimited: boolean): void {
+    this.metadataUnlimited = this.metadataUnlimited || unlimited;
+    if (this.metadataTimer >= 0) return;
+    this.metadataAttempts = 0;
+    this.metadataTimer = setInterval(() => {
+      this.metadataAttempts++;
+      this.publish();
+      if (!this.metadataUnlimited &&
+        (outputHeadphoneIcon(this.devices) !== 'headphones_fill' || this.metadataAttempts >= 12)) {
+        this.stopMetadataPoll();
+      }
+    }, 2500);
+  }
+
+  private stopMetadataPoll(): void {
+    this.metadataUnlimited = false;
+    this.metadataAttempts = 0;
+    if (this.metadataTimer >= 0) {
+      clearInterval(this.metadataTimer);
+      this.metadataTimer = -1;
     }
   }
 
@@ -140,8 +173,7 @@ export class PlaybackAudioOutputMonitor {
     this.generation++;
     this.devices = [];
     this.hasActualRoute = false;
-    if (this.metadataTimer >= 0) clearInterval(this.metadataTimer);
-    this.metadataTimer = -1;
+    this.stopMetadataPoll();
     if (player && listener) {
       try { player.off('audioOutputDeviceChangeWithInfo', listener); } catch (_) {}
     }
