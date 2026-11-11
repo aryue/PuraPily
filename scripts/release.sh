@@ -3,6 +3,8 @@
 #
 # 用法: scripts/release.sh <版本号> <说明文件>
 # 例:   scripts/release.sh 2.0.6 docs/next-release.md
+# Windows（CMD / PowerShell）: scripts\release.cmd <版本号> <说明文件>
+#   （release.cmd 只是转交本脚本的入口，逻辑全在这里）
 #
 # 规则:
 # - versionCode = 主版本*1000000 + 次版本*1000 + 修订号（2.0.5 → 2000005）
