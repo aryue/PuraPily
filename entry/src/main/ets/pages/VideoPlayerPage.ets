@@ -6601,6 +6601,8 @@ struct VideoPlayerPage {
       //    避免 15s 定时器把正常播放误判成卡死（IJK 可能不补报 startRenderFrame）。
       if (this.waitingForFirstFrame && player.state === 'playing' && position >= clockStart + 500) {
         this.confirmFirstFrame(player);
+        this.referenceFeedMainFrameResolve?.();
+        this.referenceFeedMainFrameResolve = null;
       }
       if (player.state === 'playing' && !this.userPaused_ && !this.ry_ && !this.err &&
         !this.waitingForFirstFrame && !this.sg_ && !this.sk_ && !this.qs &&
@@ -6676,7 +6678,7 @@ struct VideoPlayerPage {
           this.cv = true;
           this.cancelDelayHide();
           if (this.ct_ !== -1) { clearTimeout(this.ct_); this.ct_ = -1; }
-          if (this.referenceLayout) this.referenceOnCompleted();
+          if (this.referenceLayout && !this.referenceFeedPreviewPinned) this.referenceOnCompleted();
           break;
         case 'paused':
           LiveViewHelper.updatePlayState(false);
@@ -8092,6 +8094,7 @@ struct VideoPlayerPage {
   }
 
   private async recoverPlaybackStall(player: PlaybackPlayer | null): Promise<void> {
+    if (this.referenceFeedPreviewPinned) return;
     if (this.av !== player || !this.referenceAlive || this.initPInProgress_ || this.userPaused_ || this.ry_ || this.qs) return;
     // ⭐ 播完是终态：任何「卡住」判定都不该把已播完的播放器重建 ——
     //    重建后的续播点会按「已完成」算成 0，用户听到的就是「播完了又从头出声」。
@@ -8156,9 +8159,10 @@ struct VideoPlayerPage {
     this.ld = true;
     this.err = '';
     if (this.rt_ !== -1) clearTimeout(this.rt_);
+    const generation = this.referenceSwitchGeneration;
     this.rt_ = setTimeout(async () => {
       this.rt_ = -1;
-      const generation = this.referenceSwitchGeneration;
+      if (!this.referenceAlive || generation !== this.referenceSwitchGeneration) { this.ry_ = false; return; }
       await this.release();
       if (!this.referenceAlive || generation !== this.referenceSwitchGeneration) { this.ry_ = false; return; }
       this.ry_ = false;
@@ -13169,11 +13173,7 @@ struct VideoPlayerPage {
       return;
     }
     this.referenceFeedLoading = true;
-    const generation = ++this.referenceSwitchGeneration;
-    this.referenceFeedMainRetry_ = 0;
-    this.qualityDeadline_?.cancel();
-    this.qualitySession_?.release().catch(() => {});
-    this.referenceFeedMainCancel?.();
+    let generation = this.referenceSwitchGeneration;
     const switchStarted = Date.now();
     let committed = false;
     // 翻页途中被新手势按住/拖回：这次翻页没有真正完成，不能提交内容。
@@ -13272,6 +13272,13 @@ struct VideoPlayerPage {
       }
       this.saveWatchHistory(true);   // 连刷换片：离开这条时把进度锚定住，不能被节流吞掉
       this.reportWatchBehavior();
+      // 只有翻页落定才废弃当前片的回调。目标预热仍占用另一块 Surface。
+      generation = ++this.referenceSwitchGeneration;
+      this.referenceFeedMainRetry_ = 0;
+      this.referenceFeedMainCancel?.();
+      try { this.av?.setVolume(0); } catch (_e) { }
+      try { this.avAudio?.setVolume(0); } catch (_e) { }
+      const outgoing = this.release();
       const preserveDrag = this.referenceVerticalSwipe || this.referenceQueuedFeedStep !== 0;
       const destinationOffset = preserveDrag ? this.referenceFeedDragY + step * Math.max(this.ch, 120) : 0;
       if (preserveDrag) this.referenceFeedDragOriginY += step * Math.max(this.ch, 120);
@@ -13368,7 +13375,8 @@ struct VideoPlayerPage {
       this.loadD(detail);
       this.loadC(detail.aid);
       const previousMain = this.referenceFeedMainJob;
-      this.referenceFeedMainJob = previousMain.catch(() => {}).then(() => this.referencePrepareFeedMain(targetDetail, generation, warm));
+      this.referenceFeedMainJob = Promise.all([previousMain.catch(() => {}), outgoing.catch(() => {})])
+        .then(() => this.referencePrepareFeedMain(targetDetail, generation, warm));
       // ⭐ 所有信息层 / 画幅 / 播放状态已落地，最后一步才归零露出当前页 chrome。
       this.referenceFeedMotionDuration = 0;
       this.referenceFeedDragY = destinationOffset;
@@ -13378,8 +13386,8 @@ struct VideoPlayerPage {
       logError('连续播放切换失败', error);
       if (this.referenceAlive) {
         if (this.referenceFeedPreviewPinned && this.referencePinnedFrame) {
-          this.referenceFeedMainFrameResolve = null;
-          this.getUIContext().getPromptAction().showToast({ message: '正在继续准备视频' });
+          this.referenceFeedBounceBack();
+          this.getUIContext().getPromptAction().showToast({ message: '切换失败，请重试' });
           return;
         }
         this.referenceAnimateFeedTo(0, 360);
@@ -13438,24 +13446,23 @@ struct VideoPlayerPage {
         warm?.release().catch(() => {});
       };
       this.referenceFeedMainCancel = cancelWait;
-      // 连刷要的是「两个播放器」：下一条已经在另一个 Surface 上解码、暂停好，
-      // 当前这条一直播到交接完成才释放。先 release 再等预热，等于亲手把唯一在播的
-      // 实例杀掉，屏幕上只剩黑底转圈——这就是上一版的回归。
-      if (warm && !warm.ready) {
-        logInfo(`[ReferenceFeed] main ${generation} waiting for existing preheat ${detail.bvid}`);
-        await warm.prepare(media.VideoScaleType.VIDEO_SCALE_TYPE_SCALED_ASPECT, AppStorage.get<string>('biliCookie') || '');
+      let handles = warm?.take() || null;
+      if (warm && !handles) {
+        // 提交后只给在途预热短暂的交接窗口，超时就回收备用槽并冷启当前片。
+        let warmTimer: number = -1;
+        try {
+          await Promise.race([
+            warm.prepare(media.VideoScaleType.VIDEO_SCALE_TYPE_SCALED_ASPECT, AppStorage.get<string>('biliCookie') || ''),
+            new Promise<boolean>((resolve) => { warmTimer = setTimeout(() => resolve(false), 1500); })
+          ]);
+        } finally {
+          clearTimeout(warmTimer);
+        }
         if (!this.referenceAlive || generation !== this.referenceSwitchGeneration) return;
+        handles = warm.take();
+        if (!handles) await warm.release();
       }
       if (!this.referenceAlive || generation !== this.referenceSwitchGeneration) {
-        await warm?.release();
-        return;
-      }
-      const handles = warm?.take() || null;
-      // 交接棒已在新播放器手里，旧实例这时才可以下线（它占用的 Surface 留给下一次预热）。
-      await this.release();
-      if (!this.referenceAlive || generation !== this.referenceSwitchGeneration) {
-        // release() 期间被下一次切换取代：take() 之后会话不再负责释放，
-        // 这里必须自己收，否则每打断一次就漏掉一整个播放器实例。
         await this.disposeFeedHandles(handles);
         return;
       }
@@ -13525,7 +13532,7 @@ struct VideoPlayerPage {
       this.referenceFeedSlotPending = false;
       if (this.referenceFeedPreview) this.requestReferenceFeedPreview(this.referenceFeedPreview);
       const player = this.av;
-      if (!player) return;
+      if (!player) throw new Error('主播放器已释放');
       if (player.state === 'playing') {
         await player.pause();
         const pausedDeadline = Date.now() + 1500;
@@ -13533,6 +13540,7 @@ struct VideoPlayerPage {
           if (!this.referenceAlive || generation !== this.referenceSwitchGeneration) return;
           await new Promise<void>((resolve) => setTimeout(resolve, 16));
         }
+        if (player.state === 'playing') throw new Error('主播放器暂停超时');
       }
       logInfo(`[ReferenceFeed] main ${generation} behind still state=${player.state} ${Date.now() - started}ms`);
       // A held finger or rebound keeps its still. New visual switches cancel this
@@ -13576,8 +13584,9 @@ struct VideoPlayerPage {
         }
         // 交接拿到的实例若已经是 completed（旧实例没换掉 / 0 时长源），
         // play() 会把它从头拉起来：这条必须是错误，交给上层重试或保留静帧。
-        if (player.state === 'completed') throw new Error('主播放器已播完，拒绝从头起播');
-        if (player.state !== 'playing') {
+        const resumeState = String(player.state);
+        if (resumeState === 'completed') throw new Error('主播放器已播完，拒绝从头起播');
+        if (resumeState !== 'playing') {
           this.markAutoPlay('feed-handover');
           await player.play();
         }
@@ -13586,7 +13595,10 @@ struct VideoPlayerPage {
         if (!this.referenceAlive || generation !== this.referenceSwitchGeneration) return;
         if (!advancing) {
           if (this.err) throw new Error(this.err);
-          logWarn(`[ReferenceFeed] main ${generation} still buffering; keep destination poster`);
+          if (this.playerPageVisible && !this.userPaused_ &&
+            !this.referenceVerticalSwipe && !this.referenceFeedAnimator && Math.abs(this.referenceFeedDragY) <= 1) {
+            throw new Error('主播放器起播后进度未推进');
+          }
           // 硬切之后时钟没走：可能是 surface 还没真正出帧，恢复静帧继续等。
           if (stillCut) {
             this.referencePinnedOpacity = 1;
@@ -13602,7 +13614,7 @@ struct VideoPlayerPage {
           if (!this.referenceAlive || generation !== this.referenceSwitchGeneration) return;
           if (!this.playerPageVisible || this.userPaused_ || this.referenceVerticalSwipe || this.referenceFeedAnimator || Math.abs(this.referenceFeedDragY) > 1) {
             this.referenceFeedSurfaceReady = false;
-            if (player.state === 'playing') await player.pause();
+            if (String(player.state) === 'playing') await player.pause();
             continue;
           }
         }
@@ -13614,7 +13626,7 @@ struct VideoPlayerPage {
             this.referencePinnedOpacity = 1;
             this.referenceFeedSurfaceReady = false;
             stillCut = false;
-            if (player.state === 'playing') await player.pause();
+            if (String(player.state) === 'playing') await player.pause();
             continue;
           }
         }
@@ -13638,34 +13650,42 @@ struct VideoPlayerPage {
     } catch (error) {
       if (this.referenceAlive && generation === this.referenceSwitchGeneration) {
         logError('连续播放主播放器交接失败', error);
-        // 冷路径超时后没有任何东西会再来触发这一条，不重试就是永久转圈。
-        // 只重试一次：预热若已就绪就优先接管，否则重建一个实例。
+        this.referencePinnedOpacity = 1;
+        this.referenceFeedSurfaceReady = false;
+        await this.release().catch(() => {});
+        if (!this.referenceAlive || generation !== this.referenceSwitchGeneration) return;
         if (this.referenceFeedMainRetry_ < 1) {
           this.referenceFeedMainRetry_++;
-          setTimeout(() => {
+          const previousMain = this.referenceFeedMainJob;
+          this.referenceFeedMainJob = previousMain.catch(() => {}).then(async () => {
             if (!this.referenceAlive || generation !== this.referenceSwitchGeneration) return;
-            const session = this.referenceWarmSession?.id === detail.bvid ? this.referenceWarmSession : null;
-            this.referencePrepareFeedMain(detail, generation, session).catch(() => {});
-          }, 500);
+            this.err = '';
+            this.referencePlaybackCompleted = false;
+            this.referenceFeedSlotPending = true;
+            await this.referencePrepareFeedMain(detail, generation);
+          });
         } else {
-          // 重试也用尽：宁可接受一次跳变，也不能把画面永久冻在静帧上。
-          logWarn(`[ReferenceFeed] main ${generation} give up still, play directly`);
-          this.referenceFeedFallbackPlay();
+          this.referencePinnedOpacity = 0;
+          this.referencePinnedFrame = undefined;
+          this.referencePinnedCover = '';
+          this.referenceFeedPreviewPinned = false;
+          this.play = false;
+          this.ld = false;
+          this.err = '视频起播失败，请点击重试';
         }
       }
     } finally {
       await warm?.release();
       if (this.referenceFeedMainCancel === cancelWait) this.referenceFeedMainCancel = null;
       if (generation === this.referenceSwitchGeneration) {
+        const slotWasPending = this.referenceFeedSlotPending;
         this.referenceFeedSlotPending = false;
         this.referenceFeedPreparingMain = false;
         this.referenceFeedMainFrameResolve = null;
         this.referenceFeedMainPreparedResolve = null;
         this.referenceFeedMainPresentResolve = null;
-        // 主路径（12759 附近）清 slotPending 时会立刻给下一条发起预览请求，这里之前漏了。
-        // 一旦走进异常/超时分支，下一条的静帧预热就再没人启动 → 切过去只有封面，
-        // 表现就是「先出封面（还被 Contain 成小条）→ 再出画面」。补一次，幂等。
-        if (this.referenceFeedPreview) this.requestReferenceFeedPreview(this.referenceFeedPreview);
+        // 准备阶段失败也要归还备用槽，让下一条可以预热。
+        if (slotWasPending && this.referenceFeedPreview) this.requestReferenceFeedPreview(this.referenceFeedPreview);
       }
     }
   }
@@ -13677,39 +13697,6 @@ struct VideoPlayerPage {
     if (handles.audioPlayer) pending.push(handles.audioPlayer.release().catch(() => {}));
     if (handles.bridge) pending.push(handles.bridge.stopIfRunning().catch(() => {}));
     await Promise.all(pending);
-  }
-
-  /** 交接连续失败时的兜底：撤掉静帧直接播。宁可看到一次跳变，也不能永久停住。 */
-  private referenceFeedFallbackPlay(): void {
-    this.referencePinnedOpacity = 0;
-    this.referencePinnedFrame = undefined;
-    this.referencePinnedCover = '';
-    this.referenceFeedPreviewPinned = false;
-    this.referenceFeedSurfaceReady = true;
-    this.referenceFeedPreparingMain = false;
-    const player = this.av;
-    if (!player) return;
-    // ⭐ 兜底路径拿到的可能是一条已经播完的旧实例（交接失败时 av 还没换掉）：
-    //    对 completed 调 play() 会从头重播，听起来就是“播完又从头出声”。宁可停在静帧。
-    if (player.state === 'completed') {
-      logWarn('[ReferenceFeed] fallback 跳过起播：当前实例已播完');
-      return;
-    }
-    try {
-      player.setVolume(this.mute ? 0 : 1.0);
-    } catch (_e) { }
-    this.markAutoPlay('feed-fallback');
-    this.userPaused_ = false;
-    player.play().then(() => {
-      if (this.av !== player) return;
-      this.play = true;
-      if (this.avAudio) {
-        try { this.avAudio.setVolume(this.mute ? 0 : 1.0); } catch (_e) { }
-        this.avAudio.play().catch(() => {});
-      }
-    }).catch((error: Error) => {
-      logWarn(`[ReferenceFeed] fallback play failed: ${error?.message}`);
-    });
   }
 
   /** 静帧必须和 surface 用同一套映射，否则水印/画面会在硬切瞬间位移。 */

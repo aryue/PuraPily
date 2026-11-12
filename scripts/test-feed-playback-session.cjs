@@ -63,6 +63,13 @@ function loadSession(players, options = {}) {
         };
         return name === '@kit.MediaKit' ? { media } : { default: media };
       }
+      if (name.includes('PlaybackFactory')) return { supportsIjkPlayback: () => false,
+        createPlaybackPlayer: async () => {
+          if (options.creationGate) await options.creationGate.promise;
+          assert.ok(players[created], 'no unplanned player allocation');
+          return players[created++];
+        } };
+      if (name.includes('IjkPlaybackPlayer')) return { IjkPlaybackPlayer: class {} };
       if (name.includes('DashPlayerBridge')) return { DashPlayerBridge: Bridge };
       if (name.includes('PlayerStartupPolicy')) return { startupPlaybackStrategy: () => require('./test-player-startup-policy.cjs')(26) };
       if (name.includes('PlaybackDeadline')) return { PlaybackDeadline: require('./playback-deadline-test-helper.cjs')() };
@@ -72,11 +79,11 @@ function loadSession(players, options = {}) {
   return { Session: exports.FeedPlaybackSession, bridges, created: () => created };
 }
 
-function loadPageHandoff(detail = null) {
+function loadPageHandoff(detail = null, schedule = setTimeout) {
   const source = fs.readFileSync(path.join(root, 'pages/VideoPlayerPage.ets'), 'utf8');
   const start = source.indexOf('  private async referenceNextVideo(');
   const end = source.indexOf('\n  @Builder', start);
-  const context = { exports: {}, console, logInfo() {}, logError() {}, setTimeout, clearTimeout,
+  const context = { exports: {}, console, logInfo() {}, logError() {}, logWarn() {}, setTimeout: schedule, clearTimeout,
     ContinuousRecommendationState: { markVisited() {} },
     common: {}, Curve: { Linear: 'linear' }, AppStorage: { get() { return ''; } },
     getVideoDetail: async () => detail,
@@ -163,13 +170,13 @@ async function main() {
   }
   // Exercise the actual page method over two swaps; it must never call cold initP.
   const page = loadPageHandoff();
-  let cold = 0; let outgoingReleases = 0; let neighbourPrepares = 0;
+  let cold = 0; let neighbourPrepares = 0;
   Object.assign(page, {
     referenceAlive: true, referenceSwitchGeneration: 1, playerPageVisible: true, userPaused_: false,
-    referenceFeedLoading: false, referenceFeedDragY: 0, referenceSecondSurfaceActive: false,
+    referenceFeedLoading: false, referenceFeedDragY: 0, referenceSecondSurfaceActive: false, referencePinnedOpacity: 0,
     sId: 'surface-a', referenceFeedPreview: {}, vi: { title: 'next', cover: '', bvid: 'BVnext' },
     rt: 1, qn: 116, mute: false, referenceFeedSlotPending: true,
-    async release() { outgoingReleases++; this.av = null; this.avAudio = null; },
+    markAutoPlay() {},
     async initP() { cold++; },
     setupL() { this.av.on('timeUpdate', () => this.referenceFeedMainPresentResolve?.()); },
     setupAudioL() {}, getVideoScaleType() { return 0; },
@@ -195,7 +202,7 @@ async function main() {
     assert.equal(page.referenceFeedPreviewPinned, false);
     assert.equal(video.releases, 0);
   }
-  assert.equal(cold, 0); assert.equal(outgoingReleases, 2); assert.equal(neighbourPrepares, 2);
+  assert.equal(cold, 0); assert.equal(neighbourPrepares, 2);
   // Slow same-target preparation is reserved and adopted, rather than cancelled
   // and restarted with another network request/decoder after the page commits.
   {
@@ -225,7 +232,7 @@ async function main() {
     const warm = new Session('BVstale', 'b', { url: 'v' });
     await warm.prepare(0, '');
     await page.referencePrepareFeedMain({ bvid: 'BVstale' }, 1, warm);
-    assert.equal(video.releases, 1); assert.equal(outgoingReleases, 3);
+    assert.equal(video.releases, 1); assert.equal(page.av.state, 'playing');
   }
   // A warm miss uses the existing cold path without changing the active Surface.
   {
@@ -241,7 +248,7 @@ async function main() {
     assert.equal(cold, 1); assert.equal(page.sId, surface);
     assert.equal(page.referenceSecondSurfaceActive, active); assert.equal(video.state, 'playing');
   }
-  // Cancellation while the outgoing player releases must free an unclaimed warm reservation.
+  // Cancelling a pending handoff must release its reserved decoder.
   {
     const gate = deferred();
     const video = new Player();
@@ -265,14 +272,41 @@ async function main() {
     page.referenceSwitchGeneration = 2;
     page.referenceFeedPreviewPinned = false;
   }
-  // Cancellation while the outgoing player releases must free an unclaimed warm reservation.
+  // IJK can report playing while its media clock remains stuck. Retire that
+  // decoder, retry the committed video once, and leave the successful one in use.
   {
-    const video = new Player(); const { Session } = loadSession([video]);
-    const warm = new Session('BVcancelHandoff', 'b', { url: 'v' });
-    await warm.prepare(0, '');
-    page.release = async () => { page.referenceSwitchGeneration++; };
-    await page.referencePrepareFeedMain({ bvid: 'BVcancelHandoff' }, 2, warm);
-    assert.equal(video.releases, 1);
+    const p = loadPageHandoff(null, (callback, delay) => setTimeout(callback, delay >= 6000 ? 25 : delay));
+    const stalled = new Player();
+    stalled.play = async () => { stalled.state = 'playing'; };
+    const recovered = new Player();
+    const nativePlay = recovered.play.bind(recovered);
+    recovered.play = async () => { await nativePlay(); p.referenceFeedMainPresentResolve?.(); };
+    const attempts = [stalled, recovered];
+    Object.assign(p, {
+      referenceAlive: true, referenceSwitchGeneration: 1, playerPageVisible: true,
+      referenceFeedDragY: 0, referenceFeedMainRetry_: 0, vi: { bvid: 'BVstalled' },
+      referencePinnedOpacity: 0, referenceFeedPreviewPinned: true,
+      markAutoPlay() {}, startVideoSpeedSync() {},
+      getUIContext() { return { animateTo(_options, action) { action(); } }; },
+      async release() { await this.av.release(); this.av = null; },
+      async initP() {
+        this.av = attempts.shift();
+        this.av.state = 'prepared';
+        this.referenceFeedMainFrameResolve();
+        this.referenceFeedMainPreparedResolve();
+      }
+    });
+    const detail = { bvid: 'BVstalled', aid: 1 };
+    const first = Promise.resolve().then(() => p.referencePrepareFeedMain(detail, 1));
+    p.referenceFeedMainJob = first;
+    await first;
+    assert.equal(stalled.releases, 1);
+    assert.equal(p.referenceFeedMainRetry_, 1);
+    await p.referenceFeedMainJob;
+    assert.equal(p.av, recovered);
+    assert.equal(recovered.state, 'playing');
+    assert.equal(recovered.volume, 1);
+    assert.equal(p.referenceFeedPreviewPinned, false);
   }
   // A rapid swipe into an unprepared video must commit its cover and schedule a
   // cold start instead of rejecting navigation or waiting on a preheat promise.
@@ -282,30 +316,63 @@ async function main() {
     const next = { id: detail.bvid, cid: 2, coverUrl: 'recommend-cover' };
     const p = loadPageHandoff(detail);
     let coldScheduled = false;
+    let cancels = 0;
+    const outgoing = new Player();
+    outgoing.state = 'playing';
+    outgoing.volume = 1;
+    const releaseGate = deferred();
+    let offset = 0;
     Object.assign(p, {
       vi: { bvid: 'BVcurrent' }, referenceAlive: true, referenceSwitchGeneration: 0,
       referenceFeedQueue: [{ id: 'BVcurrent' }, next], referenceStillFrames: new Map(),
       referencePreviewRequestedId: detail.bvid, referencePreviewFrame: undefined, referencePreviewAspectRatio: 9 / 16,
       referenceStillRatios: new Map(), referencePreviewGeneration: 0, referencePreviewPreparing: true,
       referenceWarmSession: null, referencePreviewReleaseJob: Promise.resolve(),
+      av: outgoing, referenceDecodeRatios: new Map(),
+      referenceFeedMainCancel() { cancels++; },
+      async release() {
+        assert.equal(this.av.volume, 0, 'old audio must be silenced before waiting for cleanup');
+        assert.equal(this.vi.bvid, 'BVcurrent', 'release starts before publishing the new identity');
+        this.av = null;
+        await releaseGate.promise;
+        await outgoing.release();
+      },
       referenceFeedMainJob: Promise.resolve(), referenceFeedDragY: 0, ch: 744, ar: 1,
       referenceQueuedFeedStep: 0, referenceVerticalSwipe: false, referenceFeedLoading: false,
       referencePortraitFeedActive: () => true, ensureReferenceRecommendQueue: async () => p.referenceFeedQueue,
       requestReferenceFeedPreview() {},
+      referencePreviewDetailFor: () => detail,
+      settleFeedTransition: async () => offset,
       referenceAnimateFeedTo: async () => {
         p.referenceStillFrames.set(detail.bvid, 'late-frame');
         p.referencePreviewFrame = 'late-frame';
         p.referencePreviewAspectRatio = 16 / 9;
       },
+      referenceResetSubtitles() {},
       saveWatchHistory() {}, reportWatchBehavior() {}, clearGestureHint_() {}, resetFullscreenVideo() {},
       updateIsLandscapeVertical() {}, updateLSVSize() {}, updateVideoSize() {},
       commentDataSource: { clear() {} }, referenceFeedNeighbor: () => null, loadD() {}, loadC() {},
       async referencePrepareFeedMain(_detail, _generation, warm) { assert.equal(warm, null); coldScheduled = true; },
-      referenceFeedBounceBack() { assert.fail('unprepared media must not reject a swipe'); }
+      referenceFeedBounceBack() {}
     });
-    await p.referenceNextVideo(1); await p.referenceFeedMainJob;
+    await p.referenceNextVideo(1);
+    assert.equal(p.vi.bvid, 'BVcurrent');
+    assert.equal(p.referenceSwitchGeneration, 0, 'an interrupted swipe preserves callback ownership');
+    assert.equal(cancels, 0);
+    assert.equal(outgoing.volume, 1);
+
+    p.referenceStillRatios.set(detail.bvid, 16 / 9);
+    p.referencePreviewAspectRatio = 9 / 16;
+    offset = -744;
+    await p.referenceNextVideo(1);
+    assert.equal(cancels, 1);
+    assert.equal(outgoing.volume, 0);
+    assert.equal(coldScheduled, false, 'new playback waits for the outgoing decoder to release');
+    releaseGate.resolve();
+    await p.referenceFeedMainJob;
+    assert.equal(outgoing.releases, 1);
     assert.equal(p.vi.bvid, detail.bvid); assert.equal(p.vi.cover, 'cover');
-    assert.equal(p.referenceFeedPreviewPinned, true); assert.equal(p.referencePinnedFrame, undefined);
+    assert.equal(p.referenceFeedPreviewPinned, true); assert.equal(p.referencePinnedFrame, 'late-frame');
     assert.equal(p.referencePinnedCover, 'recommend-cover', 'do not swap to the detail thumbnail at commit');
     assert.equal(p.referencePinnedAspectRatio, 9 / 16, 'late dimensions may not resize the visible poster');
     assert.equal(p.ar, 16 / 9, 'native layout can settle independently behind the poster');
