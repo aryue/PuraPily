@@ -2,7 +2,7 @@ import { FollowGlassButton } from '../components/FollowGlassButton';
 import { HeaderGlassControl } from '../components/HeaderGlassControl';
 import { NativeGlassInput } from '../components/NativeGlassInput';
 import { HeaderBackButton } from '../components/HeaderBackButton';
-import { ChannelCardSurface } from '../components/ChannelCardSurface';
+import { CHANNEL_CARD_RADIUS, ChannelCardSurface } from '../components/ChannelCardSurface';
 import { ordinaryCardColor } from '../utils/SurfaceColors';
 import { pageBackgroundColor } from '../utils/SurfaceColors';
 import { cardItemBg } from '../utils/CardStyle';
@@ -181,7 +181,7 @@ struct UpSpacePage {
   @StorageLink('wallpaperBlur') wallpaperBlur: number = 0;
   @StorageLink('wallpaperDarkness') wallpaperDarkness: number = 50;
   // ⭐ 卡片样式（与动态页/首页一致）
-  @StorageLink('cardListBorderRadius') cardListBorderRadius: number = 12;
+  @StorageLink('cardListBorderRadius') cardListBorderRadius: number = 8;
   @StorageLink('cardTransparentStyle') cardTransparentStyle: boolean = false;
   @StorageLink('cardBgOpacity') cardBgOpacity: number = 30;
   @StorageLink('cardBorderWidth') cardBorderWidth: number = 1;
@@ -1334,7 +1334,7 @@ struct UpSpacePage {
    */
   @Builder
   gridVideoCard(item: UpSpaceVideoItem) {
-    ChannelCardSurface({ radius: 6 }) {
+    ChannelCardSurface() {
 
     Column() {
       Stack({ alignContent: Alignment.BottomStart }) {
@@ -1344,7 +1344,7 @@ struct UpSpacePage {
           Blank()
           Text(fmtDuration(item.duration)).fontSize(10).fontColor('#FFFFFF')
         }.width('100%').padding(6).linearGradient({ angle: 0, colors: [['#80000000', 0], ['#00000000', 1]] })
-      }.width('100%')
+      }.width('100%').borderRadius(CHANNEL_CARD_RADIUS).clip(true)
       Row({ space: 4 }) {
         Text(item.title).fontSize(13).fontColor(this.ink()).maxLines(2)
           .textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
@@ -1353,7 +1353,7 @@ struct UpSpacePage {
         .padding({ left: 10, right: 6, top: 6, bottom: 6 })
     }.width('100%').backgroundColor(this.videoCardEdgeLight ? Color.Transparent : ordinaryCardColor(this.isDarkMode))
       .visibility(this.feedbackRevision >= 0 && VideoCardFeedback.isDismissed(item.bvid, String(this.mid)) ? Visibility.None : Visibility.Visible)
-      .borderRadius(6).clip(true).onClick(() => this.playVideo(item))
+      .onClick(() => this.playVideo(item))
 
     }
   }
@@ -1519,16 +1519,16 @@ struct UpSpacePage {
               .width('100%')
               .height('100%')
               .objectFit(ImageFit.Cover)
-              .borderRadius(4)
+              .borderRadius(8)
               .backgroundColor('#E8E8E8')
             Row({ space: 8 }) {
               if (item.video.durationText) {
                 Text(item.video.durationText)
                   .fontSize(12)
                   .fontColor('#FFFFFF')
-                  .backgroundColor('#B0000000')
+                  // .backgroundColor('#B0000000')
                   .padding({ left: 6, right: 6, top: 2, bottom: 2 })
-                  .borderRadius(4)
+                  // .borderRadius(4)
               }
               Text(`${fmtN(item.video.play)}播放`)
                 .fontSize(12).fontColor('#FFFFFF')
@@ -1715,7 +1715,7 @@ struct UpSpacePage {
   dynamicCard(item: SpaceDynamicItem) {
     // Match the feed's measured native card material; spacing stays outside the surface.
     Column() {
-    PageSurface({ radius: 20 }) {
+    PageSurface({ radius: 8 }) {
     Column() {
       // ⭐ 内部包裹 Column：承载 padding，保证内容在卡片内
       Column() {

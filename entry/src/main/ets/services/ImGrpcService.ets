@@ -1340,6 +1340,11 @@ export class ImGrpcService {
     }
   }
 
+  static async fetchPrivateUnread(): Promise<number> {
+    const data = await ImGrpcService.webGet('/session_svr/v1/session_svr/single_unread', {});
+    return (Number(data['follow_unread']) || 0) + (Number(data['unfollow_unread']) || 0);
+  }
+
   private static async fetchWebUnread(): Promise<ImUnreadCount> {
     const data = await ImGrpcService.webGet('/x/msgfeed/unread', { 'build': '0', 'mobi_app': 'web' }, 'https://api.bilibili.com');
     const result = new ImUnreadCount();

@@ -110,6 +110,7 @@ async function run() {
   service.webGet = async (url, params) => {
     requests.push({ url, params });
     if (url.includes('msgfeed/unread')) return { at: 1, like: 2, reply: 3, sys_msg: 4 };
+    if (url.endsWith('/single_unread')) return { follow_unread: 2, unfollow_unread: 3 };
     if (url.includes('fetch_session_msgs')) return { messages: [{ sender_uid: 7, msg_seqno: 22, msg_type: 1, content: '{"content":"收到内容"}' }], has_more: 1 };
     if (url.includes('user_infos')) return [{ mid: 999, name: '其他人', face: 'wrong' }, { mid: 7, name: '昵称', face: '//i.example/avatar' }];
     return { session_list: [{ talker_id: 7, session_ts: 1700000000000000, unread_count: 2, last_msg: { msg_type: 1, content: '{"content":"消息预览"}' } }], has_more: 1 };
@@ -133,6 +134,47 @@ async function run() {
   const fallback = await service.fetchSessionList(null);
   assert.equal(fallback.sessions[0].talkerUid, 7);
   assert.deepEqual(Object.values(await service.fetchTotalUnread()), [1, 2, 3, 4]);
+  assert.equal(await service.fetchPrivateUnread(), 5);
+  assert.equal(requests.at(-1).url, '/session_svr/v1/session_svr/single_unread');
+  const index = read('pages/Index.ets');
+  const pollingMethods = index.slice(index.indexOf('  private onMessageAccountChanged()'),
+    index.indexOf('  private updateSearchVisibility()'));
+  let cookie = 'SESSDATA=test';
+  let timer;
+  let privateUnread = async () => 5;
+  const Home = new Function('ImGrpcService', 'AppStorage', 'setInterval', 'clearInterval', 'HOME_MESSAGE_REFRESH_MS',
+    compile('class Home {\n' + pollingMethods + '\n}') + '\nreturn Home;')(
+    { fetchPrivateUnread: () => privateUnread(), fetchTotalUnread: () => service.fetchTotalUnread() },
+    { get: () => cookie }, fn => { timer = fn; return 1; }, () => { timer = undefined; }, 30000);
+  const home = Object.assign(new Home(), {
+    pageVisible: true, activeTab: 0, appInBackground: false, messageCookie: cookie,
+    messagePollTimer: -1, messagePollGeneration: 0, messagePollInFlight: false,
+  });
+  const settle = () => new Promise(resolve => setImmediate(resolve));
+  home.updateMessagePolling();
+  await settle();
+  assert.equal(home.messageUnread, 15);
+  privateUnread = async () => { throw new Error('offline'); };
+  timer();
+  await settle();
+  assert.equal(home.messageUnread, 15);
+  privateUnread = async () => 0;
+  home.pageVisible = false;
+  home.updateMessagePolling();
+  assert.equal(timer, undefined);
+  home.pageVisible = true;
+  home.updateMessagePolling();
+  await settle();
+  assert.equal(home.messageUnread, 10);
+  let finishUnread;
+  privateUnread = () => new Promise(resolve => { finishUnread = resolve; });
+  timer();
+  home.messageCookie = cookie = '';
+  home.onMessageAccountChanged();
+  finishUnread(99);
+  await settle();
+  assert.equal(home.messageUnread, 0);
+  assert.equal(timer, undefined);
   const detail = read('pages/WhisperDetailPage.ets');
   assert.ok(detail.includes('WhisperChatView({'));
   assert.ok(!detail.includes('fetchSessionMsgs('));

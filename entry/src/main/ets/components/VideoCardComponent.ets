@@ -76,7 +76,7 @@ export struct VideoCardComponent {
       if (width > 0 && Math.abs(width - this.materialWidth) > 0.5) this.materialWidth = width;
       if (height > 0 && Math.abs(height - this.materialHeight) > 0.5) this.materialHeight = height;
     })
-    }.width('100%').height(LayoutPolicy.fixAtIdealSize).borderRadius(4).clip(true)
+    }.width('100%').height(LayoutPolicy.fixAtIdealSize).borderRadius(8).clip(true)
     .visibility(this.feedbackRevision >= 0 && VideoCardFeedback.isDismissed(this.item.id, this.item.ownerMid) ? Visibility.None : Visibility.Visible)
     .backgroundColor(this.videoCardEdgeLight ? Color.Transparent : ordinaryCardColor(this.isDarkMode))
     .clickEffect({ level: 0, scale: 0.9 })

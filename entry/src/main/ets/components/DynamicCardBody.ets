@@ -62,7 +62,7 @@ export struct DynamicCardBody {
   @StorageProp('otherCardGlassEnabled') otherCardGlassEnabled: boolean = true;
   @StorageLink('isDarkMode') isDarkMode: boolean = false;
   @StorageLink('customThemeColor') customThemeColor: string = '#007DFF';
-  @StorageLink('cardListBorderRadius') cardListBorderRadius: number = 12;
+  @StorageLink('cardListBorderRadius') cardListBorderRadius: number = 8;
   @StorageLink('cardBorderWidth') cardBorderWidth: number = 1;
   @StorageLink('cardBorderOpacity') cardBorderOpacity: number = 15;
   @StorageLink('cardBgOpacity') cardBgOpacity: number = 30;
@@ -133,26 +133,26 @@ export struct DynamicCardBody {
               .width('100%')
               .height('100%')
               .objectFit(ImageFit.Cover)
-              .borderRadius(this.feedStyle ? 4 : this.cardListBorderRadius)
+              .borderRadius(this.feedStyle ? 8 : this.cardListBorderRadius)
               .backgroundColor('#E8E8E8')
             Row({ space: 8 }) {
               if (item.video.durationText) {
                 Text(item.video.durationText)
                   .fontSize(this.feedStyle ? 11 : 12)
                   .fontColor('#FFFFFF')
-                  .backgroundColor('#B0000000')
+                  // .backgroundColor('#B0000000')
                   .padding({ left: 6, right: 6, top: 2, bottom: 2 })
-                  .borderRadius(4)
+                  // .borderRadius(4)
               }
               Text(`${fmtCount(item.video.play)}播放`)
                 .fontSize(this.feedStyle ? 11 : 12).fontColor('#FFFFFF')
                 .fontWeight(this.feedStyle ? FontWeight.Normal : FontWeight.Bold)
-                .textShadow({ radius: 2, color: '#99000000', offsetX: 0, offsetY: 1 })
+                .textShadow({ radius: 8, color: '#99000000', offsetX: 0, offsetY: 1 })
                 .padding({ bottom: 2 })
               if (this.feedStyle && this.mediaMaxWidth > 0) {
                 Text(`${item.video.danmaku < 10000 ? item.video.danmaku.toString() : fmtCount(item.video.danmaku)}弹幕`)
                   .fontSize(11).fontColor(Color.White)
-                  .textShadow({ radius: 2, color: '#99000000', offsetX: 0, offsetY: 1 })
+                  .textShadow({ radius: 8, color: '#99000000', offsetX: 0, offsetY: 1 })
                   .padding({ bottom: 2 })
               }
               Blank()
@@ -517,7 +517,7 @@ export struct DynamicCardBody {
             Image(resizeImageUrl(item.common.cover, 320))
               .width(84).height(56)
               .objectFit(ImageFit.Cover)
-              .borderRadius(6)
+              .borderRadius(8)
               .backgroundColor('#E8E8E8')
           }
           Column() {
@@ -645,7 +645,7 @@ export struct DynamicCardBody {
     // ⚠️ 边框跟随卡片样式（宽度/透明度/跟随主题色）
     .border({ width: this.cardBorderWidth, color: this.getCardBorderColor() })
     .clip(true)
-    .shadow({ radius: 4, color: '#10000000', offsetY: 2 })
+    .shadow({ radius: 8, color: '#10000000', offsetY: 2 })
     // ⭐ 点击应用内跳转播放页（与投稿/番剧页一致，见 openPgcLink）
     .onClick(() => { this.openPgcLink(item); })
   }
@@ -724,7 +724,7 @@ export struct DynamicCardBody {
             Image(resizeImageUrl(item.orig.video.cover, 240))
               .width(64).height(40)
               .objectFit(ImageFit.Cover)
-              .borderRadius(6)
+              .borderRadius(8)
               .backgroundColor('#E8E8E8')
           }
           Column() {
@@ -757,7 +757,7 @@ export struct DynamicCardBody {
         .width('100%')
         .padding(10)
         .backgroundColor(this.isDarkMode ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)')
-        .borderRadius(10)
+        .borderRadius(8)
         .alignItems(VerticalAlign.Center)
         // ⭐ 点原文引用块：进**原文**的详情页（转发源本身也是一条动态，有 idStr）；缺失时退回播放原文视频
         .onClick(() => { this.openOrigDetail(item); })

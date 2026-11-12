@@ -1,9 +1,11 @@
 import { NativeCardGlass } from './NativeCardGlass';
 
+export const CHANNEL_CARD_RADIUS: number = 8;
+
 /** Each card measures its own content so the material follows grid resizing. */
 @Component
 export struct ChannelCardSurface {
-  @Prop radius: number = 12;
+  @Prop radius: number = CHANNEL_CARD_RADIUS;
   @BuilderParam content: () => void;
   @StorageProp('videoCardEdgeLight') glassEnabled: boolean = false;
   @State private surfaceWidth: number = 0;

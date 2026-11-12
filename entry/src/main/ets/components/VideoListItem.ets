@@ -38,6 +38,7 @@ export function videoListDuration(duration: number): string {
 export struct VideoListItem {
   // Hosts with known geometry can avoid a second layout after measuring each row.
   @Prop availableWidth: number = 0;
+  @Prop radius: number = 8;
   @Prop title: string = '';
   @Prop cover: string = '';
   @Prop duration: number = 0;
@@ -71,7 +72,7 @@ export struct VideoListItem {
   emptyFooter() {}
 
   private coverWidth(): number {
-    return Math.min(200, Math.max(0, (this.availableWidth > 0 ? this.availableWidth : this.itemWidth) - (this.selectable ? 32 : 0)) * 0.4);
+    return Math.min(200, Math.max(0, (this.availableWidth > 0 ? this.availableWidth : this.itemWidth) - (this.selectable ? 42 : 0)) * 0.4);
   }
 
   private rowHeight(): number {
@@ -98,7 +99,7 @@ export struct VideoListItem {
   skeleton() {
     Row({ space: 10 }) {
       Column().width(this.coverWidth()).height(this.rowHeight())
-        .backgroundColor(this.isDarkMode ? '#303234' : '#E3E5E7').borderRadius(4)
+        .backgroundColor(this.isDarkMode ? '#303234' : '#E3E5E7').borderRadius(this.radius)
       Column({ space: 8 }) {
         Column().width('100%').height(14).backgroundColor(this.isDarkMode ? '#303234' : '#E3E5E7')
         Column().width('70%').height(14).backgroundColor(this.isDarkMode ? '#303234' : '#E3E5E7')
@@ -117,7 +118,7 @@ export struct VideoListItem {
         Stack({ alignContent: Alignment.TopStart }) {
           if (this.videoCardEdgeLight) {
             NativeCardGlass({ surfaceWidth: this.availableWidth > 0 ? this.availableWidth : this.materialWidth,
-              surfaceHeight: this.availableWidth > 0 ? this.rowHeight() : this.materialHeight })
+              surfaceHeight: this.availableWidth > 0 ? this.rowHeight() : this.materialHeight, radius: this.radius })
               .position({ x: 0, y: 0 })
           }
         Row({ space: 10 }) {
@@ -129,6 +130,7 @@ export struct VideoListItem {
             }.width(22).height(22).borderRadius(11)
               .border({ width: 1, color: this.selected ? '#FB7299' : '#757A81' })
               .backgroundColor(this.selected ? '#FB7299' : Color.Transparent)
+              .margin({ left: 10 })
           }
           Stack({ alignContent: Alignment.BottomEnd }) {
             if (this.cover) {
@@ -137,10 +139,10 @@ export struct VideoListItem {
             if (this.duration > 0) {
               Text(videoListDuration(this.duration)).fontSize(10).maxFontScale(1).fontColor('#FFFFFF')
                 .padding({ left: 4, right: 4, top: 2, bottom: 2 })
-                .backgroundColor('#66000000').borderRadius(2).margin(4)
+                // .backgroundColor('#66000000').borderRadius(2).margin(4)
             }
           }.width(this.coverWidth()).height(this.rowHeight()).flexShrink(0)
-            .borderRadius(4).clip(true).backgroundColor(this.isDarkMode ? '#242628' : '#E3E5E7')
+            .borderRadius(this.radius).clip(true).backgroundColor(this.isDarkMode ? '#242628' : '#E3E5E7')
           Column() {
             Text(this.title).fontSize(16).maxFontScale(1).lineHeight(21).maxLines(2).flexShrink(0)
               .textOverflow({ overflow: TextOverflow.Ellipsis })
@@ -185,7 +187,7 @@ export struct VideoListItem {
           }.layoutWeight(1).height(this.rowHeight()).alignItems(HorizontalAlign.Start)
         }.width('100%').height(this.rowHeight())
         }.width('100%').height(this.rowHeight())
-          .borderRadius(4)
+          .borderRadius(this.radius)
           .backgroundColor(this.videoCardEdgeLight ? Color.Transparent : ordinaryCardColor(this.isDarkMode))
           .onSizeChange((_old: SizeOptions, size: SizeOptions) => {
             if (this.availableWidth > 0 || !this.videoCardEdgeLight) return;

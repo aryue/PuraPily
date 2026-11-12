@@ -4,7 +4,7 @@ import { HistoryDustChip } from '../components/HistoryDustChip';
 import { HeaderGlassControl } from '../components/HeaderGlassControl';
 import { HeaderBackButton } from '../components/HeaderBackButton';
 import { PageSurface } from '../components/PageSurface';
-import { ChannelCardSurface } from '../components/ChannelCardSurface';
+import { CHANNEL_CARD_RADIUS, ChannelCardSurface } from '../components/ChannelCardSurface';
 import { cardItemBg } from '../utils/CardStyle';
 import { pageBackgroundColor } from '../utils/SurfaceColors';
 import { PageHeader } from '../components/PageHeader';
@@ -2214,7 +2214,7 @@ struct SearchPage {
   // ────────── 直播搜索卡片（仿 LivePage 垂直卡片风格） ──────────
   @Builder
   LiveSearchCard(item: RecommendItem) {
-    ChannelCardSurface({ radius: 12 }) {
+    ChannelCardSurface() {
 
     Column() {
       // ---- 封面区 ----
@@ -2268,7 +2268,7 @@ struct SearchPage {
         }
       }
       .width('100%')
-      .borderRadius(12)
+      .borderRadius(CHANNEL_CARD_RADIUS)
       .clip(true)
       .backgroundColor(this.isDarkMode ? '#333333' : '#F0F0F0')
 

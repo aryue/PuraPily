@@ -1,6 +1,6 @@
 import { HomeInitialLoading } from '../components/HomeInitialLoading';
 import { cardItemBg } from '../utils/CardStyle';
-import { ChannelCardSurface } from '../components/ChannelCardSurface';
+import { CHANNEL_CARD_RADIUS, ChannelCardSurface } from '../components/ChannelCardSurface';
 import { HOME_SEARCH_ROW_HEIGHT, homeHeaderTopInset } from '../utils/HomeHeaderLayout';
 import { VideoCardMoreButton } from '../components/VideoCardMoreButton';
 import { HomeBarScrollTracker } from '../utils/HomeBarScrollTracker';
@@ -448,7 +448,7 @@ export struct LivePage {
   @Builder
   LiveCard(room: LiveFeedRoom) {
     Stack() {
-      ChannelCardSurface({ radius: this.cardListBorderRadius }) {
+      ChannelCardSurface() {
         Column() {
           // ---- 封面区 ----
           Stack() {
@@ -469,48 +469,48 @@ export struct LivePage {
                 colors: [['#00000000', 0], ['#CC000000', 1]]
               })
 
-            // 左上角"直播"角标
-            Row() {
-              Circle().width(7).height(7).fill('#FF4D4D')
-              Text('直播')
-                .fontSize(11)
-                .fontColor(Color.White)
-                .fontWeight(FontWeight.Bold)
-                .margin({ left: 4 })
-            }
-            .padding({ left: 8, right: 8, top: 3, bottom: 3 })
-            .backgroundColor('rgba(255,77,77,0.85)')
-            .borderRadius(4)
-            .position({ top: 6, left: 6 })
+            // // 左上角"直播"角标
+            // Row() {
+            //   Circle().width(7).height(7).fill('#FF4D4D')
+            //   Text('直播')
+            //     .fontSize(11)
+            //     .fontColor(Color.White)
+            //     .fontWeight(FontWeight.Bold)
+            //     .margin({ left: 4 })
+            // }
+            // .padding({ left: 8, right: 8, top: 3, bottom: 3 })
+            // .backgroundColor('rgba(255,77,77,0.85)')
+            // .borderRadius(4)
+            // .position({ top: 6, left: 6 })
 
             // 右上角观看人数
-            Row() {
-              Image($r('app.media.ic_public_screencap'))
-                .width(12).height(12)
-                .fillColor(Color.White)
-              Text(formatOnlineCount(room.online))
-                .fontSize(11)
-                .fontColor(Color.White)
-                .margin({ left: 3 })
-            }
-            .padding({ left: 6, right: 6, top: 2, bottom: 2 })
-            .backgroundColor('rgba(0,0,0,0.55)')
-            .borderRadius(4)
-            .position({ bottom: 6, right: 6 })
+            // Row() {
+            //   Image($r('app.media.ic_public_screencap'))
+            //     .width(12).height(12)
+            //     .fillColor(Color.White)
+            //   Text(formatOnlineCount(room.online))
+            //     .fontSize(11)
+            //     .fontColor(Color.White)
+            //     .margin({ left: 3 })
+            // }
+            // .padding({ left: 6, right: 6, top: 2, bottom: 2 })
+            // .backgroundColor('rgba(0,0,0,0.55)')
+            // .borderRadius(4)
+            // .position({ bottom: 6, right: 6 })
 
             // 分区标签
             if (room.areaName) {
               Text(room.areaName)
                 .fontSize(10)
                 .fontColor('rgba(255,255,255,0.9)')
-                .padding({ left: 6, right: 6, top: 2, bottom: 2 })
-                .backgroundColor('rgba(0,0,0,0.4)')
-                .borderRadius(3)
+                // .padding({ left: 6, right: 6, top: 2, bottom: 2 })
+                // .backgroundColor('rgba(0,0,0,0.4)')
+                // .borderRadius(3)
                 .position({ bottom: 6, left: 6 })
             }
           }
           .width('100%')
-          .borderRadius(this.cardListBorderRadius)
+          .borderRadius(CHANNEL_CARD_RADIUS)
           .clip(true)
           .backgroundColor(this.isDarkMode ? '#333333' : '#F0F0F0') // 封面容器背景
 

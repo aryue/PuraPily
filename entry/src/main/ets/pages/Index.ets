@@ -20,6 +20,9 @@ import { StatusBarUtils } from '../utils/StatusBarUtils';
 import { logError } from '../utils/Logger';
 import { tabIndicatorCenter } from '../utils/TabIndicatorGeometry';
 import { WarmSurfaceHost } from '../services/WarmSurfaceHost';
+import { ImGrpcService } from '../services/ImGrpcService';
+
+const HOME_MESSAGE_REFRESH_MS: number = 30000;
 
 @Entry
 @Component({ freezeWhenInactive: true })
@@ -33,6 +36,14 @@ struct Index {
   private sizeListener: ((size: window.Size) => void) | null = null;
   private avoidListener: ((data: window.AvoidAreaOptions) => void) | null = null;
   @State @Watch('updateHomeActivity') private pageVisible: boolean = true;
+  @StorageProp('biliCookie') @Watch('onMessageAccountChanged') private messageCookie: string = '';
+  @StorageProp('appInBackground') @Watch('updateMessagePolling') private appInBackground: boolean = false;
+  @State private messageUnread: number = 0;
+  private privateUnread: number = 0;
+  private noticeUnread: number = 0;
+  private messagePollTimer: number = -1;
+  private messagePollGeneration: number = 0;
+  private messagePollInFlight: boolean = false;
   private darkHeaderMaterial: uiMaterial.Material | undefined = undefined;
   private lightHeaderMaterial: uiMaterial.Material | undefined = undefined;
   private darkMenuFilter: drawing.ColorFilter = drawing.ColorFilter.createBlendModeColorFilter(
@@ -116,6 +127,7 @@ struct Index {
 
   aboutToDisappear(): void {
     this.pageVisible = false;
+    this.stopMessagePolling();
     if (this.mainWindow && this.sizeListener) {
       this.mainWindow.off('windowSizeChange', this.sizeListener);
     }
@@ -139,7 +151,58 @@ struct Index {
 
   private updateHomeActivity(): void {
     AppStorage.setOrCreate('homeFeedActive', this.pageVisible && this.activeTab === 0);
+    this.updateMessagePolling();
     this.updateSearchVisibility();
+  }
+
+  private onMessageAccountChanged(): void {
+    this.stopMessagePolling();
+    this.privateUnread = 0;
+    this.noticeUnread = 0;
+    this.messageUnread = 0;
+    this.updateMessagePolling();
+  }
+
+  private updateMessagePolling(): void {
+    if (!this.pageVisible || this.activeTab !== 0 || this.appInBackground ||
+      !this.messageCookie.includes('SESSDATA=')) {
+      this.stopMessagePolling();
+      return;
+    }
+    if (this.messagePollTimer !== -1) return;
+    this.messagePollTimer = setInterval(() => { this.refreshMessageUnread(); }, HOME_MESSAGE_REFRESH_MS);
+    this.refreshMessageUnread();
+  }
+
+  private stopMessagePolling(): void {
+    if (this.messagePollTimer === -1) return;
+    clearInterval(this.messagePollTimer);
+    this.messagePollTimer = -1;
+    this.messagePollGeneration++;
+    this.messagePollInFlight = false;
+  }
+
+  private async refreshMessageUnread(): Promise<void> {
+    if (this.messagePollInFlight) return;
+    this.messagePollInFlight = true;
+    const generation = this.messagePollGeneration;
+    const cookie = this.messageCookie;
+    try {
+      const results = await Promise.allSettled([
+        ImGrpcService.fetchPrivateUnread(), ImGrpcService.fetchTotalUnread()
+      ]);
+      if (generation !== this.messagePollGeneration || cookie !== AppStorage.get<string>('biliCookie')) return;
+      const messages = results[0];
+      const notices = results[1];
+      if (messages.status === 'fulfilled') this.privateUnread = messages.value;
+      if (notices.status === 'fulfilled') {
+        const unread = notices.value;
+        this.noticeUnread = unread.reply + unread.at + unread.like + unread.sysMsg;
+      }
+      this.messageUnread = this.privateUnread + this.noticeUnread;
+    } finally {
+      if (generation === this.messagePollGeneration) this.messagePollInFlight = false;
+    }
   }
 
   private updateSearchVisibility(): void {
@@ -256,11 +319,20 @@ struct Index {
           const width = Number(size.width);
           if (width > 0 && Math.abs(width - this.homeHeaderSearchWidth) > 0.5) this.homeHeaderSearchWidth = width;
         })
-      Column() {
-        HeaderGlassControl({ label: '消息中心', controlId: 'home-header-message',
+      Stack({ alignContent: Alignment.TopEnd }) {
+        HeaderGlassControl({ label: this.messageUnread > 0 ? `消息中心，${this.messageUnread} 条未读` : '消息中心',
+          controlId: 'home-header-message',
           onActivate: () => this.navigate('pages/MessagesPage') }) {
           Image($r('app.media.ref_message')).width(23).height(23)
             .fillColor(this.isDarkMode ? '#E7E9EB' : '#454A50').hitTestBehavior(HitTestMode.None)
+        }
+        if (this.messageUnread > 0) {
+          Text(this.messageUnread > 99 ? '99+' : `${this.messageUnread}`)
+            .id('home-header-message-unread').fontSize(10).fontWeight(FontWeight.Medium)
+            .fontColor(Color.White).textAlign(TextAlign.Center).maxLines(1)
+            .constraintSize({ minWidth: 16 }).height(16).padding({ left: 3, right: 3 })
+            .backgroundColor('#E53958').borderRadius(8).zIndex(1)
+            .accessibilityLevel('no').hitTestBehavior(HitTestMode.None)
         }
       }.width(40).height(40)
     }.width('100%').height(HOME_SEARCH_ROW_HEIGHT).padding({ left: 14, right: 14 })

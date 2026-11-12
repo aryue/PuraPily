@@ -1,7 +1,7 @@
 import { HomeInitialLoading } from '../components/HomeInitialLoading';
 import { GlassMaterial } from '../utils/GlassMaterial';
 import { cardItemBg } from '../utils/CardStyle';
-import { ChannelCardSurface } from '../components/ChannelCardSurface';
+import { CHANNEL_CARD_RADIUS, ChannelCardSurface } from '../components/ChannelCardSurface';
 import { HOME_SEARCH_ROW_HEIGHT, homeHeaderTopInset } from '../utils/HomeHeaderLayout';
 import { VideoCardMoreButton } from '../components/VideoCardMoreButton';
 import { HomeBarScrollTracker } from '../utils/HomeBarScrollTracker';
@@ -643,7 +643,7 @@ export struct PgcChannelPage {
   @Builder
   PgcCard(item: PgcSeason) {
     Stack() {
-      ChannelCardSurface({ radius: this.cardListBorderRadius }) {
+      ChannelCardSurface() {
         Column() {
           // ---- 封面区 ----
           Stack({ alignContent: Alignment.BottomStart }) {
@@ -654,7 +654,6 @@ export struct PgcChannelPage {
               .objectFit(ImageFit.Cover)
               .backgroundColor(this.isDarkMode ? '#333333' : '#E8E8E8')
               .draggable(false)
-              .borderRadius(this.cardListBorderRadius)
 
             // 底部渐变遮罩
             Row()
@@ -684,8 +683,8 @@ export struct PgcChannelPage {
                 .fontSize(11)
                 .fontColor(Color.White)
                 .padding({ left: 6, right: 6, top: 2, bottom: 2 })
-                .backgroundColor('rgba(0,0,0,0.55)')
-                .borderRadius(4)
+                // .backgroundColor('rgba(0,0,0,0.55)')
+                // .borderRadius(4)
                 .position({ bottom: 6, right: 6 })
             }
 
@@ -697,13 +696,13 @@ export struct PgcChannelPage {
                 .fontColor(Color.White)
                 .textAlign(TextAlign.Center)
                 .padding({ left: 6, right: 6, top: 2, bottom: 2 })
-                .backgroundColor('rgba(0,0,0,0.55)')
-                .borderRadius(4)
+                // .backgroundColor('rgba(0,0,0,0.55)')
+                // .borderRadius(4)
                 .position({ top: 6, right: 6 })
             }
           }
           .width('100%')
-          .borderRadius(this.cardListBorderRadius)
+          .borderRadius(CHANNEL_CARD_RADIUS)
           .clip(true)
           .backgroundColor(this.isDarkMode ? '#333333' : '#F0F0F0')
 

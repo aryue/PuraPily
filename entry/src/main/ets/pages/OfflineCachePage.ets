@@ -233,7 +233,7 @@ struct OfflineCachePage {
     .height('100%')
     .justifyContent(FlexAlign.Center)
     .backgroundColor('#FF453A')
-    .borderRadius(12)
+    .borderRadius(8)
     .onClick(() => {
       this.deleting_ = true;
       this.confirmDelete(item);
@@ -347,7 +347,7 @@ struct OfflineCachePage {
             ListItem() {
               if (this.isPlaying(item)) {
                 // ⭐ 展开：内嵌播放器原位放大播放，其他条目被挤开
-                ChannelCardSurface({ radius: 16 }) {
+                ChannelCardSurface() {
                 Column() {
                   OfflineInlinePlayer({
                     bvid: item.bvid,
@@ -381,7 +381,7 @@ struct OfflineCachePage {
                         .fillColor(this.isDarkMode ? '#FFFFFF' : '#333333')
                     }
                     .width(32).height(32)
-                    .borderRadius(16)
+                    .borderRadius(8)
                     .justifyContent(FlexAlign.Center)
                     .alignItems(HorizontalAlign.Center)
                     .backgroundColor(this.isDarkMode ? '#2C2C2E' : '#F2F2F7')
@@ -398,7 +398,7 @@ struct OfflineCachePage {
                         .rotate({ angle: 180 })
                     }
                     .width(32).height(32)
-                    .borderRadius(16)
+                    .borderRadius(8)
                     .justifyContent(FlexAlign.Center)
                     .alignItems(HorizontalAlign.Center)
                     .backgroundColor(this.isDarkMode ? '#2C2C2E' : '#F2F2F7')
@@ -414,7 +414,7 @@ struct OfflineCachePage {
                 .width('100%')
                 .padding(12)
                 .backgroundColor(this.videoCardEdgeLight ? Color.Transparent : ordinaryCardColor(this.isDarkMode))
-                .borderRadius(16)
+                .borderRadius(8)
                 .onClick(() => {
                   if (this.deleting_) {
                     this.deleting_ = false;
