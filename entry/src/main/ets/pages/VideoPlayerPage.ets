@@ -202,6 +202,7 @@ interface MinimizedVideoState {
 PersistentStorage.persistProp('playbackProgressV1', '[]')
 PersistentStorage.persistProp('continuousRecommendationsV1', '[]')
 PersistentStorage.persistProp('bgp', false)
+PersistentStorage.persistProp('referencePlaybackMode', 'single')
 PersistentStorage.persistProp('phoneLayoutToggle', false)
 PersistentStorage.persistProp('lightsOffHideOnly', false)
 PersistentStorage.persistProp('lightsOffShowBtn', false)
@@ -1803,7 +1804,7 @@ struct VideoPlayerPage {
   @State referenceSleepDeadline: number = 0
   @State referenceCustomSleep: string = ''
   @State referenceShowCustomSleep: boolean = false
-  @State referencePlaybackMode: string = 'single'
+  @StorageLink('referencePlaybackMode') referencePlaybackMode: string = 'single'
   @State referenceFeedPortraitScaleMode: string = 'fill'
   @State referenceFeedPortraitScaleScope: string = 'standard'
   private referenceSleepTimer: number = -1
