@@ -5,8 +5,8 @@ const ts = require('D:/Program Files/Huawei/DevEco Studio/sdk/default/openharmon
 const file = 'entry/build/default/cache/default/default@CompileArkTS/esmodule/debug/entry/src/main/ets/pages/SearchPage.ts';
 const ast = ts.createSourceFile(file, fs.readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true);
 const subject = ast.statements.find(n => ts.isClassDeclaration(n) && n.name.text === 'SearchPage');
-const methods = ['handleBackToTopClick', 'setResultOptionsHidden'].map(name =>
-  subject.members.find(n => ts.isMethodDeclaration(n) && n.name.getText(ast) === name).getText(ast));
+const methods = ['handleBackToTopClick', 'setResultOptionsHidden', 'getResultOptionsFullHeight', 'resultOptionsMotion']
+  .map(name => subject.members.find(n => ts.isMethodDeclaration(n) && n.name.getText(ast) === name).getText(ast));
 const context = { exports: {}, Context: { animateTo: (_options, update) => update() },
   Curve: {}, curves: { springMotion: () => 0 }, setTimeout: callback => callback() };
 vm.runInNewContext(ts.transpileModule(`export class Subject { ${methods.join('\n')} }`, {
@@ -17,10 +17,12 @@ for (const da of [false, true]) {
     const page = new context.exports.Subject();
     let scrolls = 0;
     Object.assign(page, { da, activeTab, resultOptionsHidden: true, resultOptionsHeight: 0,
+      resultOptionsProgress: 0,
       triggerHaptic() {}, getUIContext: () => ({ animateTo: (_options, update) => update() }),
       scroller: { scrollTo(options) {
         assert.equal(page.resultOptionsHidden, false, 'restore options before initiating programmatic scroll');
         assert.equal(page.resultOptionsHeight, activeTab === 'video' ? 88 : 44);
+        assert.equal(page.resultOptionsProgress, 1, 'restore options slides the bar back in');
         assert.equal(options.yOffset, 0);
         assert.equal(options.animation.duration, da ? 0 : 300);
         scrolls++;

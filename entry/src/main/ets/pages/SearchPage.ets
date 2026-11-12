@@ -12,7 +12,7 @@ import { PageWallpaper } from '../components/PageWallpaper';
 import { FloatingVideoTransition } from '../services/FloatingVideoTransition';
 import { VideoListItem, videoListPublished } from '../components/VideoListItem';
 import { VideoCardFeedback } from '../services/VideoCardFeedback';
-﻿import { router, curves, display } from '@kit.ArkUI';
+import { router, curves, display } from '@kit.ArkUI';
 import { logInfo, logWarn, logError } from '../utils/Logger';
 import { searchByType, searchLive, SearchType, SearchOrder, SEARCH_ORDER_KEYS, getSearchOrderLabel, getSearchTypeLabel, SearchTypeLabelMap, getFollowStatus, modifyFollow, prefetchVideoPlayback, prefetchPlayUrlsOnly } from '../api/BilibiliApi';
 import { fetchRecommendedLiveRooms, LiveFeedRoom } from '../api/LiveFeedApi';
@@ -83,6 +83,8 @@ struct SearchPage {
   @State searchCapsuleExpanded: boolean = false;
   @State resultOptionsHidden: boolean = false;
   @State resultOptionsHeight: number = 88;
+  /** 筛选栏位移进度：1=展开、0=收起。只驱动 translate，补间由 animateTo 完成。 */
+  @State resultOptionsProgress: number = 1;
   private resultScrollTracker: HomeBarScrollTracker = new HomeBarScrollTracker();
   @State searchOrderTranslateX: number = 0;
   @State searchOrderOpacity: number = 1;
@@ -1096,12 +1098,38 @@ struct SearchPage {
     }
   }
 
+  /** 筛选栏整块高度：视频 Tab 是 Tab 行 + 排序行两行（88），其它 Tab 只有 Tab 行（44） */
+  private getResultOptionsFullHeight(): number {
+    return this.activeTab === 'video' ? 88 : 44;
+  }
+
+  /**
+   * 筛选栏显隐的动画参数。
+   * ⚠️ 只用来补间 `translate`，不要用来补间 height：本页的高度变更拿不到补间
+   * （animateTo 与节点隐式动画都实测为单帧跳变，onAreaChange 无中间帧），
+   * 所以顶栏/列表占位的高度直接生效，只有位移参与补间。
+   */
+  private resultOptionsMotion(): AnimateParam {
+    if (this.da) {
+      return { duration: 0 };
+    }
+    return {
+      duration: 300,
+      curve: Curve.FastOutSlowIn,
+      expectedFrameRateRange: { min: 60, max: 120, expected: 120 }
+    };
+  }
+
   private setResultOptionsHidden(hidden: boolean): void {
-    const height = hidden ? 0 : (this.activeTab === 'video' ? 88 : 44);
+    const height = hidden ? 0 : this.getResultOptionsFullHeight();
     if (this.resultOptionsHidden === hidden && this.resultOptionsHeight === height) return;
     this.resultOptionsHidden = hidden;
-    this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: this.da ? 0 : 280, curve: Curve.FastOutSlowIn }, () => {
-      this.resultOptionsHeight = height;
+    // 玻璃/顶栏高度直接生效（高度类动画在本页拿不到补间，见 resultOptionsMotion 说明）。
+    this.resultOptionsHeight = height;
+    // 位移补间统一走显式 animateTo，节点上不要再挂 .animation()：
+    // 同一节点同时有两套动画源时，补间会和上面那次布局变更抢同一帧，行为不可预期。
+    this.getUIContext().animateTo(this.resultOptionsMotion(), () => {
+      this.resultOptionsProgress = hidden ? 0 : 1;
     });
   }
 
@@ -1154,8 +1182,7 @@ struct SearchPage {
         .width('100%').height(44).justifyContent(FlexAlign.Start)
       }
     }
-    .width('100%').height(this.activeTab === 'video' ? 88 : 44)
-    .translate({ y: this.resultOptionsHeight - (this.activeTab === 'video' ? 88 : 44) })
+    .width('100%').height(this.getResultOptionsFullHeight())
   }
 
   private searchLandingWord(word: string): void {
@@ -1359,9 +1386,12 @@ struct SearchPage {
       } else {
         Scroll(this.scroller) {
           Column() {
+            // 顶部占位恒定为「搜索栏 + 筛选栏整高」：筛选栏收起时，列表整体上移补齐这段空间，
+            // 不再让占位跟着高度变化（本页高度类变更拿不到补间，会留下一条空白并单帧跳变）。
             Column()
               .width('100%')
-              .height((this.hideStatusBar ? 0 : this.globalStatusBarHeight) + this.SEARCH_BAR_SPACER + this.SEARCH_BAR_STACK_HEIGHT + (this.activeTab === 'video' ? 88 : 44))
+              .height((this.hideStatusBar ? 0 : this.globalStatusBarHeight) + this.SEARCH_BAR_SPACER +
+                this.SEARCH_BAR_STACK_HEIGHT + this.getResultOptionsFullHeight())
             Column() {
               if (this.showSkeleton) {
               // 骨架屏
@@ -1531,7 +1561,13 @@ struct SearchPage {
             }
             }
           .opacity(this.contentOpacity)
-          .translate({ y: this.contentTranslateY })
+          // 筛选栏收起时列表整体上移补齐那段空间；补间由 setResultOptionsHidden 的 animateTo 提供。
+          .translate({ y: this.contentTranslateY - (1 - this.resultOptionsProgress) * this.getResultOptionsFullHeight() })
+          // 收起后内容整体上移 88，滚动余量同步减掉，避免列表底部多出一段空白。
+          Column()
+            .width('100%')
+            .height(0)
+            .margin({ bottom: this.resultOptionsHidden ? -this.getResultOptionsFullHeight() : 0 })
         }
         .width('100%')
       }
@@ -1642,20 +1678,35 @@ struct SearchPage {
             .alignItems(VerticalAlign.Center)
             .justifyContent(FlexAlign.SpaceBetween)
             .padding({ left: 14, right: 14 })
-            if (this.hasActiveSearch) {
-              Column() {
-                this.ResultOptions()
-              }
+            // 只撑起玻璃/顶栏高度，筛选栏本身在下面的固定视窗里（高度类动画只有瞬时生效）。
+            Column()
               .width('100%')
-              .height(this.resultOptionsHeight)
-              .clip(true)
-              .hitTestBehavior(this.resultOptionsHidden ? HitTestMode.None : HitTestMode.Default)
-              .accessibilityLevel(this.resultOptionsHidden ? 'no-hide-descendants' : 'auto')
-            }
+              .height(this.hasActiveSearch ? this.resultOptionsHeight : 0)
           }
           .width('100%')
         }
-      }.width('100%')
+        // 筛选栏视窗：位置和尺寸恒定，整块在视窗内向上滑出/滑回，滑出后被视窗裁掉。
+        Column() {
+          Column() {
+            this.ResultOptions()
+          }
+          .width('100%')
+          .height(this.getResultOptionsFullHeight())
+          // 补间由 setResultOptionsHidden 的 animateTo 提供，这里不再挂 .animation()。
+          .translate({ y: -(1 - this.resultOptionsProgress) * this.getResultOptionsFullHeight() })
+        }
+        .width('100%')
+        .height(this.getResultOptionsFullHeight())
+        .position({ x: 0, y: (this.hideStatusBar ? 0 : this.globalStatusBarHeight) + this.SEARCH_BAR_SPACER +
+          this.SEARCH_BAR_STACK_HEIGHT })
+        .clip(true)
+        .visibility(this.hasActiveSearch ? Visibility.Visible : Visibility.None)
+        .hitTestBehavior(this.resultOptionsProgress > 0 ? HitTestMode.Default : HitTestMode.None)
+        .accessibilityLevel(this.resultOptionsProgress > 0 ? 'auto' : 'no-hide-descendants')
+      }
+      .width('100%')
+      .height((this.hideStatusBar ? 0 : this.globalStatusBarHeight) + this.SEARCH_BAR_SPACER +
+        this.SEARCH_BAR_STACK_HEIGHT + (this.hasActiveSearch ? this.getResultOptionsFullHeight() : 0))
       .clip(this.hasActiveSearch)
       .position({ x: 0, y: 0 })
       .zIndex(1)
