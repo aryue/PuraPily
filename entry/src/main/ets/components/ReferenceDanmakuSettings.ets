@@ -13,6 +13,7 @@ struct ReferenceDmSlider {
   @Prop max: number = 100
   @Prop step: number = 1
   @Prop label: string = ''
+  @Prop labelWidth: number = 34
   @Prop ticks: boolean = false
   onChange: (value: number) => void = () => {}
   build() {
@@ -24,7 +25,7 @@ struct ReferenceDmSlider {
         .blockColor('#FF6699').selectedColor('#FF6699').trackColor('#737477')
         .showSteps(this.ticks).stepColor('#FFFFFF').stepSize(4)
         .onChange((next: number) => { this.onChange(next) })
-      Text(this.label).fontSize(12).fontColor(this.dark ? '#A3A6AD' : '#61666D').width(34).textAlign(TextAlign.End)
+      Text(this.label).fontSize(12).fontColor(this.dark ? '#A3A6AD' : '#61666D').width(this.labelWidth).textAlign(TextAlign.End)
     }.width('100%').height(56).padding({ left: 16, right: 16 })
   }
 }
@@ -82,6 +83,11 @@ export struct ReferenceDanmakuSettings {
   @StorageLink('isDarkMode') private dark: boolean = true;
   @Link config: DanmakuConfig
   onChanged: () => void = () => {}
+  // ⭐ 画布几何（由 DanmakuController 在尺寸/设置变更后写入）：
+  //   用来把「显示区域 10%」翻译成实际行数，拖动时即时预览。
+  //   行数 = floor(画布高 × 区域% ÷ 轨道高)，轨道高 = 字号 × 行高；不足一行按一行兜底。
+  @StorageProp('danmakuCanvasHeight') private canvasHeight: number = 0
+  @StorageProp('danmakuTrackHeight') private trackHeight: number = 0
   @State areaPercent: number = 100
   @State areaStep: number = 4
   @State opacityPercent: number = 100
@@ -125,6 +131,23 @@ export struct ReferenceDanmakuSettings {
 
   private changed(): void { this.onChanged() }
 
+  /**
+   * 当前几何下「区域 percent%」能排几行（与 TrackManager 完全同口径）：
+   *   floor(画布高 × percent / 100 ÷ 轨道高)，至少 1 行（只要还有一条轨道就显示）。
+   * 画布还没量出来时返回 0，标签只显示百分比。
+   */
+  private previewRows(percent: number): number {
+    if (this.canvasHeight <= 0 || this.trackHeight <= 0) {
+      return 0
+    }
+    return Math.max(1, Math.floor(this.canvasHeight * (percent / 100) / this.trackHeight))
+  }
+
+  private areaLabel(): string {
+    const rows = this.previewRows(this.areaPercent)
+    return rows > 0 ? `${this.areaPercent}% · ${rows}行` : `${this.areaPercent}%`
+  }
+
   @Builder
   divider() {
     Row().width('100%').height(0.5).backgroundColor(this.dark ? '#14FFFFFF' : '#14000000')
@@ -152,11 +175,15 @@ export struct ReferenceDanmakuSettings {
         Text('弹幕设置').fontSize(16).fontColor(this.dark ? '#F6F7F8' : '#18191C').width('100%').margin({ bottom: 14 })
         Column() {
           ReferenceDmSlider({ title: '显示区域', value: this.areaStep, min: 0, max: 4, step: 1,
-            label: `${this.areaPercent}%`, ticks: true, onChange: (value: number) => {
+            label: this.areaLabel(), labelWidth: 76, ticks: true, onChange: (value: number) => {
             this.areaStep = Math.max(0, Math.min(4, Math.round(value)))
             this.areaPercent = this.areaPercents[this.areaStep]
             this.config.displayArea = this.areaPercent / 100; this.changed()
           } })
+          // 行划分口径（用户问过"间距是怎么划分的"）：区域只决定用几行，不改变单行高度
+          Text('行数 = 画面高 × 显示区域 ÷ 行高，不足一行按一行显示；行高随字号与横屏放大变化')
+            .fontSize(11).fontColor(this.dark ? '#8A8D94' : '#9296A0').width('100%')
+            .padding({ left: 16, right: 16, bottom: 10 })
           this.divider()
           ReferenceDmSlider({ title: '不透明度', value: this.opacityPercent, min: 0, max: 100, step: 5,
             label: `${this.opacityPercent}%`, onChange: (value: number) => {

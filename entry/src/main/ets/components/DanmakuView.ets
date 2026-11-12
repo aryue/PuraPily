@@ -28,6 +28,15 @@ export struct DanmakuView {
   @Prop @Watch('onCanvasSizeChange') canvasWidth: number = 0
   @Prop @Watch('onCanvasSizeChange') canvasHeight: number = 0
 
+  /**
+   * ⭐ 是否全屏 / 横屏播放 —— 只用来决定「字号 ×1.2」（对齐官方全屏观感）。
+   *
+   * 为什么必须由页面传入、不能自己看画布宽高比：竖屏播放页的视频区本身就是 16:9
+   * （440×247.5 → 1.78），用"宽 > 高 × 1.4"判定会把竖屏也当成横屏，
+   * 结果同一档「字体大小 100%」在竖屏是 34 号、在连刷整屏是 28 号 —— 差一整档行高。
+   */
+  @Prop @Watch('onFullscreenChange') isFullscreen: boolean = false
+
   // ⭐「弹幕设置」面板的版本号：页面每次改完设置自增它，这里 @Watch 到就把新的几何
   //   （字号 / 显示区域 / 行高 / 全屏缩放）应用到本组件的 controller。
   //   为什么走 AppStorage 而不是新增 @Prop：本组件在页面里有 4 个挂载点，
@@ -212,11 +221,28 @@ export struct DanmakuView {
     this.canvasSizeDebounceTimer = setTimeout(() => {
       if (this.controller && this.canvasReady && 
           this.pendingCanvasWidth > 0 && this.pendingCanvasHeight > 0) {
-        this.controller.setCanvasSize(this.pendingCanvasWidth, this.pendingCanvasHeight)
+        this.controller.setCanvasSize(this.pendingCanvasWidth, this.pendingCanvasHeight, this.isFullscreen)
         logInfo(`[DanmakuView] Canvas尺寸已更新: ${this.pendingCanvasWidth}x${this.pendingCanvasHeight}`)
       }
       this.canvasSizeDebounceTimer = 0
     }, 100)
+  }
+
+  /**
+   * 进入/退出全屏、或竖屏↔横屏切换：字号口径（是否 ×1.2）变了，按当前画布重排一次。
+   * 复用 `onSettingVersionChange`（本来就是"按当前尺寸重算几何 + 重排屏上弹幕"）。
+   */
+  private onFullscreenChange(): void {
+    if (!this.controller || !this.canvasReady) {
+      return
+    }
+    // 尺寸仍是同一块画布，只是缩放口径变了 → 直接走设置应用路径
+    const w = this.canvasWidth > 0 ? this.canvasWidth : this.canvasContext.width
+    const h = this.canvasHeight > 0 ? this.canvasHeight : this.canvasContext.height
+    if (w <= 0 || h <= 0) {
+      return
+    }
+    this.controller.applyDisplaySettings(w, h, this.isFullscreen)
   }
 
   /**
@@ -238,7 +264,7 @@ export struct DanmakuView {
       logWarn('[DanmakuView] 弹幕设置变更但画布尺寸无效，跳过')
       return
     }
-    this.controller.applyDisplaySettings(w, h)
+    this.controller.applyDisplaySettings(w, h, this.isFullscreen)
   }
 
   /**
@@ -398,7 +424,7 @@ export struct DanmakuView {
         logInfo(`[DanmakuView] 延迟重试Canvas尺寸: ${retryWidth}x${retryHeight}`)
         if (retryWidth > 0 && retryHeight > 0 && this.controller) {
           this.controller.setRenderContext(this.canvasContext)
-          this.controller.setCanvasSize(retryWidth, retryHeight)
+          this.controller.setCanvasSize(retryWidth, retryHeight, this.isFullscreen)
           this.canvasReady = true
           logInfo(`[DanmakuView] Canvas延迟就绪: ${retryWidth}x${retryHeight}`)
           this.autoInitialize()
@@ -409,7 +435,7 @@ export struct DanmakuView {
 
     // 设置渲染上下文
     this.controller.setRenderContext(this.canvasContext)
-    this.controller.setCanvasSize(width, height)
+    this.controller.setCanvasSize(width, height, this.isFullscreen)
 
     this.canvasReady = true
     logInfo(`[DanmakuView] Canvas就绪: ${width}x${height}`)

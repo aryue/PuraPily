@@ -1662,6 +1662,10 @@ struct VideoPlayerPage {
   @State showDanmakuSettingSheet: boolean = false
   private dmSettingApplyTimer: number = 0   // 「应用设置」防抖句柄
   private dmSettingVersion: number = 0      // 递增版本号 → AppStorage → DanmakuView @Watch
+  // ⭐ 用户是否已经动过弹幕设置。读取持久化是异步的（Preferences），若返回值晚于用户第一次
+  //   拖动滑块，会把刚改的值覆盖回上次存档 —— 表现为"改了没生效，滑块却停在新位置"。
+  //   一旦用户动过，就丢弃这次读盘结果（本次会话以用户输入为准）。
+  private dmSettingsTouched: boolean = false
   @State dmComposerSettings: boolean = false
   @State dmMode: number = 1            // B站弹幕模式：1=滚动 4=底部 5=顶部
   @State selfDanmakuList: DanmakuItem[] = []  // 自发弹幕（发送成功后注入弹幕层上屏）
@@ -9369,6 +9373,7 @@ struct VideoPlayerPage {
    * ② 落盘 Preferences，下次进任意视频自动沿用。
    */
   private notifyDanmakuSettingsChanged(): void {
+    this.dmSettingsTouched = true
     if (this.dmSettingApplyTimer) {
       clearTimeout(this.dmSettingApplyTimer)
     }
@@ -9433,6 +9438,12 @@ struct VideoPlayerPage {
         return
       }
       const o = JSON.parse(raw) as DanmakuConfigInit
+      // ⭐ 读盘是异步的：如果用户已经先动过面板，这次读到的旧存档必须丢弃，
+      //   否则会把刚改的值覆盖回去（滑块显示新值、画面用旧值的经典错位）。
+      if (this.dmSettingsTouched) {
+        logInfo('[VideoPlayer] 用户已改动弹幕设置，跳过本次读盘覆盖')
+        return
+      }
       const c = this.danmakuConfig
       if (o.blockWeight !== undefined) c.blockWeight = Math.round(Math.min(11, Math.max(0, o.blockWeight)))
       if (o.showScroll !== undefined) c.showScroll = !!o.showScroll
@@ -9458,6 +9469,11 @@ struct VideoPlayerPage {
       if (o.massiveMode !== undefined) c.massiveMode = !!o.massiveMode
       if (o.static2Scroll !== undefined) c.static2Scroll = !!o.static2Scroll
       if (o.scrollFixedVelocity !== undefined) c.scrollFixedVelocity = !!o.scrollFixedVelocity
+      // ⭐ 恢复完必须补发一次"设置已变更"：
+      //   读盘可能在 DanmakuView 首个 Canvas 尺寸之后就返回，此时轨道已经按**默认值**算好，
+      //   不补这一下，上次保存的显示区域/字号要等用户再动一次面板才会生效。
+      this.dmSettingVersion += 1
+      AppStorage.setOrCreate<number>('danmakuSettingVersion', this.dmSettingVersion)
       logInfo('[VideoPlayer] 已恢复弹幕显示设置')
     } catch (e) {
       logWarn(`[VideoPlayer] 读取弹幕设置失败: ${errMsg(e)}`)
@@ -9671,6 +9687,9 @@ struct VideoPlayerPage {
             // ⚠️ 传参必须与容器同源（同一套尺寸），否则又是两套尺寸
             canvasWidth: this.dmTransformChannel() ? this.portraitBaseW() : this.ovDanmakuCW(),
             canvasHeight: this.dmTransformChannel() ? this.portraitBaseH() : this.ovDanmakuCH(),
+            // ⭐ 字号 ×1.2 的唯一判据：真·全屏 / 横屏。**不能用画布比例代替** ——
+            //   竖屏播放页的视频区本身就是 16:9，比例判定会把它也当成横屏（100% 变 34 号字）。
+            isFullscreen: this.fs || this.isLs,
             config: $danmakuConfig,
             selfDanmaku: $selfDanmakuList,
           })

@@ -50,6 +50,10 @@ const DANMAKU_LINE_HEIGHT: number = 1.2
 /**
  * ⭐ 全屏 / 横屏时的字号放大系数（对齐 PiliPlus：`fontSize = 15 * (竖屏 ? 1.0 : 1.2)`）。
  *   没有它的话，进入全屏画布变宽、字号不变 → 弹幕相对画面明显变小，与官方不一致。
+ *
+ *   ⚠️ 判定必须由页面**显式告知**（`setFullscreen`），不能用"画布宽 > 高 × 1.4"这种比例启发式：
+ *      竖屏播放页的视频区本身就是 16:9（440×247.5 → 1.78），会被误判成横屏 →
+ *      同一档「字体大小 100%」在竖屏是 34 号、在连刷整屏是 28 号，行高/行数也跟着错一档。
  */
 const DANMAKU_FULLSCREEN_FONT_SCALE: number = 1.2
 
@@ -83,6 +87,13 @@ export class DanmakuTrackManager {
   }
   private canvasWidth: number = 0
   private canvasHeight: number = 0
+
+  /**
+   * ⭐ 是否处于全屏 / 横屏播放（由页面显式下发，见 `setFullscreen`）。
+   *   它是"字号 ×1.2"的唯一开关：判定权必须留在页面，因为画布比例无法区分
+   *   「竖屏播放页里的 16:9 视频区」和「横屏全屏」（两者都是 1.6~1.8 的宽高比）。
+   */
+  private fullscreen: boolean = false
   
   // 不同类型弹幕的轨道
   private scrollTracks: TrackState[] = []      // 滚动弹幕轨道（从左往右滚）
@@ -102,6 +113,16 @@ export class DanmakuTrackManager {
   }
   
   /**
+   * 下发"是否全屏/横屏"（只存标志，不改几何；几何由 initialize / updateGeometry 重算）。
+   *
+   * 为什么不由轨道管理器自己看画布比例：竖屏播放页的视频区本身就是 16:9，
+   * 宽高比和横屏全屏几乎一样，任何比例阈值都会把竖屏误判成横屏。
+   */
+  setFullscreen(enabled: boolean): void {
+    this.fullscreen = enabled
+  }
+
+  /**
    * 初始化轨道
    * @param width 画布宽度
    * @param height 画布高度
@@ -110,17 +131,18 @@ export class DanmakuTrackManager {
     this.canvasWidth = width
     this.canvasHeight = height
     
-    // ⭐ 全屏 / 横屏（画布明显宽于高）时按官方做法放大字号（PiliPlus：全屏 ×1.2）
-    const fontScale = (height > 0 && width > height * 1.4) ? this.fullscreenScale : 1.0
+    // ⭐ 全屏 / 横屏时才按官方做法放大字号（PiliPlus：全屏 ×1.2）；判定见 fullscreen 字段
+    const fontScale = (this.fullscreen && width > height) ? this.fullscreenScale : 1.0
     this.baseFont = Math.max(8, Math.round(this.config.stdFontSize * fontScale))
 
     // ⭐ 轨道高 = 字号 × 行高，**没有额外的 gap**（倍率的选择理由见 DANMAKU_LINE_HEIGHT 注释）。
     //   硬约束：字号越大，行数越少 —— 这是一条初一档也好不了的乘法关系，
     //   想增加行数请先降字号（见 DanmakuTrackManager.SCROLL_GAP 处与 DanmakuConfig.fontSize 的注释）。
-    this.trackHeight = Math.round(this.baseFont * this.lineHeightValue)
+    this.trackHeight = Math.max(1, Math.round(this.baseFont * this.lineHeightValue))
     
-    // 计算可用区域高度
-    const availableHeight = height * this.config.displayArea
+    // 计算可用区域高度（夹到 (0, 1]，与 updateGeometry 同口径）
+    const area = Math.min(1, Math.max(0.01, this.config.displayArea))
+    const availableHeight = height * area
     const trackCount = Math.max(1, Math.floor(availableHeight / this.trackHeight))
     this.trackCount = trackCount
     
@@ -156,6 +178,21 @@ export class DanmakuTrackManager {
     logInfo(`[TrackManager] 初始化轨道: 正向${this.scrollTracks.length}条, 逆向${this.reverseTracks.length}条, 顶部${this.topTracks.length}条, 底部${this.bottomTracks.length}条, 字号${this.baseFont}, 轨道高${this.trackHeight}`)
   }
 
+  /** 当前轨道数（= 屏上可用行数；面板用它显示"区域 10% 实际几行"） */
+  get trackRows(): number {
+    return this.trackCount
+  }
+
+  /** 当前轨道高（= 绘制字号 × 行高，等于相邻两行文字基线的间距） */
+  get currentTrackHeight(): number {
+    return this.trackHeight
+  }
+
+  /** 当前实际绘制字号（已含全屏/横屏放大系数） */
+  get currentFontSize(): number {
+    return this.baseFont
+  }
+
   /**
    * ⭐ 运行时修改设置（字号 / 显示区域 / 行高 / 全屏缩放）后的重算入口。
    *
@@ -165,32 +202,40 @@ export class DanmakuTrackManager {
    * 这里是**就地重算**字号/轨道高，并**只在数量变化时才增删轨道尾部**，
    *   已有轨道的占用状态原样保留 —— 屏幕上正在滚的弹幕继续滚，新弹幕按新几何上屏。
    *
+   * ⚠️ 不能再"轨道数没变就提前 return"：字号/行高变了但 `floor()` 恰好算出同样的行数
+   *   是常态（例如 28→26 号字在多数画布上都是同一行数），提前返回会让 `trackHeight`
+   *   迟迟不落到正在排队的项上，表现就是"改了字号没反应"。这里一律重算并交给调用方
+   *   重排屏上弹幕（见 `DanmakuController.applyDisplaySettings`）。
+   *
    * @param width 画布宽度
    * @param height 画布高度
+   * @returns 重算后的轨道数
    */
-  updateGeometry(width: number, height: number): void {
+  updateGeometry(width: number, height: number): number {
     if (width <= 0 || height <= 0) {
-      return
+      return this.trackCount
     }
     this.canvasWidth = width
     this.canvasHeight = height
 
-    const fontScale = (height > 0 && width > height * 1.4) ? this.fullscreenScale : 1.0
+    const fontScale = (this.fullscreen && width > height) ? this.fullscreenScale : 1.0
     this.baseFont = Math.max(8, Math.round(this.config.stdFontSize * fontScale))
-    this.trackHeight = Math.round(this.baseFont * this.lineHeightValue)
+    this.trackHeight = Math.max(1, Math.round(this.baseFont * this.lineHeightValue))
 
-    const availableHeight = height * this.config.displayArea
+    // 显示区域夹到 (0, 1]：0 会让行数永远只剩 1，负数会把可用高度算成负的
+    const area = Math.min(1, Math.max(0.01, this.config.displayArea))
+    const availableHeight = height * area
     const trackCount = Math.max(1, Math.floor(availableHeight / this.trackHeight))
-    if (trackCount === this.trackCount) {
-      return
-    }
     const old = this.trackCount
     this.trackCount = trackCount
     this.resizeTracks(this.scrollTracks, trackCount)
     this.resizeTracks(this.reverseTracks, trackCount)
     this.resizeTracks(this.topTracks, trackCount)
     this.resizeTracks(this.bottomTracks, trackCount)
-    logInfo(`[TrackManager] 几何已更新: 轨道数 ${old} -> ${trackCount}, 字号${this.baseFont}, 轨道高${this.trackHeight}`)
+    if (old !== trackCount) {
+      logInfo(`[TrackManager] 几何已更新: 轨道数 ${old} -> ${trackCount}, 字号${this.baseFont}, 轨道高${this.trackHeight}`)
+    }
+    return trackCount
   }
 
   /** 按目标长度就地裁剪/补齐轨道数组（保留既有 TrackState 的占用状态） */
@@ -518,6 +563,19 @@ export class DanmakuTrackManager {
   }
   
   /**
+   * 轨道文字的绘制基线 Y（Canvas 的 y 是基线，不是顶边）。
+   *
+   * 行划分方式（面板「显示区域」只决定用前几行，不改变单行高度）：
+   *   轨道高 = 绘制字号 × 行高（默认 1.2；28 号字 → 34vp）
+   *   第 i 行基线 = 4 + i × 轨道高 + 0.8 × 轨道高
+   *   ⇒ 相邻两行基线间距恒等于轨道高，字形高度约 0.88em，行间视觉留白 ≈ 轨道高 − 字高。
+   * 底部弹幕用同一套网格、从最后一行往上排（idx = trackRows-1-trackIndex）。
+   */
+  trackBaselineY(trackIndex: number, type: string): number {
+    return this.calculateTrackY(trackIndex, type)
+  }
+
+  /**
    * 计算轨道Y坐标
    */
   private calculateTrackY(trackIndex: number, type: string): number {
@@ -547,8 +605,11 @@ export class DanmakuTrackManager {
    *    比真实宽度大一倍左右。这个估算值同时用于轨道碰撞检测与滚动时长，
    *    偏大意味着"该放得下的弹幕被判成放不下"→ 密集时段丢弹幕。
    *    实测真机上 emoji 权重很高的弹幕（"顔顔顔…"这类）本来丢得偏多。
+   *
+   * ⚠️ 公开给控制器用：设置变更后重排屏上弹幕时，没有渲染上下文（measureText 不可用）
+   *    也要能把宽度按新字号重算一遍，否则宽高会停留在旧字号的测量值上。
    */
-  private estimateTextWidth(text: string, fontSize: number): number {
+  estimateTextWidth(text: string, fontSize: number): number {
     let width = 0
     for (let i = 0; i < text.length; i++) {
       const code = text.charCodeAt(i)

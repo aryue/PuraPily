@@ -21,6 +21,21 @@ export class DanmakuRenderer {
   // ⭐ 字体字符串缓存：key=fontSize，避免每帧重复拼接（PiliPlus paragraph 缓存思路）
   private fontCache: Map<number, string> = new Map()
 
+  /**
+   * ⭐⭐ 字体像素比：Canvas 的 `font` 字符串里 **`px` 是设备像素**，而画布坐标（x / y / 线宽 /
+   *   measureText 的返回值）都是 **vp** —— 两者差一个屏幕密度。
+   *
+   *   不校正的后果（真机实测）：440vp 宽的画布上，`22px` 的字实际只画出 ~7vp 高（22 设备像素），
+   *   而轨道高、首行基线仍按 22vp 计算 ⇒ 用户看到的是"字特别小、行距特别宽、第一行下面一片空白"。
+   *   同一数值用 `measureText` 量出来也是 7.3（vp），所以碰撞/居中看起来"自洽"，
+   *   只有跟真实字形比才暴露 —— 这也是它藏得这么深的原因。
+   *
+   *   ⚠️ 不能写死屏幕密度：不同设备/不同编译目标下 `font` 的单位解释可能一致（= vp）。
+   *   这里在拿到渲染上下文时**实测标定**一次：用 `100px` 量一个全角汉字（CJK 恒为 1em 宽），
+   *   量到 ~100 说明本来就是 vp（比例 1，不做任何改动）；量到 ~33 说明是设备像素（比例 3）。
+   */
+  private fontPixelRatio: number = 0
+
   // ⭐ 文本真实宽度缓存：key = `${fontSize}|${text}`。
   //    刷屏弹幕内容高度重复，命中率很高；measureText 不便宜，只在首次 / 字号变化时真正测量。
   private widthCache: Map<string, number> = new Map()
@@ -54,6 +69,46 @@ export class DanmakuRenderer {
   setContext(context: CanvasRenderingContext2D): void {
     this.context = context
     this.invalidateStateCache()
+    // ⭐ 换了上下文就重新标定字体单位（画布重建 / 换设备密度后比例可能变）
+    this.fontCache.clear()
+    this.widthCache.clear()
+    this.fontPixelRatio = this.calibrateFontPixelRatio()
+  }
+
+  /**
+   * 实测「font 字符串里的 1px 相当于画布坐标系里的多少」。
+   *
+   * 做法：把字体设成 100px，量一个全角汉字（CJK 字形宽度恒等于 1em）；在 vp 语义下应得 ~100，
+   * 在设备像素语义下应得 ~100 / 屏幕密度。比例只接受 [1.25, 4) 这一档，其余（字体缺字、
+   * 度量异常、返回 0）一律按 1 处理 —— 宁可维持旧行为，也不要靠一个离谱的比例把字撑爆。
+   */
+  private calibrateFontPixelRatio(): number {
+    if (!this.context) {
+      return 1
+    }
+    let ratio = 1
+    try {
+      const previous = this.context.font
+      this.context.font = '100px sans-serif'
+      const measured = this.context.measureText('国').width
+      this.context.font = previous
+      if (measured > 0) {
+        const raw = 100 / measured
+        if (raw > 1.25 && raw < 4) {
+          ratio = raw
+        }
+      }
+    } catch (err) {
+      ratio = 1
+    }
+    // 标定时临时改过字体，applyFont 的状态缓存必须作废（否则会以为字体已经设好而跳过赋值）
+    this.invalidateStateCache()
+    return ratio
+  }
+
+  /** 当前生效的字体像素比（尚未标定时按 1 处理，不会阻塞绘制） */
+  private get fontRatio(): number {
+    return this.fontPixelRatio > 0 ? this.fontPixelRatio : 1
   }
   
   /**
@@ -236,11 +291,16 @@ export class DanmakuRenderer {
   /**
    * 获取字体字符串（带缓存，key=fontSize）
    * 避免每条弹幕每帧重复拼接 `${fontWeight} ${size}px ${family}`
+   *
+   * ⚠️ 这里的 `px` 是**设备像素**，所以字号必须先乘 `fontRatio` 换成设备像素再写进字符串，
+   *    否则字只有设定值的 1/屏幕密度 大（详见 fontPixelRatio 注释）。
+   *    坐标（x / y）不需要换算 —— 画布坐标本身就是 vp。
    */
   private getFontString(fontSize: number): string {
     let font = this.fontCache.get(fontSize)
     if (font === undefined) {
-      font = `${this.config.fontWeight} ${fontSize}px ${this.config.fontFamily}`
+      const px = Math.round(fontSize * this.fontRatio * 100) / 100
+      font = `${this.config.fontWeight} ${px}px ${this.config.fontFamily}`
       this.fontCache.set(fontSize, font)
     }
     return font
@@ -432,6 +492,14 @@ export class DanmakuRenderer {
     }
   }
   
+  /**
+   * 当前标定出的字体像素比（1 = 该设备上 font 的 px 本来就是 vp，多数平台如此；
+   * 3 = 设备像素语义，已自动补偿）。仅用于排查 / 日志，不参与绘制逻辑。
+   */
+  getFontPixelRatio(): number {
+    return this.fontRatio
+  }
+
   /**
    * 更新配置
    */

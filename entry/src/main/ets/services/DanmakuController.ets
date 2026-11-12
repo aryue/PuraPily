@@ -2,7 +2,7 @@
  * 弹幕控制器
  * 整合数据获取、过滤、轨道管理、渲染等所有模块
  */
-import { DanmakuItem, DanmakuItemInit, DanmakuConfig, DanmakuSegment, DanmakuSegmentInit, DanmakuStats } from '../model/DanmakuItem'
+import { DanmakuItem, DanmakuItemInit, DanmakuConfig, DanmakuSegment, DanmakuSegmentInit, DanmakuStats, DanmakuType } from '../model/DanmakuItem'
 import { logInfo, logWarn, logError } from '../utils/Logger';
 import { DanmakuService } from './DanmakuService'
 import { DanmakuTrackManager } from './DanmakuTrackManager'
@@ -55,6 +55,7 @@ export class DanmakuController {
   private videoDuration: number = 0                // 视频总时长（毫秒）
   private isPlaying: boolean = false               // 是否播放中
   private canvasWidth: number = 0                  // 弹幕画布宽度（画布/轨道重算时同步；出屏判定已改为纯位置口径，见 scrollingGone）
+  private canvasHeight: number = 0                 // 弹幕画布高度（仅用于把行数换算口径同步给设置面板）
 
   // 帧间增量时间：每帧按真实时间差推进弹幕位置，独立于currentTime的更新频率
   private lastFrameTimestamp: number = 0
@@ -346,12 +347,27 @@ export class DanmakuController {
 
   /**
    * 设置画布尺寸
+   * @param fullscreen 是否全屏/横屏播放（决定字号是否 ×1.2；必须由页面显式下发，别用画布比例猜）
    */
-  setCanvasSize(width: number, height: number): void {
+  setCanvasSize(width: number, height: number, fullscreen: boolean = false): void {
     this.canvasWidth = width
+    this.canvasHeight = height
+    this.trackManager.setFullscreen(fullscreen)
     this.trackManager.initialize(width, height)
     this.renderer.setSize(width, height)
-    logInfo(`[DanmakuController] 画布尺寸: ${width}x${height}`)
+    this.publishTrackGeometry()
+    logInfo(`[DanmakuController] 画布尺寸: ${width}x${height}${fullscreen ? ' (全屏/横屏)' : ''}`)
+  }
+
+  /**
+   * 把当前几何同步给设置面板：面板据此显示「10% · 1行」并实时预览拖动后的行数，
+   * 避免"区域缩到 10% 为什么只有一行"这种只能靠猜的疑问。
+   *   行数 = floor(画布高 × 区域 ÷ 轨道高)（至少 1 行）
+   */
+  private publishTrackGeometry(): void {
+    AppStorage.setOrCreate<number>('danmakuTrackRows', this.trackManager.trackRows)
+    AppStorage.setOrCreate<number>('danmakuTrackHeight', this.trackManager.currentTrackHeight)
+    AppStorage.setOrCreate<number>('danmakuCanvasHeight', this.canvasHeight)
   }
 
   /**
@@ -890,17 +906,87 @@ export class DanmakuController {
    *   - `updateConfig()` 会替换 config 引用并让渲染器清空所有宽度/字体缓存，适合"换了一个
    *     配置对象"的场景；而本项目严格禁止换对象（controller/renderer/filter 都持有构造时的引用），
    *     面板改的只是**同一个对象上的字段**，调它反而白白清掉大量缓存。
-   *   - 这里只需要两件事：让轨道按新字号/显示区/行高**就地重算**（`updateGeometry`，
-   *     保留正在滚动的弹幕，不会像 `initialize` 那样把轨道状态清空导致叠字），
-   *     以及让渲染器作废"按字号缓存的文本宽度/绘制状态"。
+   *   - 这里需要三件事：
+   *     ① 让轨道按新字号/显示区/行高**就地重算**（`updateGeometry`，保留正在滚动的弹幕，
+   *        不会像 `initialize` 那样把轨道状态清空导致叠字）；
+   *     ② **重排已经在屏上的弹幕**（字号、行高、行号、宽度全部按新几何刷一遍）。
+   *        这一步是"设置不生效"的主因：旧实现只重算轨道几何，屏上的弹幕还带着旧字号/旧 y，
+   *        要等它们滚出屏幕（最长 14s）才轮到新设置；暂停时更是永远看不到变化。
+   *     ③ 立刻重绘一帧 —— 渲染循环只在播放时跑，暂停状态下不主动重画就等于什么都没发生。
    */
-  applyDisplaySettings(width: number, height: number): void {
+  applyDisplaySettings(width: number, height: number, fullscreen: boolean = false): void {
+    if (width <= 0 || height <= 0) {
+      return
+    }
     this.canvasWidth = width
+    this.canvasHeight = height
+    this.trackManager.setFullscreen(fullscreen)
     this.trackManager.updateGeometry(width, height)
     this.filter.updateConfig(this.config)
     this.renderer.setSize(width, height)
     this.renderer.updateConfig(this.config)
-    logInfo(`[DanmakuController] 弹幕显示设置已应用: ${width}x${height}`)
+    this.publishTrackGeometry()
+    this.reflowVisibleDanmaku()
+    logInfo(`[DanmakuController] 弹幕显示设置已应用: ${width}x${height}, 行数${this.trackManager.trackRows}, 轨道高${this.trackManager.currentTrackHeight}`)
+  }
+
+  /**
+   * 按**当前**几何重排屏上弹幕（设置面板改动后调用）。
+   *
+   * 处理三类状态：
+   *   ① `track >= 新行数`：新区域装不下这条弹幕 —— 直接退场（否则它会留在区域外继续画，
+   *      用户看到的是"区域缩到 10% 但下面几行还在动"）。标 `missed` 让它不再重试。
+   *   ② `track >= 0` 且仍在区域内：按新字号重算绘制字号、宽度（measureText 优先，无上下文
+   *      时退回估算）与基线 y；x 保持不动（正在滚的继续滚，不会瞬移）。
+   *   ③ `track < 0`（尚未上屏）：原样保留，下一次 `updateVisibleDanmaku` 会按新几何分配轨道。
+   *
+   * 最后无条件重绘一帧（dt=0，不推进位置）：暂停时渲染链是停的，不重画就完全看不到设置生效。
+   */
+  private reflowVisibleDanmaku(): void {
+    if (this.visibleDanmaku.length === 0) {
+      this.renderer.render(this.visibleDanmaku, this.currentTime, 0)
+      this.stats.displayedCount = 0
+      return
+    }
+
+    const rows = this.trackManager.trackRows
+    const kept: DanmakuItem[] = []
+    for (let i = 0; i < this.visibleDanmaku.length; i++) {
+      const item = this.visibleDanmaku[i]
+      if (item.track < 0) {
+        kept.push(item)
+        continue
+      }
+      if (item.track >= rows) {
+        item.track = -1
+        item.missed = true
+        item.visible = false
+        item.dropped = true
+        continue
+      }
+      // 字号：统一字号模式直接取新 baseFont；保留大小差异模式按 rawFontSize 重新收敛
+      this.trackManager.normalizeFontSize(item)
+      const measured = this.renderer.measureWidth(item.content, item.fontSize)
+      item.width = measured > 0 ? measured : this.trackManager.estimateTextWidth(item.content, item.fontSize)
+      item.widthFontSize = item.fontSize
+      item.height = this.trackManager.currentTrackHeight
+      item.y = this.trackManager.trackBaselineY(item.track, DanmakuController.trackKindOf(item))
+      item.visible = true
+      kept.push(item)
+    }
+
+    this.visibleDanmaku = kept
+    this.stats.displayedCount = kept.length
+    // dt=0：只重画，不推进位置
+    this.renderer.render(kept, this.currentTime, 0)
+  }
+
+  /** 轨道类型（决定 y 的排布方向）：滚动/顶部自上而下，底部自下而上 */
+  private static trackKindOf(item: DanmakuItem): string {
+    if (item.isScrolling()) {
+      return 'scroll'
+    }
+    return (item.type === DanmakuType.TOP || item.type === DanmakuType.TOP_FIXED) ? 'top' : 'bottom'
   }
 
   /**
