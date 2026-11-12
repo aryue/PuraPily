@@ -59,6 +59,7 @@ import { AVCastPickerState } from '@ohos.multimedia.avCastPickerParam';
 import { motion } from '@kit.MultimodalAwarenessKit';
 import abilityAccessCtrl from '@ohos.abilityAccessCtrl';
 import { http } from '@kit.NetworkKit';
+import { AppSign } from '../utils/SignUtils';
 import { VideoControls } from '../components/VideoControls';
 import { playbackHdrUiRatio, playbackHdrUiFilter } from '../utils/PlaybackHdrUi';
 import { ImmersiveLightWrapper } from '../components/ImmersiveLightWrapper';
@@ -139,9 +140,19 @@ interface SO { label: string; mode: string }
 interface ReferenceSubtitleCue { from: number; to: number; content: string }
 interface ReferenceSubtitleTrack { subtitle_url: string; lan_doc: string }
 interface ReferenceSubtitleList { subtitles?: ReferenceSubtitleTrack[] }
-interface ReferenceSubtitleData { subtitle?: ReferenceSubtitleList }
+interface ReferenceSubtitleData {
+  // ⭐ 接口会把实际解析到的稿件回显回来（bvid/cid 原样带回），可用于校验没有串到别的稿件
+  aid?: number;
+  bvid?: string;
+  cid?: number;
+  subtitle?: ReferenceSubtitleList;
+}
 interface ReferenceSubtitleInfo { code: number; data?: ReferenceSubtitleData }
 interface ReferenceSubtitleBody { body: ReferenceSubtitleCue[] }
+// ⭐ /x/web-interface/view 反查出来的权威稿件身份（字幕轨要拿它比对文件名）
+interface SubtitleIdentity { aid: number; cid: number; duration: number }
+interface SubtitleViewData { aid?: number; cid?: number; duration?: number }
+interface SubtitleViewInfo { code: number; data?: SubtitleViewData }
 interface ReferenceActionResult { code: number; message?: string }
 // ⭐ 画风选项（色彩风格）
 interface CO { label: string; mode: string }
@@ -274,6 +285,7 @@ struct VideoPlayerPage {
   @State referenceSelectedSubtitleIndex: number = -1
   private referenceSubtitleSelectionRequest: number = 0;
   private referenceSubtitleMenuRequest: number = 0;
+  private referenceSubtitleToggleRequest: number = 0;
   @State private referenceSubtitleMenuLoading: boolean = false;
   @State private referenceSubtitleMenuFailed: boolean = false;
   @State private playbackPanelTopInset: number = 0;
@@ -290,6 +302,15 @@ struct VideoPlayerPage {
   @State referenceLandscapeDanmakuOpen: boolean = false
   private referenceSubtitleTrackUrls: string[] = []
   private referenceSubtitleCues: ReferenceSubtitleCue[] = []
+  // ⭐ cues 所属的视频身份（bvid:cid）。身份对不上就一帧都不显示——
+  //   这层兜底不依赖各条换片路径是否漏调 referenceResetSubtitles。
+  private referenceSubtitleOwner: string = ''
+  // ⭐ 轨道列表（下拉里的语言 + subtitle_url）所属的视频身份（bvid:cid）。
+  //   菜单里显示的选项和真正去下载的 URL 必须同时属于当前视频：
+  //   只要列表是别的视频的，选轨就会把「别的视频的 URL」贴上当前身份，显示别的视频的字幕。
+  private referenceSubtitleListOwner: string = ''
+  // ⭐ bvid → 权威 aid/cid（由 /x/web-interface/view 反查）。AI 字幕轨文件名里的 aid 要用它比对。
+  private subtitleIdentityCache_: Map<string, SubtitleIdentity> = new Map<string, SubtitleIdentity>()
   private referenceShareController: systemShare.ShareController | null = null
   private referencePortraitMotionToken: number = 0
   /** 上一次实际下发给窗口的系统栏状态（status|navigation），相同则不再调用窗口 API。 */
@@ -452,6 +473,10 @@ struct VideoPlayerPage {
   @State vi: VC = { bvid: '', cid: 0, title: '', cover: '' }
   // ⭐ 从路由参数中获取的 aid（用于 saveWatchHistory，不依赖异步加载的 this.vd）
   private aidFromParams_: number = 0
+  /** 路由里带的 aid（首页/推荐卡都带）：字幕接口要用它和 bvid/cid 一起定位稿件 */
+  private routeAid_: number = 0
+  /** 路由 aid 属于哪条稿件：合集切集后 routeAid_ 还是上一条的，bvid 对不上就不能用 */
+  private routeAidBvid_: string = ''
   // ⭐ PGC（番剧/影视）播放状态：epId_=分集id, seasonId_=季id, isPgc_=是否PGC源
   private epId_: number = 0
   private seasonId_: number = 0
@@ -466,6 +491,10 @@ struct VideoPlayerPage {
   private pgcEpIds_: number[] = []
   // ⭐ PGC 选集：与 vd.pages 下标一一对应的分集 aid 列表（番剧评论 oid 必须用 aid，不能用 ep_id）
   private pgcAids_: number[] = []
+  // ⭐ PGC 选集：与 vd.pages 下标一一对应的分集 bvid 列表。
+  //   番剧每集都是独立稿件，而字幕接口 /x/player/v2 是「按 bvid 定位作品、cid 只做分P筛选」：
+  //   bvid 停在进入时那一集，切集后就会拿到那一集的字幕（接口见 cid 不匹配直接退回 page_no=1）。
+  private pgcBvids_: string[] = []
   private av: PlaybackPlayer | null = null; private avAudio: PlaybackPlayer | null = null; private sId: string = ''
   @StorageLink('floatingPiPActive') private floatingSystemActive: boolean = false;
   @State private floatingPausedFrame: image.PixelMap | undefined = undefined;
@@ -2223,6 +2252,7 @@ struct VideoPlayerPage {
     const pages: VideoPageItem[] = [];
     const pgcEpIds: number[] = [];
     const pgcAids: number[] = [];
+    const pgcBvids: string[] = [];
     for (let i = 0; i < pgcInfo.episodes.length; i++) {
       const ep = pgcInfo.episodes[i];
       pages.push({
@@ -2234,9 +2264,12 @@ struct VideoPlayerPage {
       });
       pgcEpIds.push(ep.id || 0);
       pgcAids.push(ep.aid || 0);
+      pgcBvids.push(ep.bvid || '');
     }
     this.pgcEpIds_ = pgcEpIds;
     this.pgcAids_ = pgcAids;
+    this.pgcBvids_ = pgcBvids;
+    this.syncPgcBvidForCid(this.vi.cid);
     const targetEpAid = targetEp.aid || (pgcAids.length > 0 ? pgcAids[0] : 0);
     // ⭐ 历史记录/点赞等依赖 aidFromParams_（浮窗恢复路由 aid=0 时由分集 aid 补齐）
     this.aidFromParams_ = targetEpAid;
@@ -3357,6 +3390,8 @@ struct VideoPlayerPage {
       this.offlineVideoPath_ = (p['offlineVideoPath'] as string) || '';
       this.offlineAudioPath_ = (p['offlineAudioPath'] as string) || '';
       aidFromParams = typeof p['aid'] === 'number' ? p['aid'] : parseInt(p['aid'] as string, 10) || 0;
+      this.routeAid_ = aidFromParams;
+      this.routeAidBvid_ = this.vi.bvid;
       this.commentRootId_ = typeof p['commentRootId'] === 'number' ? p['commentRootId'] : parseInt(p['commentRootId'] as string, 10) || 0;
       this.commentSecondaryId_ = typeof p['commentSecondaryId'] === 'number' ? p['commentSecondaryId'] : parseInt(p['commentSecondaryId'] as string, 10) || 0;
       // ⭐ PGC（番剧/影视）：支持 mediaId（季id，搜索跳转）或 epId（分集id）
@@ -3430,6 +3465,7 @@ struct VideoPlayerPage {
             const pages: VideoPageItem[] = [];
             const pgcEpIds: number[] = [];
             const pgcAids: number[] = [];
+            const pgcBvids: string[] = [];
             for (let i = 0; i < pgcInfo.episodes.length; i++) {
               const ep = pgcInfo.episodes[i];
               pages.push({
@@ -3442,9 +3478,12 @@ struct VideoPlayerPage {
               });
               pgcEpIds.push(ep.id || 0);
               pgcAids.push(ep.aid || 0);
+              pgcBvids.push(ep.bvid || '');
             }
             this.pgcEpIds_ = pgcEpIds;
             this.pgcAids_ = pgcAids;
+            this.pgcBvids_ = pgcBvids;
+            this.syncPgcBvidForCid(this.vi.cid);
             // ⭐ 番剧评论 oid 用当前分集的 aid（不能用 ep_id，否则查到的评论是错的）
             const targetEpAid = targetEp.aid || (pgcAids.length > 0 ? pgcAids[0] : 0);
             // ⭐ 历史记录/点赞等依赖 aidFromParams_（路由 aid=0 时由分集 aid 补齐）
@@ -3523,6 +3562,7 @@ struct VideoPlayerPage {
           const pages: VideoPageItem[] = [];
           const pgcEpIds: number[] = [];
           const pgcAids: number[] = [];
+          const pgcBvids: string[] = [];
           for (let i = 0; i < pgcInfo.episodes.length; i++) {
             const ep = pgcInfo.episodes[i];
             pages.push({
@@ -3536,9 +3576,12 @@ struct VideoPlayerPage {
             });
             pgcEpIds.push(ep.id || 0);
             pgcAids.push(ep.aid || 0);
+            pgcBvids.push(ep.bvid || '');
           }
           this.pgcEpIds_ = pgcEpIds;
           this.pgcAids_ = pgcAids;
+          this.pgcBvids_ = pgcBvids;
+          this.syncPgcBvidForCid(this.vi.cid);
           // ⭐ 番剧评论 oid 用该集的 aid（不能用 ep_id，否则查到的评论是错的）
           const firstEpAid = pgcAids.length > 0 ? pgcAids[0] : 0;
           const pgcDetail: VideoDetail = {
@@ -5915,8 +5958,29 @@ struct VideoPlayerPage {
   }
 
   private setPlaybackCid(cid: number): void {
+    // ⭐ cid 变了就整体重置字幕：旧 cues 一旦残留，同 bvid 换分P/切集后新 P 会
+    //   按时间轴显示「别的分P」的字幕（bvid 校验拦不住同 bvid 换 cid）。
+    if (cid !== this.vi.cid) this.referenceResetSubtitles();
     this.vi.cid = cid;
+    // ⭐ 番剧每集是独立稿件：cid 换了 bvid 也要跟着换，否则字幕接口会退回那一集的第 1 个分P
+    this.syncPgcBvidForCid(cid);
     if (cid > 0) this.cidReady_?.();
+  }
+
+  /** 由 cid 反查该集自己的 bvid（PGC 分集表建好之前返回空） */
+  private pgcBvidForCid(cid: number): string {
+    if (!this.isPgc_ || cid <= 0) return '';
+    const pages = this.pagesForCurrentVideo();
+    for (let i = 0; i < pages.length; i++) {
+      if (pages[i].cid === cid) return this.pgcBvids_[i] || '';
+    }
+    return '';
+  }
+
+  /** PGC 切集/首次定位后把 vi.bvid 对齐到当前这一集（非 PGC 不动） */
+  private syncPgcBvidForCid(cid: number): void {
+    const bvid = this.pgcBvidForCid(cid);
+    if (bvid && bvid !== this.vi.bvid) this.vi.bvid = bvid;
   }
 
   private async waitForPlaybackCid(deadline: PlaybackDeadline): Promise<void> {
@@ -6697,8 +6761,17 @@ struct VideoPlayerPage {
       // 否则每次 timeUpdate 都要带着整块不可见 UI 重新布局，动画就会被切成几段。
       const uiFrozen = this.referencePortraitSettingsAnimating;
       if (this.referenceSubtitleEnabled) {
-        const cue = this.referenceSubtitleCues.find((item: ReferenceSubtitleCue) => item.from <= t / 1000 && item.to >= t / 1000);
-        if (!uiFrozen) this.referenceSubtitleText = cue?.content || '';
+        // ⭐ 兜底：cues 只对 referenceSubtitleOwner 那一条视频有效。
+        //   身份对不上说明某条换片路径没走到重置——直接关掉，绝不把别的视频的字幕显示出来。
+        if (this.referenceSubtitleCues.length > 0 && this.referenceSubtitleOwner !== this.referenceSubtitleKey()) {
+          if (!uiFrozen) {
+            this.referenceSubtitleEnabled = false;
+            this.referenceSubtitleText = '';
+          }
+        } else {
+          const cue = this.referenceSubtitleCues.find((item: ReferenceSubtitleCue) => item.from <= t / 1000 && item.to >= t / 1000);
+          if (!uiFrozen) this.referenceSubtitleText = cue?.content || '';
+        }
       }
       if (this.referenceFeedMainPresentResolve && t > this.referenceFeedMainPresentAfter) {
         this.referenceFeedMainPresentResolve();
@@ -13214,9 +13287,8 @@ struct VideoPlayerPage {
       this.vdBvid_ = detail.bvid || '';
       logInfo(`[ReferenceFeed] chrome commit ${this.vi.bvid} title=${this.vi.title} still=${presentationRatio} target=${targetRatio} previewMatch=${previewMatches}`);
       ContinuousRecommendationState.markVisited(this.vi.bvid, detail.aid);
-      this.referenceSubtitleEnabled = false;
-      this.referenceSubtitleCues = [];
-      this.referenceSubtitleText = '';
+      // 连刷直接整体赋值 vi（绕过 setPlaybackCid），字幕重置在这里显式做。
+      this.referenceResetSubtitles();
       // ⭐ 视频画幅用「解码器实测比例」（referenceDecodeRatios），不是静帧位图比例：
       //   位图比例可能来自还没切画幅的 surface（1.7766），拿它当 ar 会把竖屏视频整屏拉伸。
       //   实测没有时才退回 targetRatio / 接口 dimension。
@@ -14436,35 +14508,247 @@ struct VideoPlayerPage {
     return this.mp || this.referencePortraitSettingsAnimating ? Visibility.Visible : Visibility.Hidden;
   }
 
+  /**
+   * ⭐ 换视频/换分P 必须整体重置字幕，并递增全部请求令牌作废在途请求：
+   *   旧 cues/轨道列表残留 = 新视频显示别的视频的字幕（概率复现的主因）。
+   */
+  private referenceResetSubtitles(): void {
+    this.referenceSubtitleToggleRequest++;
+    this.referenceSubtitleMenuRequest++;
+    this.referenceSubtitleSelectionRequest++;
+    this.referenceSubtitleEnabled = false;
+    this.referenceSubtitleText = '';
+    this.referenceSubtitleCues = [];
+    this.referenceSubtitleOptions = [];
+    this.referenceSubtitleTrackUrls = [];
+    this.referenceSelectedSubtitleIndex = -1;
+    this.referenceSubtitleOwner = '';
+    this.referenceSubtitleListOwner = '';
+  }
+
+  /** 字幕状态当前归属的视频身份（bvid:cid）。cues 只对这一个身份有效。 */
+  private referenceSubtitleKey(): string {
+    return `${this.vi.bvid}:${this.vi.cid}`;
+  }
+
+  /**
+   * AI 字幕文件名 = `<aid><cid><32位md5>`。实测 aid=658265572&cid=1193639024 →
+   * `6582655721193639024b86c092b75e877a90c9875c93010dc52`，前缀就是这条轨的身份。
+   */
+  private subtitleTrackPrefix(url: string): string {
+    const path = url.split('?')[0];
+    const name = path.slice(path.lastIndexOf('/') + 1);
+    if (name.length <= 32) return '';
+    return name.slice(0, name.length - 32);
+  }
+
+  private subtitleIsAiTrack(url: string): boolean {
+    return url.indexOf('/ai_subtitle/prod/') >= 0;
+  }
+
+  /**
+   * ⭐ 轨道归属判定：AI 轨文件名自带 `<aid><cid>`，与当前稿件不一致就是**别的视频**的字幕。
+   * 2026-11-12 实测：aid+bvid+cid 三者给全、登录态下请求 /x/player/v2，服务端依然会返回
+   * 账号里另一条视频的 AI 轨（36s 的《卡莉亚的炼金工房》预告拿到 250s 探店 vlog 的轨，
+   * 回显的 bvid/cid 却是对的），所以接口回显校验拦不住，必须看文件名。
+   * 人工字幕文件名是纯 md5，没有身份信息，只能靠时长兜底（subtitleCueFits）。
+   */
+  private subtitleTrackOwned(track: ReferenceSubtitleTrack, aid: number, cid: number): boolean {
+    const url = track.subtitle_url || '';
+    if (!url) return false;
+    if (!this.subtitleIsAiTrack(url)) return true;
+    if (aid <= 0 || cid <= 0) return false;
+    return this.subtitleTrackPrefix(url) === `${aid}${cid}`;
+  }
+
+  /** 兜底：字幕覆盖的时间轴不能明显超出视频时长（错轨通常长得多，例如 10108s 对 72s）。 */
+  private subtitleCueFits(cues: ReferenceSubtitleCue[]): boolean {
+    if (cues.length === 0) return false;
+    const viDur: number = this.vi.duration || 0;
+    const videoDur: number = viDur > 0 ? viDur : (this.dur || 0);
+    if (videoDur <= 0) return true;   // 时长未知时不误杀
+    return cues[cues.length - 1].to <= videoDur * 1.2 + 15;
+  }
+
+  /** 当前画面这条视频的 aid（字幕接口要和 bvid/cid 一起用，缺了它会定位到别的稿件）。 */
+  private subtitleAid_(): number {
+    // ⚠️ 番剧/影视不带 aid：实测 (ep733316) bvid+cid+aid 三者一致时接口反而返回空列表，
+    //   只带 bvid+cid 才有「中文（中国）/English(US)」。番剧字幕走的是 PGC 那条索引。
+    if (this.isPgc_) return 0;
+    // 详情已是当前这条稿件：用它自己的 aid 最可靠
+    if (this.vd && this.detailIsCurrentVideo() && this.vd.aid > 0) return this.vd.aid;
+    // 路由 aid 只在它确实属于当前 bvid 时才能用（合集切集后路由 aid 还停在上一条）
+    if (this.routeAid_ > 0 && this.routeAidBvid_ === this.vi.bvid) return this.routeAid_;
+    // 拿不准就不带 aid：宁可退回 bvid/cid，也不能把别的稿件的 aid 发出去
+    return 0;
+  }
+
+  /**
+   * ⭐ 权威 aid：AI 轨文件名里的 aid 必须和请求一致才能认出自己的轨，
+   * 所以 aid 由 bvid 反查（公开接口，不需要登录），不用详情/路由里可能停在上一条的值。
+   */
+  private async subtitleAuthoritativeIdentity(bvid: string): Promise<SubtitleIdentity | null> {
+    const cached = this.subtitleIdentityCache_.get(bvid);
+    if (cached) return cached;
+    const request = http.createHttp();
+    try {
+      const result = await request.request(`https://api.bilibili.com/x/web-interface/view?bvid=${bvid}`, {
+        method: http.RequestMethod.GET, connectTimeout: 6000, readTimeout: 6000,
+        header: { 'Referer': 'https://www.bilibili.com/' }
+      });
+      const info = JSON.parse(result.result as string) as SubtitleViewInfo;
+      const aid = info.data?.aid || 0;
+      if (info.code !== 0 || aid <= 0) {
+        logWarn(`[Subtitle] 反查 aid 失败 code=${info.code} bvid=${bvid}`);
+        return null;
+      }
+      const identity: SubtitleIdentity = { aid, cid: info.data?.cid || 0, duration: info.data?.duration || 0 };
+      this.subtitleIdentityCache_.set(bvid, identity);
+      return identity;
+    } catch (error) {
+      logWarn('[Subtitle] 反查 aid 异常', error);
+      return null;
+    } finally { request.destroy(); }
+  }
+
+  /**
+   * ⭐ 取字幕轨列表：先试网页播放器在用的 wbi 版，再退回老版；两条都要过归属校验。
+   * @returns 只包含属于当前视频的轨；空数组 = 这条视频确实没有可用字幕
+   */
+  private async subtitleFetchTracks(bvid: string, cid: number): Promise<ReferenceSubtitleTrack[]> {
+    const identity = await this.subtitleAuthoritativeIdentity(bvid);
+    const localAid = this.subtitleAid_();
+    // ⚠️ 请求口径与校验口径要分开：番剧/影视带 aid 反而返回空列表（见 subtitleAid_），
+    //   但 AI 轨文件名里的 aid 依然是这条视频的 aid，校验时必须用它。
+    const requestAid = this.isPgc_ ? 0 : (identity ? identity.aid : localAid);
+    const expectAid = identity ? identity.aid : requestAid;
+    if (!this.isPgc_ && identity && localAid > 0 && identity.aid !== localAid) {
+      logWarn(`[Subtitle] aid 修正 本地=${localAid} 权威=${identity.aid} bvid=${bvid}`);
+    }
+    const urls: string[] = [];
+    try {
+      const params: Record<string, string> = {};
+      if (requestAid > 0) params['aid'] = `${requestAid}`;
+      params['bvid'] = bvid;
+      params['cid'] = `${cid}`;
+      urls.push(`https://api.bilibili.com/x/player/wbi/v2?${await AppSign.generateWebParams(params)}`);
+    } catch (error) {
+      logWarn('[Subtitle] wbi 签名失败，跳过 wbi 版', error);
+    }
+    const legacy = requestAid > 0 ? `aid=${requestAid}&bvid=${bvid}&cid=${cid}` : `bvid=${bvid}&cid=${cid}`;
+    urls.push(`https://api.bilibili.com/x/player/v2?${legacy}`);
+    const cookie = AppStorage.get<string>('biliCookie') || '';
+    for (let i = 0; i < urls.length; i++) {
+      const label = i === 0 ? 'wbi' : 'v2';
+      const request = http.createHttp();
+      try {
+        const result = await request.request(urls[i], {
+          method: http.RequestMethod.GET, connectTimeout: 8000, readTimeout: 8000,
+          header: { 'Cookie': cookie, 'Referer': 'https://www.bilibili.com/' }
+        });
+        const info = JSON.parse(result.result as string) as ReferenceSubtitleInfo;
+        const raw = info.data?.subtitle?.subtitles || [];
+        const owned = raw.filter((track: ReferenceSubtitleTrack) => this.subtitleTrackOwned(track, expectAid, cid));
+        const files = raw.map((track: ReferenceSubtitleTrack) =>
+          this.subtitleTrackPrefix(track.subtitle_url) || 'md5').join(',');
+        logInfo(`[Subtitle] ${label} code=${info.code} aid=${requestAid} cid=${cid} ` +
+          `echo=${info.data?.bvid || '-'}/${info.data?.cid ?? 0} tracks=${raw.length} owned=${owned.length} files=${files}`);
+        if (owned.length > 0) return owned;
+        if (raw.length > 0) logWarn(`[Subtitle] ${label} 轨道全部不属于 ${bvid}:${cid}，丢弃`);
+      } catch (error) {
+        logWarn(`[Subtitle] ${label} 字幕列表请求失败`, error);
+      } finally { request.destroy(); }
+    }
+    return [];
+  }
+
+  /**
+   * 字幕轨道落地诊断：条数 + 覆盖时间轴。
+   * 轨道是否属于当前视频，靠这段日志就能判：覆盖时长明显长于视频时长 = 下载到了别的视频的轨。
+   */
+  private logSubtitleCueSpan(cues: ReferenceSubtitleCue[], bvid: string, cid: number): void {
+    if (cues.length === 0) {
+      logWarn(`[Subtitle] cues=0 bvid=${bvid} cid=${cid}`);
+      return;
+    }
+    const first = cues[0];
+    const last = cues[cues.length - 1];
+    const samples = cues.slice(0, 3).map((cue: ReferenceSubtitleCue) =>
+      `${cue.from.toFixed(1)}|${(cue.content || '').replace(/\s+/g, ' ').slice(0, 12)}`).join(' / ');
+    logInfo(`[Subtitle] cues=${cues.length} span=${first.from.toFixed(1)}~${last.to.toFixed(1)}s ` +
+      `duration=${this.vi.duration}s id=${bvid}:${cid} head=${samples}`);
+  }
+
+  /**
+   * 字幕请求前置条件：bvid 与 cid 必须同时就绪且指向同一条视频。
+   * - cid 未就绪：接口 /x/player/v2 直接 -400，用户看到的是误报的「暂无可用字幕」；
+   * - bvid 是纯数字（aid 还没解析成 BV）：接口同样认不出来，字幕内容会落到别的稿件；
+   * - 番剧每集是独立稿件，bvid 要等分集表建好后由 cid 反查补齐。
+   */
+  private async referenceAwaitSubtitleIdentity(): Promise<boolean> {
+    for (let i = 0; i < 20; i++) {
+      if (!this.referenceAlive) return false;
+      if (this.vi.cid > 0) {
+        this.syncPgcBvidForCid(this.vi.cid);
+        const bvid = this.vi.bvid;
+        if (bvid && !/^\d+$/.test(bvid)) return true;
+      }
+      await new Promise<void>((resolve: () => void) => setTimeout(resolve, 100));
+    }
+    return false;
+  }
+
   private async referenceSetSubtitles(enabled: boolean): Promise<void> {
+    const token = ++this.referenceSubtitleToggleRequest;
     this.referenceSubtitleEnabled = enabled;
     this.referenceSubtitleText = '';
     this.referenceSubtitleCues = [];
+    this.referenceSubtitleOwner = '';
     if (!enabled) return;
+    // ⭐ 身份没就绪就别发请求：宁可提示"加载中"，也不能拿空的/别的视频的 bvid 去换字幕
+    if (!await this.referenceAwaitSubtitleIdentity()) {
+      if (token !== this.referenceSubtitleToggleRequest || !this.referenceAlive) return;
+      this.referenceSubtitleEnabled = false;
+      this.getUIContext().getPromptAction().showToast({ message: '视频信息加载中，请稍后再试' });
+      return;
+    }
     const bvid = this.vi.bvid;
-    const request = http.createHttp();
+    const cid = this.vi.cid;
+    logInfo(`[Subtitle] toggle request bvid=${bvid} cid=${cid} pgc=${this.isPgc_} ep=${this.epId_}`);
+    const stillValid = (): boolean => token === this.referenceSubtitleToggleRequest &&
+      bvid === this.vi.bvid && cid === this.vi.cid && this.referenceAlive;
     try {
-      const result = await request.request(`https://api.bilibili.com/x/player/v2?bvid=${bvid}&cid=${this.vi.cid}`, {
-        method: http.RequestMethod.GET,
-        header: { 'Cookie': AppStorage.get<string>('biliCookie') || '', 'Referer': 'https://www.bilibili.com/' }
-      });
-      const info = JSON.parse(result.result as string) as ReferenceSubtitleInfo;
-      const tracks = info.data?.subtitle?.subtitles || [];
-      if (bvid !== this.vi.bvid || !this.referenceAlive) return;
+      // 列表只返回属于当前视频的轨（AI 轨按文件名里的 aid+cid 校验）
+      const tracks = await this.subtitleFetchTracks(bvid, cid);
+      if (!stillValid()) return;
       if (!tracks.length) {
         this.referenceSubtitleEnabled = false;
         this.getUIContext().getPromptAction().showToast({ message: '当前视频暂无可用字幕' });
         return;
       }
-      const response = await request.request(tracks[0].subtitle_url.startsWith('//') ? `https:${tracks[0].subtitle_url}` : tracks[0].subtitle_url);
-      if (bvid !== this.vi.bvid || !this.referenceAlive) return;
-      this.referenceSubtitleCues = (JSON.parse(response.result as string) as ReferenceSubtitleBody).body || [];
-      this.referenceSubtitleEnabled = this.referenceSubtitleCues.length > 0;
+      const trackUrl = tracks[0].subtitle_url;
+      const request = http.createHttp();
+      try {
+        const response = await request.request(trackUrl.startsWith('//') ? `https:${trackUrl}` : trackUrl);
+        if (!stillValid()) return;
+        const cues = (JSON.parse(response.result as string) as ReferenceSubtitleBody).body || [];
+        if (!this.subtitleCueFits(cues)) {
+          logWarn(`[Subtitle] 轨时间轴超出视频时长 duration=${this.vi.duration}s -> 丢弃`);
+          this.referenceSubtitleEnabled = false;
+          this.getUIContext().getPromptAction().showToast({ message: '当前视频暂无可用字幕' });
+          return;
+        }
+        this.referenceSubtitleCues = cues;
+        this.referenceSubtitleOwner = `${bvid}:${cid}`;
+        this.referenceSubtitleEnabled = true;
+        this.logSubtitleCueSpan(cues, bvid, cid);
+      } finally { request.destroy(); }
     } catch (error) {
+      if (!stillValid()) return;
       this.referenceSubtitleEnabled = false;
       logWarn('加载字幕失败', error);
       this.getUIContext().getPromptAction().showToast({ message: '字幕加载失败，请重试' });
-    } finally { request.destroy(); }
+    }
   }
 
   private async referenceOpenLandscapeSubtitles(asMenu: boolean = false): Promise<void> {
@@ -14478,28 +14762,37 @@ struct VideoPlayerPage {
     this.referenceSubtitleMenuFailed = false;
     this.referenceSubtitleOptions = [];
     this.referenceSubtitleTrackUrls = [];
+    this.referenceSubtitleListOwner = '';
+    const ready = await this.referenceAwaitSubtitleIdentity();
+    if (token !== this.referenceSubtitleMenuRequest || !this.referenceAlive) return;
+    if (!ready) {
+      // 面板还开着：给"加载失败，点击重试"，别把空列表说成"当前视频暂无可用字幕"
+      this.referenceSubtitleMenuLoading = false;
+      this.referenceSubtitleMenuFailed = true;
+      return;
+    }
     const bvid = this.vi.bvid;
     const cid = this.vi.cid;
-    const request = http.createHttp();
+    logInfo(`[Subtitle] list request bvid=${bvid} cid=${cid} pgc=${this.isPgc_} ep=${this.epId_}`);
+    const stillValid = (): boolean => token === this.referenceSubtitleMenuRequest &&
+      bvid === this.vi.bvid && cid === this.vi.cid && this.referenceAlive;
     try {
-      const result = await request.request(`https://api.bilibili.com/x/player/v2?bvid=${bvid}&cid=${this.vi.cid}`, {
-        method: http.RequestMethod.GET,
-        header: { 'Cookie': AppStorage.get<string>('biliCookie') || '', 'Referer': 'https://www.bilibili.com/' }
-      });
-      const info = JSON.parse(result.result as string) as ReferenceSubtitleInfo;
-      const tracks = info.data?.subtitle?.subtitles || [];
-      if (token !== this.referenceSubtitleMenuRequest || bvid !== this.vi.bvid || cid !== this.vi.cid || !this.referenceAlive) return;
+      // ⭐ 只保留属于当前视频的轨：服务端登录态下会把账号里别的视频的 AI 轨混进来
+      const tracks = await this.subtitleFetchTracks(bvid, cid);
+      if (!stillValid()) return;
       this.referenceSubtitleOptions = tracks.map((track: ReferenceSubtitleTrack) => track.lan_doc || '字幕');
       this.referenceSubtitleTrackUrls = tracks.map((track: ReferenceSubtitleTrack) =>
         track.subtitle_url.startsWith('//') ? `https:${track.subtitle_url}` : track.subtitle_url);
+      this.referenceSubtitleListOwner = `${bvid}:${cid}`;
+      logInfo(`[Subtitle] 可用轨=${tracks.length} ${tracks.map((track: ReferenceSubtitleTrack) =>
+        `${track.lan_doc || '?'}=${this.subtitleTrackPrefix(track.subtitle_url) || 'md5'}`).join(' ')}`);
     } catch (error) {
-      if (token !== this.referenceSubtitleMenuRequest || bvid !== this.vi.bvid || cid !== this.vi.cid || !this.referenceAlive) return;
+      if (!stillValid()) return;
       this.referenceSubtitleMenuFailed = true;
       logWarn('读取字幕列表失败', error);
       this.getUIContext().getPromptAction().showToast({ message: '字幕列表加载失败' });
     } finally {
-      request.destroy();
-      if (token === this.referenceSubtitleMenuRequest && bvid === this.vi.bvid && cid === this.vi.cid && this.referenceAlive) this.referenceSubtitleMenuLoading = false;
+      if (stillValid()) this.referenceSubtitleMenuLoading = false;
     }
   }
 
@@ -14517,11 +14810,27 @@ struct VideoPlayerPage {
       this.referenceSubtitleEnabled = false;
       this.referenceSubtitleText = '';
       this.referenceSubtitleCues = [];
+      this.referenceSubtitleOwner = '';
       if (closePanel) this.closeLandscapeSubtitlePanel();
       return;
     }
     const subtitleUrl = this.referenceSubtitleTrackUrls[index];
-    if (!subtitleUrl) return;
+    const identity = `${this.vi.bvid}:${this.vi.cid}`;
+    // ⭐ 列表必须是当前这条视频的：菜单里显示的语言和真要下载的 subtitle_url 同源。
+    //   列表若是别的视频留下的，按它下载只会把「别人的 URL」贴上当前身份，屏幕上滚出别人的台词。
+    if (this.referenceSubtitleListOwner !== identity) {
+      this.referenceSubtitleOptions = [];
+      this.referenceSubtitleTrackUrls = [];
+      this.referenceSubtitleListOwner = '';
+      this.referenceSubtitleMenuFailed = true;
+      void this.referenceOpenLandscapeSubtitles(true);
+      return;
+    }
+    // 轨道存在但没有地址（AI 字幕还在生成）：说清楚，别反复重拉列表
+    if (!subtitleUrl) {
+      this.getUIContext().getPromptAction().showToast({ message: '该字幕轨道暂无可用内容' });
+      return;
+    }
     const bvid = this.vi.bvid;
     const cid = this.vi.cid;
     const request = http.createHttp();
@@ -14535,10 +14844,23 @@ struct VideoPlayerPage {
       if (token !== this.referenceSubtitleSelectionRequest || bvid !== this.vi.bvid || cid !== this.vi.cid || !this.referenceAlive) return;
       if (response.responseCode !== 200) throw new Error(`字幕 HTTP ${response.responseCode}`);
       const body = JSON.parse(response.result as string) as ReferenceSubtitleBody;
-      this.referenceSubtitleCues = body.body || [];
+      const cues = body.body || [];
+      // ⭐ 下载落地再校验一次时间轴：错轨常常长得多（10108s 的轨配 72s 的视频）
+      if (!this.subtitleCueFits(cues)) {
+        logWarn(`[Subtitle] 选中轨时间轴超出视频时长 duration=${this.vi.duration}s -> 丢弃`);
+        this.referenceSubtitleCues = [];
+        this.referenceSubtitleOwner = '';
+        this.referenceSubtitleEnabled = false;
+        this.referenceSelectedSubtitleIndex = -1;
+        this.getUIContext().getPromptAction().showToast({ message: '当前视频暂无可用字幕' });
+        return;
+      }
+      this.referenceSubtitleCues = cues;
+      this.logSubtitleCueSpan(this.referenceSubtitleCues, bvid, cid);
       if (this.referenceSubtitleCues.length === 0) {
         logWarn(`[Subtitle] empty track status=${response.responseCode} keys=${Object.keys(body).join(',')}`);
       }
+      this.referenceSubtitleOwner = `${bvid}:${cid}`;
       this.referenceSubtitleEnabled = this.referenceSubtitleCues.length > 0;
       this.referenceSelectedSubtitleIndex = this.referenceSubtitleEnabled ? index : -1;
       if (!this.referenceSubtitleEnabled) this.getUIContext().getPromptAction().showToast({ message: '字幕轨道没有可显示内容' });

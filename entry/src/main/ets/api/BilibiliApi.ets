@@ -1542,6 +1542,7 @@ interface PgcPlayUrlResponse {
 export interface PgcEpisode {
   id?: number;        // ep_id
   aid?: number;       // ⭐ 分集 aid（番剧评论 oid 用 aid，不能用 ep_id！）
+  bvid?: string;      // ⭐ 分集自己的 bvid：番剧每集是独立稿件，字幕接口按 bvid 定位作品
   cid?: number;
   title?: string;
   cover?: string;
