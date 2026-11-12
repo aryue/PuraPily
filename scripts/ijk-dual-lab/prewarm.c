@@ -41,7 +41,7 @@ typedef struct PrefixJob {
     pthread_mutex_t lock;
     pthread_cond_t changed;
     atomic_int cancel;
-    int refs, limit, filled, opened, done, served, adopted;
+    int refs, limit, filled, opened, done, failed, served, adopted;
     int nslice, seek_ms;
     Slice s[2];
     int64_t total, created, deadline;
@@ -362,6 +362,7 @@ static void *worker(void *opaque)
     if (pb && rc >= 0 && last && last->len > 0 && last->filled >= last->len) { j->pb = pb; pb = NULL; }
     int kept = j->pb ? 1 : 0;
     int adopt_at = kept ? (int)(last->off + last->len) : -1;
+    j->failed = !kept;
     j->done = 1;
     pthread_cond_broadcast(&j->changed);
     pthread_mutex_unlock(&j->lock);
@@ -388,10 +389,13 @@ int purapily_prewarm_async(const char *url, const char *agent, const char *refer
         if (pool[i] && now - pool[i]->created >= TTL_US) { old[i] = pool[i]; pool[i] = NULL; }
         if (!pool[i] && slot < 0) slot = i;
         if (pool[i] && same(pool[i],url,agent,referer,cookie,-1)) {
-            if (pool[i]->seek_ms == j_seek) {
+            pthread_mutex_lock(&pool[i]->lock);
+            int failed = pool[i]->failed;
+            pthread_mutex_unlock(&pool[i]->lock);
+            if (pool[i]->seek_ms == j_seek && !failed) {
                 duplicate = 1;
             } else {
-                // 同一资源但起点不同：以最新一次为准（列表预热先给 0，页面拿到进度后再给续播点）。
+                // 失败或起点变化时重新预热。
                 stale = pool[i]; pool[i] = NULL;
                 if (slot < 0) slot = i;
             }
@@ -416,17 +420,26 @@ int purapily_prewarm_async(const char *url, const char *agent, const char *refer
     if(reservation<0 || reserved+bytes>1179648) {
         pthread_mutex_unlock(&pool_lock);
         for(int i=0;i<SLOTS;i++) retire(old[i]);
+        retire(stale);
         OH_LOG_Print(LOG_APP,LOG_INFO,0,"Prefix","quota reject bytes=%{public}d reserved=%{public}d",bytes,reserved);
         return 0;
     }
 #endif
     PrefixJob *j = calloc(1, sizeof(*j));
-    if (!j) { pthread_mutex_unlock(&pool_lock); for(int i=0;i<SLOTS;i++) retire(old[i]); return 0; }
+    if (!j) {
+        pthread_mutex_unlock(&pool_lock);
+        for (int i=0;i<SLOTS;i++) retire(old[i]);
+        retire(stale);
+        return 0;
+    }
     j->data = av_malloc(bytes);
     j->url = strdup(url); j->agent = strdup(agent); j->referer = strdup(referer); j->cookie = strdup(cookie);
     if (!j->data || !j->url || !j->agent || !j->referer || !j->cookie) {
         av_free(j->data); free(j->url); free(j->agent); free(j->referer); free(j->cookie); free(j);
-        pthread_mutex_unlock(&pool_lock); for(int i=0;i<SLOTS;i++) retire(old[i]); return 0;
+        pthread_mutex_unlock(&pool_lock);
+        for (int i=0;i<SLOTS;i++) retire(old[i]);
+        retire(stale);
+        return 0;
     }
     pthread_mutex_init(&j->lock,NULL); pthread_cond_init(&j->changed,NULL);
     atomic_init(&j->cancel,0);
@@ -459,7 +472,15 @@ void *purapily_prefix_take(const char *url, const char *agent, const char *refer
     }
     pthread_mutex_unlock(&pool_lock);
     if(found && av_gettime_relative()-found->created >= TTL_US) { retire(found); return NULL; }
-    if(found) OH_LOG_Print(LOG_APP,LOG_INFO,0,"Prefix","take limit=%{public}d filled=%{public}d net=%{public}d",found->limit,found->filled,found->pb?1:0);
+    if (found) {
+        pthread_mutex_lock(&found->lock);
+        int failed = found->failed;
+        int filled = found->filled;
+        int kept = found->pb != NULL;
+        pthread_mutex_unlock(&found->lock);
+        if (failed) { retire(found); return NULL; }
+        OH_LOG_Print(LOG_APP,LOG_INFO,0,"Prefix","take limit=%{public}d filled=%{public}d net=%{public}d",found->limit,filled,kept);
+    }
     return found; // transfers pool ownership, including a pending job
 }
 static void timed_wait(PrefixJob *j)

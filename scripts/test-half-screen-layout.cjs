@@ -31,12 +31,12 @@ vm.runInNewContext(ts.transpileModule(`export class Page {
   ${between('  private effectiveScaleMode(', '  private onPlaybackViewportChanged(')}
   ${between('  private getVideoScaleType():', '  private updateVideoSize()')}
   ${between('  private async loadSM()', '  private async loadD(')}
-  ${between('  private ovRectX():', '  /**\n   * ⭐ 全屏相关的圆角')}
+  ${between('  private portraitPlateByArea():', '  /**\n   * ⭐ 全屏相关的圆角')}
 }`, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText, context);
 const p = new context.exports.Page();
 Object.assign(p, { cw: 400, ch: 850, referenceLayout: true, referenceFeed: false,
   referenceFeedProgress: 0, referenceFeedComments: false, referencePanelOffset: 0,
-  fs: false, isLs: false, mp: false, sm: 'auto', referenceFeedPortraitScaleMode: 'fill',
+  fs: false, isLs: false, isLightsOff: false, mp: false, sm: 'auto', referenceFeedPortraitScaleMode: 'fill',
   referenceFeedPortraitScaleScope: 'standard', referenceSafeTop: () => 40 });
 const close = (a, b) => assert.ok(Math.abs(a - b) < 1e-7, `${a} != ${b}`);
 // Test actual page geometry: ultra-wide, standard, square and portrait media,

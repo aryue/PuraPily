@@ -884,6 +884,22 @@ struct VideoPlayerPage {
     return this.shrinkFillH();
   }
 
+  /**
+   * ⭐ 竖屏半屏（常态详情页）常驻层 = **播放器区域**（视频槽），不是视频画面本身。
+   *
+   * 为什么（用户反馈「弹幕画布被限制到了视频实际画面大小」）：
+   *   竖片（9:16 甚至更窄）在竖屏里只有半屏宽的一条，两侧全是播放器的黑底；超宽片则上下留白。
+   *   这些黑底属于播放区域 —— 弹幕应当从屏幕左缘进、右缘出，控制条/字幕也贴在区域边缘。
+   *   旧口径把常驻层（以及弹幕画布）收成 `referenceMedia*`，于是弹幕只在画面那条窄带里飞。
+   *
+   * ⚠️ 画面位置不受影响：XComponent 仍按 `(ovRectH - ovVideoH)/2` 居中，
+   *    `referenceMediaTop()` 恰好等于 `referenceAreaTop() + 上下留白/2`，两者逐值相等。
+   * ⚠️ 连刷有自己的整屏混算、关灯会把画面放大到窗口 —— 这两条继续用媒体框，别一起改。
+   */
+  private portraitPlateByArea(): boolean {
+    return this.referenceLayout && !this.fs && !this.isLs && !this.referenceFeed && !this.isLightsOff;
+  }
+
   /** ⭐ 常驻播放器层矩形：非全屏跟踪占位槽；全屏为整屏；进出全屏期间在两者间连续插值 */
   private ovRectX(): number {
     if (this.fsEntering) return this.fsLerpSnapX;
@@ -904,6 +920,7 @@ struct VideoPlayerPage {
       const target = this.referenceLandscapeAreaTop();
       return this.fs ? target + (0 - target) * this.fsPanProgress : target;
     }
+    if (this.portraitPlateByArea()) return Math.max(0, this.referenceAreaTop());
     if (this.referenceLayout && !this.fs && !this.isLs) return Math.max(0, this.referenceMediaTop());
     if (!this.fs) return this.ovY;
     if (this.fsLerpDir === 1) return this.fsLerpSnapY * (1 - this.fsLerpT());
@@ -931,6 +948,7 @@ struct VideoPlayerPage {
       const target = this.referenceLandscapeAreaHeight();
       return this.fs ? target + (this.ch - target) * this.fsPanProgress : target;
     }
+    if (this.portraitPlateByArea()) return Math.max(1, this.referenceAreaHeight());
     if (this.referenceLayout && !this.fs && !this.isLs) return Math.max(1, this.referenceMediaHeight());
     if (!this.fs) return Math.max(1, this.ovH);
     if (this.fsLerpDir === 1) return Math.max(1, this.fsLerpSnapH + (this.ch - this.fsLerpSnapH) * this.fsLerpT());
@@ -1146,6 +1164,11 @@ struct VideoPlayerPage {
         const media = Math.max(1, this.referenceMediaWidth());
         return full + (media - full) * this.referenceFeedCommentAmount();
       }
+      // ⭐ 竖屏半屏：弹幕区 = **整个播放器区域**，不是视频画面。
+      //   竖片（9:16 甚至更窄）只有半屏宽的一条、左右全是播放器黑底；超宽片则是上下留白。
+      //   这些黑底属于播放器（见 portraitPlateByArea），弹幕要从屏幕左缘进、右缘出。
+      //   关灯下画面会被放大到窗口，仍按"贴画面"处理，沿用媒体框。
+      if (!this.isLightsOff) return Math.max(1, this.cw);
       return Math.max(1, this.referenceMediaWidth());
     }
     if (this.fs) return Math.max(1, this.cw);
@@ -1162,6 +1185,10 @@ struct VideoPlayerPage {
         const media = Math.max(1, this.referenceMediaHeight() - this.ovDanmakuSafeTopInset());
         return full + (media - full) * this.referenceFeedCommentAmount();
       }
+      // ⭐ 竖屏半屏：高度同样按播放器区域（`dmPortraitSurfaceHeight` 已含顶部安全区避让），不是画面高。
+      //   ⚠️ 这是**画布（surface）**高度，取静止态常量；真正决定"能排几行"的是
+      //      `dmTrackAreaHeight()`（随面板实时变），两者不要混用。
+      if (!this.isLightsOff) return Math.max(1, this.dmPortraitSurfaceHeight());
       return Math.max(1, this.referenceMediaHeight() - this.ovDanmakuSafeTopInset());
     }
     if (this.fs) return Math.max(1, this.ch);
@@ -1179,6 +1206,40 @@ struct VideoPlayerPage {
     // 按当前视频区域实际侵入安全区的部分避让，兼容连刷过渡、居中画幅和评论展开。
     return Math.min(Math.max(0, this.referenceMediaHeight() - 1),
       Math.max(0, this.referenceSafeTop() - this.ovRectY()));
+  }
+  /**
+   * ⭐ 竖屏半屏弹幕**画布（surface）**的高度基准：取静止态（详情面板未拖动）的播放器区域高度。
+   *
+   * 为什么不用 `referenceAreaHeight()`（当前区域高度）：
+   *   竖片 / 4:3 上推详情面板时区域高度逐帧变，画布尺寸跟着逐帧变 ⇒ ArkUI 每帧重建 canvas
+   *   surface，controller 还会在 100ms 防抖后走一次 `setCanvasSize`（= 清空轨道，正在滚的弹幕
+   *   会叠字/闪一下）。静止态高度是常量（只随 cw / ch / 画幅变化），画布因此恒定。
+   *
+   * ⚠️ 画布恒定 **不等于** 轨道按整块画布排：被面板遮住的那几行由 `dmTrackAreaHeight()`
+   *   从可用高度里扣掉（见该函数），否则那几行会白吃弹幕、永远看不见。
+   */
+  private dmPortraitSurfaceHeight(): number {
+    const stable = Math.min(Math.max(1, this.ch - this.referenceSafeTop()),
+      Math.max(1, this.referenceDetailBaseHeight()));
+    return Math.max(1, stable - this.ovDanmakuSafeTopInset());
+  }
+  /**
+   * ⭐ 弹幕**轨道可用高度**（vp）：当前可见的播放区高度，随详情面板拖动实时变。
+   *
+   * 与 `dmPortraitSurfaceHeight()`（画布尺寸，常量）分工：
+   *   · 画布尺寸恒 → 拖动面板不重建 surface、不闪、不叠字；
+   *   · 可用高度跟手 → 行数/基线按可见区域算，被面板遮住的下方区域**不再分配弹幕**。
+   *     旧版只靠常驻层 `.clip(true)` 裁：视觉上确实看不到，但那几行照样在吃弹幕
+   *     （面板一上推，11 行里有 4 行白扔），用户看到的现象就是「弹幕从已遮挡区域冒出来」。
+   *
+   * 返回 0 = 不走本通道（全屏 / 横屏 / 连刷 / 关灯 / 旧版布局，行为完全不变）。
+   * 夹到画布高：面板往下拉时区域会比静止态更高，不能超出画布。
+   */
+  private dmTrackAreaHeight(): number {
+    if (!this.portraitPlateByArea()) return 0;
+    const surface = this.dmPortraitSurfaceHeight();
+    const visible = Math.max(1, this.referenceAreaHeight() - this.ovDanmakuSafeTopInset());
+    return Math.min(surface, visible);
   }
   private ovDanmakuY(): number {
     if (this.referenceLayout && !this.fs && !this.isLs) return this.ovDanmakuSafeTopInset();
@@ -1206,12 +1267,16 @@ struct VideoPlayerPage {
     return this.ovDanmakuY();
   }
   /**
-   * 弹幕画布的「固定基准 + scale」通道只保留给非连刷竖屏半屏（防面板拖动期逐帧重建 canvas surface）。
-   * 连刷弹幕画布本身就是恒定整屏尺寸（浏览/进连刷过渡期间宽高不变），直接量尺寸即可，不再跟视频
-   * surface 共用 portraitBase+scale —— 否则整屏口径会被 scale 因子重新压回视频画幅。
+   * 弹幕画布的「固定基准 + scale」通道：**不再需要，恒为 false**。
+   *
+   * 这条通道原本是给竖屏半屏用的（防止拖动面板时逐帧重建 canvas surface），但它借用的是
+   * **视频 surface** 的基准与缩放系数，于是弹幕画布会被 scale 因子重新压回画面大小 ——
+   * 竖片只有 217.7/440 宽、0.52 倍缩放时，整屏口径瞬间又变回"视频实际画面"。
+   * 现在竖屏画布尺寸取静止态播放器区域（`dmPortraitSurfaceHeight`，常量），本身就不会逐帧变，
+   * 不需要再借 surface 的通道；连刷本来就是恒整屏，也不需要。
    */
   private dmTransformChannel(): boolean {
-    return this.portraitScaleByTransform() && !this.referenceFeed;
+    return false;
   }
   private dmScaleFactor(): number {
     return this.dmTransformChannel() ? this.portraitScaleFactor() : 1;
@@ -8551,6 +8616,24 @@ struct VideoPlayerPage {
     }
   }
 
+  /**
+   * 音量/亮度分界线（windowX 口径）：播放区横向中线。
+   * ⚠️ 横屏分栏的播放区只占窗口一部分（比例可拖、还能换到右侧），用屏幕中线会把
+   *    播放区左大半段全判成亮度、右侧只剩一条窄带是音量。分栏下必须取播放视口中线；
+   *    全屏/竖屏的播放区占满或水平居中，与屏幕中线等价，行为不变。
+   * ⚠️ 竖屏视频横看时画面在视口内居中（ovRect 里 surface 按 (ovRectW-ovVideoW)/2 摆），
+   *    所以视口中线同时也是画面中线。
+   */
+  private levelGestureCenterX(): number {
+    if (this.fs) return this.cw / 2;
+    if (this.referenceLayout && this.isLs) {
+      return this.referenceLandscapePlayerX() + this.referenceLandscapeViewportWidth() / 2;
+    }
+    // 旧版横屏竖屏视频布局：播放器起始 x=150vp、宽度=lsvw
+    if (this.isLandscapeVertical) return 150 + this.lsvw / 2;
+    return this.cw / 2;
+  }
+
   private onTD(e: TouchEvent) {
     if (e.touches.length !== 1) { this.onTC(); return; }
     const t = e.touches[0];
@@ -8625,15 +8708,8 @@ struct VideoPlayerPage {
           this.lastSeekHapticPct_ = -1;  // 重置档位震动追踪，让拖动中第一次反馈正常触发
           this.triggerHaptic();  // 触觉反馈：开始拖拽进度
       } else if (ady >= 12 && ady >= adx * 1.2) {
-          // 根据播放器模式确定触控区域中心点
-          let centerX: number;
-          if (this.isLandscapeVertical) {
-            // 横屏非全屏竖屏视频：播放器起始x=150vp，宽度=lsvw
-            centerX = 150 + this.lsvw / 2;
-          } else {
-            // 其他模式：使用屏幕宽度的一半
-            centerX = this.cw / 2;
-          }
+          // 分界线 = 播放区中线（横屏分栏不能取屏幕中线，见 levelGestureCenterX）
+          const centerX = this.levelGestureCenterX();
           if (t.windowX < centerX) {
             this.gm_ = 'brightness';
           } else {
@@ -9765,6 +9841,9 @@ struct VideoPlayerPage {
             // ⚠️ 传参必须与容器同源（同一套尺寸），否则又是两套尺寸
             canvasWidth: this.dmTransformChannel() ? this.portraitBaseW() : this.ovDanmakuCW(),
             canvasHeight: this.dmTransformChannel() ? this.portraitBaseH() : this.ovDanmakuCH(),
+            // ⭐ 轨道可用高度：竖屏半屏跟随可见播放区（详情面板上推后，被遮住的下方不再分弹幕）。
+            //   画布尺寸仍是上面的常量，所以拖动面板只重排轨道、不重建 surface。
+            trackAreaHeight: this.dmTrackAreaHeight(),
             // ⭐ 字号 ×1.2 的唯一判据：真·全屏 / 横屏。**不能用画布比例代替** ——
             //   竖屏播放页的视频区本身就是 16:9，比例判定会把它也当成横屏（100% 变 34 号字）。
             isFullscreen: this.fs || this.isLs,

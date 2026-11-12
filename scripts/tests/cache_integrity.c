@@ -10,8 +10,13 @@
 #include <assert.h>
 #include <sys/wait.h>
 
-typedef struct { int64_t pos, size; int seed; } TestNet;
-static int opens, fail_open;
+typedef struct {
+    int64_t pos, size;
+    int seed, stall;
+    AVIOInterruptCB ic;
+} TestNet;
+static atomic_int opens, cancelled_reads;
+static int fail_open;
 static int read_failures, read_fault = AVERROR(ETIMEDOUT);
 static int64_t remote_size = 512 * 1024 + 123;
 AVIOContext *avio_alloc_context(unsigned char *buffer, int size, int write_flag, void *opaque,
@@ -56,6 +61,11 @@ static unsigned char expected(int64_t pos, int seed) { return (unsigned char)((p
 static int net_read(void *opaque, uint8_t *buf, int size)
 {
     TestNet *n = opaque;
+    if (n->stall) {
+        while (!n->ic.callback(n->ic.opaque)) av_usleep(1000);
+        atomic_fetch_add(&cancelled_reads, 1);
+        return AVERROR_EXIT;
+    }
     if (n->pos >= n->size) return AVERROR_EOF;
     if (size > n->size - n->pos) size = (int)(n->size - n->pos);
     for (int i = 0; i < size; i++) buf[i] = expected(n->pos + i, n->seed);
@@ -73,12 +83,14 @@ static int64_t net_seek(void *opaque, int64_t offset, int whence)
 }
 int test_net_open(AVIOContext **pb, const char *url, int flags, const AVIOInterruptCB *ic, AVDictionary **options)
 {
-    (void)flags; (void)ic;
+    (void)flags;
     opens++;
     if (fail_open) return AVERROR(EIO);
     TestNet *n = av_mallocz(sizeof(*n));
     n->size = remote_size;
     n->seed = strstr(url, "/variant-b/") ? 17 : 3;
+    n->stall = strstr(url, "/stall/") != NULL;
+    if (ic) n->ic = *ic;
     AVDictionaryEntry *offset = av_dict_get(*options, "offset", NULL, 0);
     n->pos = offset ? strtoll(offset->value, NULL, 10) : 0;
     *pb = avio_alloc_context(av_malloc(4096), 4096, 0, n, net_read, NULL, net_seek);
@@ -207,7 +219,7 @@ int main(int argc, char **argv)
     assert(unlink(bin) == 0 && unlink(idx) == 0);
     other = open_cache(a); check_read(other, 0, 100, 3); purapily_cache_close(&other);
     purapily_cache_close(&p); // old inode must not publish its stale total/index
-    p = open_cache(a); assert(((CacheCtx *)p->opaque)->total == remote_size);
+    p = open_cache(a); assert(avio_size(p) == remote_size);
     purapily_cache_close(&p);
     puts("PASS: clearing/replacing live files cannot let an old owner publish into the new generation");
 
@@ -225,6 +237,7 @@ int main(int argc, char **argv)
     puts("PASS: cached reads reopen a latched timeout at the exact unread offset");
     purapily_cache_set_dir(NULL);
     p = purapily_cache_open(a, renewed, "agent", "ref", "", NULL);
+    assert(avio_size(p) == remote_size);
     read_failures = 2;
     check_read(p, 77531, 1000, 3);
     assert(((CacheCtx *)p->opaque)->using_backup);
@@ -247,6 +260,7 @@ int main(int argc, char **argv)
     read_failures = 0;
     purapily_cache_close(&p);
     p = purapily_cache_open(a, renewed, "agent", "ref", "", NULL);
+    assert(avio_size(p) == remote_size);
     ctx = p->opaque;
     purapily_cache_set_bandwidth(p, 20000000);
     record_network_read(ctx, 1000000, av_gettime_relative() - 4000000);
@@ -255,16 +269,41 @@ int main(int argc, char **argv)
     assert(ctx->using_backup);
     purapily_cache_close(&p);
     p = purapily_cache_open(a, renewed, "agent", "ref", "", NULL);
+    assert(avio_size(p) == remote_size);
     ctx = p->opaque;
     purapily_cache_set_bandwidth(p, 20000000);
     record_network_read(ctx, 12000000, av_gettime_relative() - 4000000);
     assert(!ctx->slow_source);
     read_failures = 1; read_fault = AVERROR_EXIT; before = opens;
     assert(cache_read(ctx, buf, sizeof(buf)) == AVERROR_EXIT);
-    assert(opens - before == 1);
+    assert(opens == before);
     read_failures = 0;
     purapily_cache_close(&p);
     puts("PASS: sustained slow source switches once; healthy reads and cancellation do not");
+
+    before = opens;
+    p = purapily_cache_open(a, renewed, "agent", "ref", "", NULL);
+    assert(opens == before);
+    assert(avio_size(p) == remote_size);
+    ctx = p->opaque;
+    assert(!ctx->using_backup && ctx->total == remote_size);
+    check_read(p, 0, 1000, 3);
+    assert(opens - before == 1);
+    purapily_cache_close(&p);
+    puts("PASS: fast cold startup reads from the connection that discovered the length");
+
+    before = opens;
+    p = purapily_cache_open("https://startup.test/stall/track.m4s", renewed, "agent", "ref", "", NULL);
+    assert(opens == before);
+    assert(avio_size(p) == remote_size);
+    ctx = p->opaque;
+    assert(ctx->using_backup && ctx->total == remote_size);
+    assert(cancelled_reads == 1);
+    check_read(p, 0, 1000, 3);
+    check_read(p, 73000, 1000, 3);
+    assert(opens - before == 2);
+    purapily_cache_close(&p);
+    puts("PASS: stalled primary body is cancelled; backup serves exact bytes and seek");
     puts("ALL CACHE INTEGRITY TESTS PASSED");
     return 0;
 }

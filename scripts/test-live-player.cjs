@@ -94,7 +94,8 @@ function section(start, end) {
 const ctx = { exports: {}, clearTimeout, setTimeout, getLiveRoomInfo: async () => null, logInfo() {}, Curve: { EaseOut: 0 }, fetchLiveRoomsByArea: async () => [{ roomId: 3 }, { roomId: 2 }],
   fetchRecommendedLiveRooms: async () => [{ roomId: 1 }, { roomId: 2 }, { roomId: 3 }, { roomId: 3 }],
   AppStorage: { setOrCreate(key, value) { ctx.isFullscreenFlag = value; }, set() {}, get: () => undefined },
-  window: { Orientation: { AUTO_ROTATION_LANDSCAPE: 1, PORTRAIT: 2, AUTO_ROTATION_RESTRICTED: 3, AUTO_ROTATION: 4 } },
+  window: { Orientation: { AUTO_ROTATION_LANDSCAPE: 1, PORTRAIT: 2, AUTO_ROTATION_RESTRICTED: 3, AUTO_ROTATION: 4 },
+    getLastWindow: async () => ({ setWindowBrightness() {} }) },
   StatusBarUtils: { setSystemBars() {} } };
 const methods = section('  private portraitRoom()', '  private async setPortraitScale(') +
   section('  private landscapeLayout()', '  private initialLandscapeRatio(') +
@@ -114,7 +115,7 @@ async function main() {
     portraitScale: 'auto', portraitScaleScope: 'standard', safeTop: 24, statusBarHeight: 0,
     cardMargin: 0, landscapeExpand: 0, liveFullscreen: false, landscapeRatio: 2 / 3, landscapePlaybackSide: 'left',
     getUIContext: () => ({ animateTo: (options, action) => { action(); options.onFinish?.(); },
-      vp2px: (v) => v, px2vp: (v) => v,
+      vp2px: (v) => v, px2vp: (v) => v, getHostContext: () => ({}),
       getRouter: () => ({ pushUrl: (args) => { ctx.lastPush = args; return Promise.resolve(); } }) }),
     applyRotationMode: async () => {} });
   assert.equal(p.videoW(), 400);
@@ -406,6 +407,17 @@ async function main() {
   assert.equal(p.currentQn, 250, 'show actual returned quality after server downgrade');
   assert.deepEqual(Array.from(p.availableQualities, q => q.qn), [250, 80]);
   assert.equal(p.availableQualities[0].label, '超清');
+  // 横屏分栏：音量/亮度分界线取播放视口中线（800×400、比例 2/3 ⇒ 中线 ≈266.7），
+  // 不是屏幕中线 400。播放区换到右侧时中线 ≈533.3。
+  Object.assign(p, { viewportWidth: 800, viewportHeight: 400, screenW: 800, cardMargin: 0,
+    landscapeExpand: 0, landscapeRatio: 2 / 3, landscapePlaybackSide: 'left',
+    sx_: 300, sy_: 300, gm_: '', lt_: -1, la_: false, dtp_: false, lastDy: 0,
+    vol: .5, bri: .5, setSystemVolume() {}, sampleLevelInput() {}, sGH() {}, fireHaptic() {} });
+  p.onTM({ touches: [{ windowX: 300, windowY: 180 }] });
+  assert.equal(p.gm_, 'volume', 'split boundary follows the playback viewport center');
+  Object.assign(p, { landscapePlaybackSide: 'right', sx_: 450, sy_: 300, gm_: '', la_: false, dtp_: false });
+  p.onTM({ touches: [{ windowX: 450, windowY: 180 }] });
+  assert.equal(p.gm_, 'brightness');
   Object.assign(p, { viewportWidth: 400, viewportHeight: 800, sx_: 200, sy_: 400,
     gm_: '', lt_: -1, la_: false, dtp_: false, informationVisible: true,
     informationProgress: 0, informationDragStart: 0 });

@@ -1806,8 +1806,12 @@ struct LivePlayerPage {
         } else if (ady > adx * 1.2 && this.portraitWindow()) {
           this.gm_ = 'room';
         } else if (ady > adx * 1.2) {
-          // 垂直滑动：左30% = 亮度，右70% = 音量
-          const centerX = this.screenW / 2;
+          // 垂直滑动：左半 = 亮度，右半 = 音量。
+          // ⚠️ 横屏分栏的播放区只占窗口一部分（比例可拖、还能换到右侧），分界取播放视口中线；
+          //    全屏时播放区已展开到整窗，playerX+width/2 退化为屏幕中线，与原来一致。
+          const centerX = this.landscapeLayout()
+            ? this.landscapePlayerX() + this.landscapeViewportWidth() / 2
+            : this.screenW / 2;
           if (t.windowX < centerX) {
             this.gm_ = 'brightness';
           } else {

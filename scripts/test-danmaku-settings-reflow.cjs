@@ -199,7 +199,56 @@ assert.equal(bottom.y, 4 + bottomRow * 48 + 48 * 0.8, '底部弹幕贴显示区�
   assert.equal(t2.currentFontSize, 28, 'updateGeometry 与 initialize 必须同口径');
 }
 
-// ── 7) 接入点守护 ─────────────────────────────────────────────────────────
+// ── 7) 竖屏半屏上推面板：轨道可用高度跟手，画布尺寸一动不动 ────────────────
+//   旧实现只靠常驻层 `.clip(true)` 裁：11 行里被遮住的 4 行照样吃弹幕，那几行永远看不见
+//   （用户看到的是「弹幕从已遮挡区域冒出来」）。画布又不能跟着逐帧缩 —— 那会每帧重建
+//   surface + 防抖后再 initialize 清空轨道池 = 满屏叠字。所以拆成「画布高恒定 / 可用高度跟手」。
+{
+  const c3 = new DanmakuConfig();
+  c3.displayArea = 1;
+  const t3 = new DanmakuTrackManager(c3);
+  t3.initialize(440, 386.9);                    // 竖片静止态：440×386.9
+  assert.equal(t3.trackRows, 11, '386.9 ÷ 34 = 11 行');
+
+  const painted = [];
+  const r3 = {
+    setSize() {}, updateConfig() {},
+    measureWidth(text, fontSize) { return text.length * fontSize },
+    render(items) { painted.push(items.length) },
+  };
+  const ctl = Object.create(DanmakuController.prototype);
+  ctl.config = c3;
+  ctl.trackManager = t3;
+  ctl.filter = { updateConfig() {} };
+  ctl.renderer = r3;
+  ctl.currentTime = 1000;
+  ctl.canvasWidth = 440;
+  ctl.canvasHeight = 386.9;
+  ctl.visibleDanmaku = [];
+  ctl.stats = { displayedCount: 0 };
+  ctl.trackAreaHeight = 0;
+
+  ctl.setTrackAreaHeight(247.5);                // 详情面板上推 → 可见区域 247.5
+  assert.equal(t3.trackRows, 7, '247.5 ÷ 34 = 7 行（只剩可见区域）');
+  assert.equal(ctl.canvasHeight, 386.9, '画布高不得改变：改了就是逐帧重建 surface');
+  assert.equal(storage.get('danmakuCanvasHeight'), 247.5, '面板行数预览必须按可用高度算');
+  assert.equal(storage.get('danmakuTrackRows'), 7);
+
+  // 拖动过程中高度逐帧变但没跨行边界 → 不得重排/重绘（否则每帧 measureText + 一次重绘）
+  const before = painted.length;
+  ctl.setTrackAreaHeight(240);
+  assert.equal(painted.length, before, '行数没变时不得重排重绘');
+
+  ctl.setTrackAreaHeight(0);                    // 复位（面板回弹）
+  assert.equal(t3.trackRows, 11, '复位后回到整块画布行数');
+  assert.equal(storage.get('danmakuCanvasHeight'), 386.9);
+
+  ctl.setTrackAreaHeight(500);                  // 下拉超过画布高（正滑向连刷）
+  assert.equal(t3.trackRows, 11, '可用高度必须夹到画布高，不能越出 canvas');
+  assert.equal(ctl.canvasHeight, 386.9);
+}
+
+// ── 8) 接入点守护 ─────────────────────────────────────────────────────────
 assert.ok(/reflowVisibleDanmaku\(\)/.test(controllerSrc), 'applyDisplaySettings 必须调用重排');
 assert.ok(/this\.renderer\.render\(kept, this\.currentTime, 0\)/.test(controllerSrc),
   '重排后必须以 dt=0 重绘一帧（暂停时唯一能看到设置的途径）');

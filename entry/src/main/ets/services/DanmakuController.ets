@@ -56,6 +56,15 @@ export class DanmakuController {
   private isPlaying: boolean = false               // 是否播放中
   private canvasWidth: number = 0                  // 弹幕画布宽度（画布/轨道重算时同步；出屏判定已改为纯位置口径，见 scrollingGone）
   private canvasHeight: number = 0                 // 弹幕画布高度（仅用于把行数换算口径同步给设置面板）
+  /**
+   * ⭐ 轨道**可用高度**（vp，0 = 与画布同高）。
+   *
+   * 为什么与 `canvasHeight` 分开：竖屏半屏上推详情面板时，**画布（surface）必须保持静止态常量**
+   * （逐帧改尺寸会让 ArkUI 每帧重建 surface + 防抖后再 initialize 清空轨道池 = 满屏叠字），
+   * 但轨道如果还按整块画布分配，被面板遮住的下面几行会继续吃弹幕 —— 用户看到的就是
+   * 「弹幕从已遮挡的区域出现 / 那几行白扔」。所以尺寸不变、可用高度跟着可见区域走。
+   */
+  private trackAreaHeight: number = 0
 
   // 帧间增量时间：每帧按真实时间差推进弹幕位置，独立于currentTime的更新频率
   private lastFrameTimestamp: number = 0
@@ -353,10 +362,56 @@ export class DanmakuController {
     this.canvasWidth = width
     this.canvasHeight = height
     this.trackManager.setFullscreen(fullscreen)
-    this.trackManager.initialize(width, height)
+    this.trackManager.initialize(width, this.geometryHeight(height))
     this.renderer.setSize(width, height)
     this.publishTrackGeometry()
     logInfo(`[DanmakuController] 画布尺寸: ${width}x${height}${fullscreen ? ' (全屏/横屏)' : ''}`)
+  }
+
+  /**
+   * ⭐ 下发行「轨道可用高度」（= 当前**可见**播放区高度，竖屏半屏随详情面板实时变）。
+   *
+   * 只重算轨道几何并重排屏上弹幕，**不动画布尺寸** —— 画布 surface 保持静止态常量，
+   * 因此拖动面板全程零重建、零白闪。
+   *
+   * ⚠️ 行数没变就直接返回：拖动面板时高度逐帧变，但 `floor(h × 区域 ÷ 轨道高)` 只在跨过
+   *    行边界时才变化。逐帧重排（每条都要 measureText + 重绘一帧）纯属浪费。
+   * @param height 可用高度（vp）；<= 0 表示"跟画布同高"（恢复默认）
+   */
+  setTrackAreaHeight(height: number): void {
+    const next = Math.max(0, height)
+    if (Math.abs(next - this.trackAreaHeight) < 0.5) {
+      return
+    }
+    this.trackAreaHeight = next
+    if (this.canvasWidth <= 0 || this.canvasHeight <= 0) {
+      return
+    }
+    const basis = this.geometryHeight(this.canvasHeight)
+    const area = Math.min(1, Math.max(0.01, this.config.displayArea))
+    const rows = Math.max(1, Math.floor(basis * area / Math.max(1, this.trackManager.currentTrackHeight)))
+    // 行数变了才重排（= 跨过行边界）。拖动面板时高度逐帧变但行数大多不变，
+    // 逐帧 measureText + 重绘一帧纯属浪费；但 AppStorage 的行数口径每次都要跟上。
+    if (rows !== this.trackManager.trackRows) {
+      this.trackManager.updateGeometry(this.canvasWidth, basis)
+      this.reflowVisibleDanmaku()
+      logInfo(`[DanmakuController] 轨道可用高度: ${basis} (画布 ${this.canvasHeight}), 行数${this.trackManager.trackRows}`)
+    }
+    this.publishTrackGeometry()
+  }
+
+  /**
+   * 轨道几何实际使用的高度：下发了可用高度就用它（并夹到画布内），否则跟画布同高。
+   * 夹到画布内是防"面板下拉把区域拉得比画布还高"时轨道越出 canvas 被裁掉。
+   */
+  private geometryHeight(canvasHeight: number): number {
+    const area = this.trackAreaHeight
+    // ⚠️ 用 `!(area > 0)` 而不是 `area <= 0`：单元测试里用 Object.create(prototype) 造替身，
+    //    字段可能还是 undefined —— `undefined <= 0` 为 false，会一路算出 NaN 行数。
+    if (!(area > 0)) {
+      return canvasHeight
+    }
+    return Math.min(canvasHeight, Math.max(1, area))
   }
 
   /**
@@ -367,7 +422,9 @@ export class DanmakuController {
   private publishTrackGeometry(): void {
     AppStorage.setOrCreate<number>('danmakuTrackRows', this.trackManager.trackRows)
     AppStorage.setOrCreate<number>('danmakuTrackHeight', this.trackManager.currentTrackHeight)
-    AppStorage.setOrCreate<number>('danmakuCanvasHeight', this.canvasHeight)
+    // ⚠️ 这里必须发**轨道用高**而不是画布高：面板的「N%·M行」是按这个高度换算的，
+    //    发画布高会让"面板上推后明明只有 7 行、面板还显示 11 行"。
+    AppStorage.setOrCreate<number>('danmakuCanvasHeight', this.geometryHeight(this.canvasHeight))
   }
 
   /**
@@ -921,13 +978,13 @@ export class DanmakuController {
     this.canvasWidth = width
     this.canvasHeight = height
     this.trackManager.setFullscreen(fullscreen)
-    this.trackManager.updateGeometry(width, height)
+    this.trackManager.updateGeometry(width, this.geometryHeight(height))
     this.filter.updateConfig(this.config)
     this.renderer.setSize(width, height)
     this.renderer.updateConfig(this.config)
     this.publishTrackGeometry()
     this.reflowVisibleDanmaku()
-    logInfo(`[DanmakuController] 弹幕显示设置已应用: ${width}x${height}, 行数${this.trackManager.trackRows}, 轨道高${this.trackManager.currentTrackHeight}`)
+    logInfo(`[DanmakuController] 弹幕显示设置已应用: ${width}x${this.geometryHeight(height)}, 行数${this.trackManager.trackRows}, 轨道高${this.trackManager.currentTrackHeight}`)
   }
 
   /**

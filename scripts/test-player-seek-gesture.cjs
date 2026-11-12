@@ -5,7 +5,7 @@ const ts = require('D:/Program Files/Huawei/DevEco Studio/sdk/default/openharmon
 const file = 'entry/build/default/cache/default/default@CompileArkTS/esmodule/debug/entry/src/main/ets/pages/VideoPlayerPage.ts';
 const source = ts.createSourceFile(file, fs.readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true);
 const cls = source.statements.find(n => ts.isClassDeclaration(n) && n.name.text === 'VideoPlayerPage');
-const names = ['onTD', 'onTM', 'onTU', 'onTC'];
+const names = ['onTD', 'onTM', 'onTU', 'onTC', 'levelGestureCenterX'];
 const methods = cls.members.filter(n => names.includes(n.name?.getText(source))).map(n => n.getText(source));
 assert.equal(methods.length, names.length);
 let timerId = 0;
@@ -59,6 +59,26 @@ for (const [dx, expected] of [[-10, 'brightness'], [10, 'volume']]) {
   p.onTM(touch(100, 40)); assert.equal(p.gm_, expected, 'vertical direction remains locked');
   p.onTU(touch()); assert.equal(p.seeks.length, 0);
 }
+// 横屏分栏：分界线是播放视口中线，不是屏幕中线（播放区在左 0..300 时中线 = 150）
+function splitPage(playerX, viewW) {
+  const p = page();
+  Object.assign(p, { cw: 400, isLs: true, referenceLayout: true, fs: false, isLandscapeVertical: false,
+    referenceLandscapePlayerX: () => playerX, referenceLandscapeViewportWidth: () => viewW });
+  return p;
+}
+const splitLeft = splitPage(0, 300);
+splitLeft.onTM(touch(-20, 30)); // windowX 180：屏幕中线左侧，但在播放区右半
+assert.equal(splitLeft.gm_, 'volume', 'split boundary follows playback viewport center');
+const splitLeftBright = splitPage(0, 300);
+splitLeftBright.onTM(touch(-90, 120)); // windowX 110
+assert.equal(splitLeftBright.gm_, 'brightness');
+const splitRight = splitPage(100, 300); // 播放区换到右侧：中线 250
+splitRight.onTM(touch(20, 30)); // windowX 220：屏幕中线右侧，但仍在播放区左半
+assert.equal(splitRight.gm_, 'brightness', 'split boundary must not fall back to the screen center');
+const splitFull = splitPage(0, 300);
+splitFull.fs = true;
+splitFull.onTM(touch(20, 30)); // 全屏播放区占满窗口：中线回到 200
+assert.equal(splitFull.gm_, 'volume', 'fullscreen keeps the screen center');
 const unknown = page(); unknown.dur = 0; unknown.onTM(touch(100));
 assert.equal(unknown.gm_, ''); assert.equal(unknown.haptics, 0);
 const longPress = page(); timers.get(longPress.lt_)(); longPress.onTM(touch(100)); longPress.onTU(touch());

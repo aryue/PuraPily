@@ -68,25 +68,45 @@ assert.equal(page.dmPositionY(), 40);
 feedPage({ mediaW: 418.5, mediaH: 744, rectX: 10.75, rectY: 0, amount: 0.5 });
 assert.ok(Math.abs(page.ovDanmakuCW() - 429.25) < 1e-6, 'comment transition interpolates the danmaku width');
 
-// 5) 非连刷竖屏半屏：弹幕仍按视频区走（不受本次改动影响）。
+// 5) 非连刷竖屏半屏：弹幕区 = **整个播放器区域**（视频槽），不是视频画面本身。
+//    竖片只有半屏宽的一条、左右全是播放器黑底 —— 弹幕必须从屏幕左缘进、右缘出。
 Object.assign(page, {
-  referenceLayout: true, isLs: false, fs: false, referenceFeed: false,
-  cw: 440, ch: 744,
+  referenceLayout: true, isLs: false, fs: false, referenceFeed: false, isLightsOff: false,
+  cw: 440, ch: 744, referenceFeedProgress: 0,
   referenceFeedCommentAmount: () => 0,
   referenceSafeTop: () => 40,
-  referenceMediaWidth: () => 418.5, referenceMediaHeight: () => 300,
+  referenceAreaTop: () => 40, referenceAreaHeight: () => 386.9,
+  referenceDetailBaseHeight: () => 386.9,
+  referenceMediaWidth: () => 217.7, referenceMediaHeight: () => 386.9,
   ovRectX: () => 0, ovRectY: () => 40,
-  ovRectW: () => 440, ovRectH: () => 300,
+  ovRectW: () => 440, ovRectH: () => 386.9,
   portraitScaleByTransform: () => true,
-  portraitScaleFactor: () => 0.8,
+  portraitScaleFactor: () => 0.52,
   portraitBaseW: () => 418.5, portraitBaseH: () => 744,
 });
-assert.equal(page.ovDanmakuCW(), 418.5, 'non-feed portrait keeps the media-width danmaku');
-assert.equal(page.ovDanmakuCH(), 300, 'non-feed portrait keeps the media-height danmaku');
-assert.equal(page.dmTransformChannel(), true, 'non-feed portrait keeps the transform channel against panel-drag rebuilds');
-assert.equal(page.dmScaleFactor(), 0.8);
-assert.equal(page.dmPositionX(), 10.75, 'non-feed portrait keeps the centered danmaku x');
-assert.equal(page.dmPositionY(), 0, 'non-feed portrait: media top already sits below the safe area, inset is 0 (page y = 40)');
+assert.equal(page.ovDanmakuCW(), 440, 'non-feed portrait: danmaku covers the whole playback area width, not the media strip');
+assert.equal(page.ovDanmakuCH(), 386.9, 'non-feed portrait: danmaku covers the whole playback area height');
+assert.equal(page.dmTransformChannel(), false, 'portrait danmaku must not ride the video surface scale channel (it would squeeze the canvas back to the media box)');
+assert.equal(page.dmScaleFactor(), 1, 'portrait danmaku renders 1:1');
+assert.equal(page.dmPositionX(), 0, 'portrait danmaku starts at the screen left edge');
+assert.equal(page.dmPositionY(), 0, 'portrait danmaku starts at the playback area top (below the safe area)');
+
+// 5b) 超宽片（>16:9）：上下留白同样属于播放区，画布按区域高而不是画面高。
+Object.assign(page, {
+  referenceMediaWidth: () => 440, referenceMediaHeight: () => 189,
+  referenceAreaHeight: () => 247.5, referenceDetailBaseHeight: () => 247.5,
+  ovRectH: () => 247.5,
+});
+assert.equal(page.ovDanmakuCH(), 247.5, 'ultrawide: letterbox bands are part of the playback area');
+
+// 5c) 关灯：画面会被放大到窗口，仍按"贴画面"沿用媒体框（旧行为不变）。
+Object.assign(page, {
+  isLightsOff: true,
+  referenceMediaWidth: () => 217.7, referenceMediaHeight: () => 386.9,
+});
+assert.equal(page.ovDanmakuCW(), 217.7, 'lights-off keeps the media width');
+assert.equal(page.ovDanmakuCH(), 386.9, 'lights-off keeps the media height');
+Object.assign(page, { isLightsOff: false });
 
 // 6) 横屏分支完全不走新逻辑（横屏半屏：弹幕仍按横屏视口）。
 Object.assign(page, {

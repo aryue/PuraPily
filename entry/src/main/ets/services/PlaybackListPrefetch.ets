@@ -26,7 +26,6 @@ export class PlaybackListPrefetch {
   private running: Set<string> = new Set();
   private completed: Set<string> = new Set();
   private sources: Map<string, PlayUrlResult> = new Map();
-  private prefixed: Set<string> = new Set();
   private timer: number = -1;
   private enabled: () => boolean;
 
@@ -36,7 +35,7 @@ export class PlaybackListPrefetch {
     if (warmIndex >= 0) this.warmIndex = warmIndex;
     if (!this.enabled() || !NetworkGate.allowsBoundedPrefix()) { this.pause(); return; }
     const credential = AppStorage.get<string>('biliCookie') || '';
-    if (credential !== this.credential || qn !== this.qn) { this.completed.clear(); this.sources.clear(); this.prefixed.clear(); this.epoch++; }
+    if (credential !== this.credential || qn !== this.qn) { this.completed.clear(); this.sources.clear(); this.epoch++; }
     this.credential = credential;
     this.qn = qn;
     const unique = new Set<string>();
@@ -116,7 +115,6 @@ export class PlaybackListPrefetch {
     for (let i = this.warmIndex; i < Math.min(this.items.length, this.warmIndex + span); i++) {
       const item = this.items[i];
       const key = `${this.epoch}:${this.qn}:${item.id}:${item.cid || 0}`;
-      const identity = `${this.qn}:${item.id}:${item.cid || 0}`;
       const source = this.sources.get(key);
       if (!source) continue;
       // 实例池只对准前 N 张可见卡：把这几条准备到「已 prepared、已解出首帧、paused」，
@@ -127,11 +125,7 @@ export class PlaybackListPrefetch {
         const resumeMs: number = Math.round(this.resumeSec(item) * 1000);
         IjkWarmPool.get().warm(item.cid, source, resumeMs).catch(() => {});
       }
-      if (this.prefixed.has(identity)) continue;
-      if (IjkPrewarm.warm(source, this.resumeSec(item))) {
-        this.prefixed.add(identity);
-        while (this.prefixed.size > 128) this.prefixed.delete(this.prefixed.values().next().value!);
-      }
+      IjkPrewarm.warm(source, this.resumeSec(item));
     }
   }
 

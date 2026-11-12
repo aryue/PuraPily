@@ -16,6 +16,8 @@
 #include <errno.h>
 #include <hilog/log.h>
 #include <fcntl.h>
+#include <pthread.h>
+#include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -38,12 +40,15 @@
 #define CACHE_TOTAL_MAX (384LL * 1024 * 1024)  // 目录上限 384MB
 #define CACHE_EVICT_AT (300LL * 1024 * 1024)   // 超过 300MB 开始清理
 #define IDX_MAGIC "PDC4"
+#define STARTUP_BACKUP_DELAY_US 350000
 
 extern void *purapily_prefix_take(const char *,const char *,const char *,const char *);
 extern int64_t purapily_prefix_size(void *,const AVIOInterruptCB *);
 extern int purapily_prefix_read(void *,int64_t,uint8_t *,int,const AVIOInterruptCB *);
 extern AVIOContext *purapily_prefix_adopt(void *,int64_t,int64_t *);
 extern void purapily_prefix_discard(void *);
+
+typedef struct StartupOpen StartupOpen;
 
 typedef struct {
     int fd;
@@ -61,6 +66,7 @@ typedef struct {
     int64_t last_save;          // 上次段表落盘时间（微秒）
     void *prefix;
     AVIOContext *net;
+    StartupOpen *startup_net;   // The winning URLContext retains its interrupt opaque.
     int64_t net_end;             // 本条连接可服务到的逻辑末尾（total 或 INT64_MAX）
     int64_t network_bytes;
     int64_t network_logged_at, network_logged_bytes, network_read_max_us;
@@ -73,11 +79,27 @@ typedef struct {
     char *url;                  // 当前生效的源（base 或 failover 后的 backup）
     char *backup_url;           // 备用源，可为空
     int using_backup;           // 只切一次，避免来回抖动
+    int startup_attempted;
     char *agent;
     char *referer;
     char *cookie;
     AVIOInterruptCB ic;
 } CacheCtx;
+
+struct StartupOpen {
+    const CacheCtx *ctx;
+    AVIOInterruptCB parent;
+    const char *url;
+    atomic_int cancelled;
+    atomic_int done;
+    AVIOContext *pb;
+};
+
+static void close_net(CacheCtx *ctx)
+{
+    if (ctx->net) avio_closep(&ctx->net);
+    av_freep(&ctx->startup_net);
+}
 
 // 建连失败、持续供给不足或已建立连接读失败时均可按字节位置恢复。
 
@@ -370,8 +392,7 @@ static int failover_once(CacheCtx *ctx)
     if (!dup) return 0;
     memcpy(dup, ctx->backup_url, n);
     OH_LOG_Print(LOG_APP, LOG_INFO, 0, "Cache", "failover base -> backup");
-    if (ctx->net) avio_closep(&ctx->net);
-    ctx->net = NULL;
+    close_net(ctx);
     ctx->net_pos = 0;
     av_free(ctx->url);
     ctx->url = dup;
@@ -414,21 +435,14 @@ static void record_network_read(CacheCtx *ctx, int n, int64_t started)
     ctx->network_logged_at=now;ctx->network_logged_bytes=ctx->network_bytes;ctx->network_read_max_us=0;
 }
 
-static AVIOContext *open_net(CacheCtx *ctx, int64_t offset, int64_t end)
+static AVIOContext *open_source(const CacheCtx *ctx, const char *url, int64_t offset,
+                                const AVIOInterruptCB *ic)
 {
     AVIOContext *pb = NULL;
     AVDictionary *options = net_options(ctx);
     av_dict_set_int(&options, "offset", offset, 0);
-    if (end > offset) av_dict_set_int(&options, "end_offset", end, 0);
-    if (avio_open2(&pb, ctx->url, AVIO_FLAG_READ, &ctx->ic, &options) < 0) pb = NULL;
+    if (avio_open2(&pb, url, AVIO_FLAG_READ, ic, &options) < 0) pb = NULL;
     av_dict_free(&options);
-    if (!pb && failover_once(ctx)) {
-        options = net_options(ctx);
-        av_dict_set_int(&options, "offset", offset, 0);
-        if (end > offset) av_dict_set_int(&options, "end_offset", end, 0);
-        if (avio_open2(&pb, ctx->url, AVIO_FLAG_READ, &ctx->ic, &options) < 0) pb = NULL;
-        av_dict_free(&options);
-    }
     // HTTP 的 offset 只定位协议层，ffio_fdopen 新建 AVIO 时 pos 仍为 0。
     // 若不对齐，后续跨过已缓存块时 avio_seek 会按错误的缓冲区坐标做
     // short-seek（丢读），把 offset+目标位置的正文写入目标块。CRC 无法发现
@@ -437,18 +451,111 @@ static AVIOContext *open_net(CacheCtx *ctx, int64_t offset, int64_t end)
     return pb;
 }
 
+static int startup_interrupted(void *opaque)
+{
+    StartupOpen *attempt = opaque;
+    return atomic_load(&attempt->cancelled) ||
+        (attempt->parent.callback && attempt->parent.callback(attempt->parent.opaque));
+}
+
+static void *startup_open(void *opaque)
+{
+    StartupOpen *attempt = opaque;
+    AVIOInterruptCB ic = { startup_interrupted, attempt };
+    AVIOContext *pb = open_source(attempt->ctx, attempt->url, 0, &ic);
+    // A successful HTTP open alone does not tell us whether the body is stalled.
+    // Rewind inside the AVIO buffer so the demuxer sees the first byte.
+    uint8_t first_byte;
+    if (pb && (avio_read(pb, &first_byte, 1) != 1 || avio_seek(pb, 0, SEEK_SET) != 0))
+        avio_closep(&pb);
+    attempt->pb = pb;
+    atomic_store(&attempt->done, 1);
+    return NULL;
+}
+
+static StartupOpen *start_open(const CacheCtx *ctx, const char *url, pthread_t *thread)
+{
+    StartupOpen *attempt = av_mallocz(sizeof(*attempt));
+    if (!attempt) return NULL;
+    attempt->ctx = ctx;
+    attempt->parent = ctx->ic;
+    attempt->url = url;
+    atomic_init(&attempt->cancelled, 0);
+    atomic_init(&attempt->done, 0);
+    if (!pthread_create(thread, NULL, startup_open, attempt)) return attempt;
+    av_free(attempt);
+    return NULL;
+}
+
+static AVIOContext *open_startup(CacheCtx *ctx)
+{
+    int64_t started = av_gettime_relative();
+    pthread_t threads[2];
+    StartupOpen *attempts[2] = { start_open(ctx, ctx->url, &threads[0]), NULL };
+    if (!attempts[0]) return NULL;
+    ctx->startup_attempted = 1;
+    int winner = -1;
+    int backup_started = 0;
+    while (!startup_interrupted(attempts[0])) {
+        int primary_done = atomic_load(&attempts[0]->done);
+        if (primary_done && attempts[0]->pb) { winner = 0; break; }
+        if (!backup_started && (primary_done || av_gettime_relative() - started >= STARTUP_BACKUP_DELAY_US)) {
+            backup_started = 1;
+            attempts[1] = start_open(ctx, ctx->backup_url, &threads[1]);
+        }
+        int backup_done = backup_started && (!attempts[1] || atomic_load(&attempts[1]->done));
+        if (backup_done && attempts[1] && attempts[1]->pb) { winner = 1; break; }
+        if (primary_done && backup_done) break;
+        av_usleep(5000);
+    }
+    // Stop the losing URLContext before returning. Its callback and the player
+    // interrupt context must both outlive any ongoing FFmpeg calls.
+    for (int i = 0; i < 2; i++)
+        if (attempts[i] && i != winner) atomic_store(&attempts[i]->cancelled, 1);
+    for (int i = 0; i < 2; i++) {
+        if (!attempts[i]) continue;
+        pthread_join(threads[i], NULL);
+        if (i == winner) continue;
+        if (attempts[i]->pb) avio_closep(&attempts[i]->pb);
+        av_free(attempts[i]);
+    }
+    if (winner < 0) return NULL;
+    if (winner == 1) {
+        // Transfer the existing URL allocation so future Range opens use the winner.
+        char *primary_url = ctx->url;
+        ctx->url = ctx->backup_url;
+        ctx->backup_url = primary_url;
+        ctx->using_backup = 1;
+    }
+    ctx->startup_net = attempts[winner];
+    OH_LOG_Print(LOG_APP, LOG_INFO, 0, "PlaybackNetwork",
+        "startup CDN winner=%{public}s backup_attempted=%{public}d cost_ms=%{public}lld",
+        winner == 1 ? "backup" : "base", backup_started,
+        (long long)((av_gettime_relative() - started) / 1000));
+    return ctx->startup_net->pb;
+}
+
 // 播放期回源不再按 1 MiB 切段：4K 约 2.5~5MB/s，原先每秒要重开 3~5 次 TCP/TLS，
 // 供给跟不上就成了「像 PPT」的卡顿。字节窗口只约束后台投机预热（prewarm.c）。
 static AVIOContext *ensure_net(CacheCtx *ctx, int64_t offset)
 {
     if (ctx->net && offset >= ctx->net_pos && offset < ctx->net_end) return ctx->net;
-    if (ctx->net) avio_closep(&ctx->net);
+    close_net(ctx);
     AVIOContext *pb = NULL;
     int64_t adopted_at = -1;
     // 前缀预热读满 512KB 后连接留在原生层，正好停在播放要续读的位置：直接接管，
     // 省掉一次 TCP+TLS 握手（实测 200~300ms）。位置对不上或没读满就照旧回源。
     if (ctx->prefix) pb = purapily_prefix_adopt(ctx->prefix, offset, &adopted_at);
-    if (!pb) pb = open_net(ctx, offset, 0);
+    if (!pb && offset == 0 && ctx->total < 0 && !ctx->using_backup &&
+        !ctx->startup_attempted && ctx->backup_url && ctx->backup_url[0]) {
+        pb = open_startup(ctx);
+        if (!pb && ctx->startup_attempted) return NULL;
+    }
+    if (!pb && (!ctx->ic.callback || !ctx->ic.callback(ctx->ic.opaque))) {
+        pb = open_source(ctx, ctx->url, offset, &ctx->ic);
+        if (!pb && (!ctx->ic.callback || !ctx->ic.callback(ctx->ic.opaque)) && failover_once(ctx))
+            pb = open_source(ctx, ctx->url, offset, &ctx->ic);
+    }
     if (!pb) return NULL;
     ctx->net = pb;
     ctx->net_pos = adopted_at >= 0 ? adopted_at : offset;
@@ -496,7 +603,7 @@ static int read_net(CacheCtx *ctx, uint8_t *buf, int size)
                 ctx->net_fresh = 0;
                 OH_LOG_Print(LOG_APP, LOG_WARN, 0, "Cache",
                     "adopted connection EOF at=%{public}lld, reopen once", (long long)at);
-                avio_closep(&ctx->net);
+                close_net(ctx);
                 if (ensure_net(ctx, at)) continue;
                 return AVERROR(EIO);
             }
@@ -509,7 +616,7 @@ static int read_net(CacheCtx *ctx, uint8_t *buf, int size)
             (long long)at, n, attempt + 1);
         // AVIO latches error/eof. Clearing the outer demuxer's error cannot
         // revive this inner connection. Replace it and retain partial reads.
-        avio_closep(&ctx->net);
+        close_net(ctx);
         ctx->net_fresh = 0;
         if (attempt == 1) failover_once(ctx);
         if (!ensure_net(ctx, at)) return AVERROR(EIO);
@@ -519,17 +626,6 @@ static int read_net(CacheCtx *ctx, uint8_t *buf, int size)
 void purapily_cache_set_bandwidth(AVIOContext *pb, int64_t bps)
 {
     if (pb && bps > 0) ((CacheCtx *)pb->opaque)->expected_bps = bps;
-}
-
-// 只为拿流总长：仍用 1 MiB 有界 Range，且取到长度立刻关闭，绝不留下闲置响应继续推流。
-// 这是启动 95MB 流量修复的边界，不能因为放开播放期回源而一起放宽。
-static int64_t probe_total(CacheCtx *ctx)
-{
-    AVIOContext *pb = open_net(ctx, 0, 1024 * 1024);
-    if (!pb) return -1;
-    int64_t size = avio_size(pb);
-    avio_closep(&pb);
-    return size > 0 ? size : -1;
 }
 
 // 缺块回源：按块起始 offset 定位，读满一块（或到 EOF），写入稀疏文件并登记长度。
@@ -659,7 +755,7 @@ static int cache_read(void *opaque, uint8_t *buf, int size)
                     ctx->short_retries++;
                     // 强制重开连接：ensure_net 会用播放期响应的 Content-Range
                     // 纠正段表里偏小的 total，fetch_block 才能读满这一块。
-                    if (ctx->net) avio_closep(&ctx->net);
+                    close_net(ctx);
                     AVIOContext *net = ensure_net(ctx, block_start);
                     if (net && ctx->total > block_end) {
                         OH_LOG_Print(LOG_APP, LOG_WARN, 0, "Cache",
@@ -713,6 +809,10 @@ static int cache_read(void *opaque, uint8_t *buf, int size)
 static int64_t cache_seek(void *opaque, int64_t offset, int whence)
 {
     CacheCtx *ctx = (CacheCtx *)opaque;
+    // MOV asks for the length before reading its header. Keep the connection
+    // for the header, but open it only once the demuxer actually requests I/O.
+    if (ctx->total < 0 && (whence == AVSEEK_SIZE || (whence & ~AVSEEK_FORCE) == SEEK_END))
+        ensure_net(ctx, ctx->pos);
     if (whence == AVSEEK_SIZE) return ctx->total > 0 ? ctx->total : AVERROR(ENOSYS);
     if (whence & AVSEEK_FORCE) whence &= ~AVSEEK_FORCE;
     int64_t target;
@@ -815,13 +915,7 @@ AVIOContext *purapily_cache_open(const char *url, const char *backup, const char
         if (hint > 0) { ctx->total = hint; total_src = "prefix"; }
         else total_src = "unknown";
     }
-    // 段表已存 total（命中重开）或预热前缀已给出长度：不建任何连接，connect 直接为 0。
-    // 首播只做一次有界探测拿长度并立即关闭；缺块时 fetch_block 按需开播放期连接。
-    if (ctx->total < 0) {
-        int64_t probed = probe_total(ctx);
-        if (probed > 0) { ctx->total = probed; ctx->dirty = 1; total_src = "probe"; }
-        else total_src = "unknown";
-    }
+    if (ctx->total < 0) total_src = "unknown";
     int blocks = 0;
     int64_t bytes = 0;
     for (int i = 0; i < ctx->nblocks; i++) {
@@ -843,7 +937,7 @@ void purapily_cache_close(AVIOContext **ppb)
     CacheCtx *ctx = (CacheCtx *)pb->opaque;
     if (ctx) {
         // 先关（可能由预热交接来的）网络连接，再放掉预热任务，避免连接比任务活得久。
-        if (ctx->net) avio_closep(&ctx->net);
+        close_net(ctx);
         purapily_prefix_discard(ctx->prefix);
         save_index(ctx);
         int blocks = 0;
@@ -853,7 +947,7 @@ void purapily_cache_close(AVIOContext **ppb)
         }
         OH_LOG_Print(LOG_APP, LOG_INFO, 0, "Cache", "close blocks=%{public}d cached=%{public}lldKB received=%{public}lldKB",
                      blocks, (long long)(bytes / 1024), (long long)(ctx->network_bytes / 1024));
-        if (ctx->net) avio_closep(&ctx->net);
+        close_net(ctx);
         if (ctx->idx_fd >= 0) close(ctx->idx_fd);
         if (ctx->fd >= 0) close(ctx->fd);
         av_free(ctx->lens);

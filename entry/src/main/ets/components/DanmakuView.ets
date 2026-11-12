@@ -29,6 +29,15 @@ export struct DanmakuView {
   @Prop @Watch('onCanvasSizeChange') canvasHeight: number = 0
 
   /**
+   * ⭐ 轨道**可用高度**（vp；0 = 跟画布同高，绝大多数场景都不用传）。
+   *
+   * 只在竖屏半屏用：详情面板上推会把播放区遮掉一部分，此时画布尺寸必须保持不变
+   * （逐帧改尺寸 = 每帧重建 surface + 轨道池清空 = 满屏叠字），但轨道只能分到**可见**
+   * 高度内 —— 否则被遮住的下面几行照样吃弹幕，那几行永远看不见。
+   */
+  @Prop @Watch('onTrackAreaChange') trackAreaHeight: number = 0
+
+  /**
    * ⭐ 是否全屏 / 横屏播放 —— 只用来决定「字号 ×1.2」（对齐官方全屏观感）。
    *
    * 为什么必须由页面传入、不能自己看画布宽高比：竖屏播放页的视频区本身就是 16:9
@@ -222,10 +231,31 @@ export struct DanmakuView {
       if (this.controller && this.canvasReady && 
           this.pendingCanvasWidth > 0 && this.pendingCanvasHeight > 0) {
         this.controller.setCanvasSize(this.pendingCanvasWidth, this.pendingCanvasHeight, this.isFullscreen)
+        // 画布尺寸变了会按新画布重算行数 —— 可用高度必须补一次，否则会退回"整块画布都能放弹幕"
+        this.applyTrackArea()
         logInfo(`[DanmakuView] Canvas尺寸已更新: ${this.pendingCanvasWidth}x${this.pendingCanvasHeight}`)
       }
       this.canvasSizeDebounceTimer = 0
     }, 100)
+  }
+
+  /**
+   * ⭐ 轨道可用高度变化（竖屏半屏上推/下拉详情面板）。
+   * 只重算轨道几何 + 重排屏上弹幕，画布尺寸一概不动。
+   */
+  private onTrackAreaChange(): void {
+    if (!this.controller || !this.canvasReady) {
+      return
+    }
+    this.applyTrackArea()
+  }
+
+  /** 把可用高度推给 controller（0 表示"跟画布同高"，由 controller 自己兜底） */
+  private applyTrackArea(): void {
+    if (!this.controller) {
+      return
+    }
+    this.controller.setTrackAreaHeight(this.trackAreaHeight)
   }
 
   /**
@@ -426,6 +456,7 @@ export struct DanmakuView {
           this.controller.setRenderContext(this.canvasContext)
           this.controller.setCanvasSize(retryWidth, retryHeight, this.isFullscreen)
           this.canvasReady = true
+          this.applyTrackArea()
           logInfo(`[DanmakuView] Canvas延迟就绪: ${retryWidth}x${retryHeight}`)
           this.autoInitialize()
         }
@@ -436,6 +467,7 @@ export struct DanmakuView {
     // 设置渲染上下文
     this.controller.setRenderContext(this.canvasContext)
     this.controller.setCanvasSize(width, height, this.isFullscreen)
+    this.applyTrackArea()
 
     this.canvasReady = true
     logInfo(`[DanmakuView] Canvas就绪: ${width}x${height}`)
