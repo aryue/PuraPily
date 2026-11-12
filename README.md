@@ -126,6 +126,19 @@ PuraPily 面向 HarmonyOS，提供视频、直播、番剧、动态与个人空�
 
 如果需要重建 IJK 原生库，请按 [IJK 双轨播放原生构建文档](scripts/ijk-dual-lab/README.md) 准备指定版本的源码及工具链。更新本地 HAR 后，需要重新同步依赖。
 
+## 发版
+
+在工作区干净、已同步 `origin/main` 的 `main` 分支准备发版。说明文件可以放在仓库外，正文会写入 annotated tag 并用于 GitHub Release。
+
+```powershell
+scripts\release.cmd --dry-run 2.1.2 ..\release-notes.md
+scripts\release.cmd 2.1.2 ..\release-notes.md
+```
+
+Windows 入口需要 Git for Windows。Git Bash 或 Linux 可用 `bash scripts/release.sh` 加同样的参数。预检会核对版本、远端分支和 tag，并显示说明预览。正式执行会更新 `AppScope/app.json5`，创建发版提交和 tag，再一次推送两者。
+
+推送版本 tag 后，`Build Unsigned HAP` 会构建并发布未签名 HAP、SHA-256 校验文件和构建信息。手动运行 workflow 默认只构建，勾选发布后的分支构建会创建预发布。
+
 ## 反馈与贡献
 
 欢迎通过 [Issues](https://github.com/aryue/PuraPily/issues) 提交问题或功能建议，也欢迎提交 Pull Request。

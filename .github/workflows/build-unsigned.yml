@@ -47,7 +47,7 @@ on:
         options: ["release", "debug"]
         default: "release"
       publish:
-        description: "构建后创建 / 更新 Release（推送 tag 时总会发布）"
+        description: "手动发布（分支构建发为预发布，版本 tag 只允许发布 release 模式）"
         type: boolean
         default: false
       notes:
@@ -57,7 +57,7 @@ on:
 
 concurrency:
   group: unsigned-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -78,6 +78,31 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: false
+
+      - name: 校验版本
+        id: version
+        run: |
+          set -euo pipefail
+          source scripts/release-version.sh
+          read_app_version
+          if [[ "${GITHUB_REF_TYPE}" == tag && "${GITHUB_REF_NAME}" == v* ]]; then
+            if [[ "${GITHUB_REF_NAME}" != "v${VERSION_NAME}" ||
+                  "${VERSION_CODE}" != "$(release_version_code "${VERSION_NAME}")" ]]; then
+              echo "::error::版本 tag、versionName 和 versionCode 不一致"
+              exit 1
+            fi
+          fi
+          if [[ "${GITHUB_REF_TYPE}" == tag && "${PUBLISH}" == true ]]; then
+            if [[ "${GITHUB_REF_NAME}" != v* || "${BUILD_MODE}" != release ]]; then
+              echo "::error::发布正式包须使用版本 tag 和 release 构建模式"
+              exit 1
+            fi
+          fi
+          echo "version_name=${VERSION_NAME}" >> "${GITHUB_OUTPUT}"
+          echo "version_code=${VERSION_CODE}" >> "${GITHUB_OUTPUT}"
+        env:
+          PUBLISH: ${{ github.event_name == 'push' || inputs.publish == true }}
 
       # SDK 展开后 5GB 起，ubuntu-latest 只剩约 14GB，先删掉用不到的大件。
       - name: 释放磁盘空间
@@ -293,15 +318,11 @@ jobs:
 
       - name: 收集产物
         id: collect
+        env:
+          VERSION_NAME: ${{ steps.version.outputs.version_name }}
+          VERSION_CODE: ${{ steps.version.outputs.version_code }}
         run: |
           set -euo pipefail
-          # 单次 sed 取值，不用 |head（pipefail 下 head 提前退出会触发 SIGPIPE）
-          # 注意 versionCode 是纯数字、versionName 是字符串，两种模式分开写。
-          VERSION_NAME=$(sed -n 's/.*"versionName"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' AppScope/app.json5)
-          VERSION_CODE=$(sed -n 's/.*"versionCode"[[:space:]]*:[[:space:]]*\([0-9]\+\).*/\1/p' AppScope/app.json5)
-          : "${VERSION_NAME:=0.0.0}"
-          : "${VERSION_CODE:=0}"
-
           SRC=$(find entry/build -type f -name '*-unsigned.hap' -print -quit)
           if [ -z "${SRC}" ]; then
             echo "::error::没有找到未签名 HAP，检查 hvigor 输出"
@@ -326,8 +347,6 @@ jobs:
             echo "sdk: ${DEVECO_SDK_HOME}"
           } > dist/build-info.txt
 
-          echo "version_name=${VERSION_NAME}" >> "${GITHUB_OUTPUT}"
-          echo "version_code=${VERSION_CODE}" >> "${GITHUB_OUTPUT}"
           echo "hap_name=${HAP_NAME}" >> "${GITHUB_OUTPUT}"
           echo "size=${SIZE_BYTES}" >> "${GITHUB_OUTPUT}"
           ls -lh dist
@@ -341,7 +360,7 @@ jobs:
             echo ""
             echo "| 项 | 值 |"
             echo "| --- | --- |"
-            echo "| 版本 | ${{ steps.collect.outputs.version_name }} (${{ steps.collect.outputs.version_code }}) |"
+            echo "| 版本 | ${{ steps.version.outputs.version_name }} (${{ steps.version.outputs.version_code }}) |"
             echo "| 构建模式 | ${BUILD_MODE} |"
             echo "| 产物 | \`${{ steps.collect.outputs.hap_name }}\` (${SIZE_MB} MB) |"
             echo "| 签名 | 无（需自行签名后才能安装） |"
@@ -353,31 +372,35 @@ jobs:
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
         with:
-          name: purapily-unsigned-${{ github.sha }}
+          name: purapily-unsigned-${{ github.sha }}-${{ github.run_attempt }}
+          if-no-files-found: error
           path: dist/*
           retention-days: 14
 
       - name: 发布 Release
-        if: startsWith(github.ref, 'refs/tags/') || inputs.publish == true
+        if: github.event_name == 'push' || inputs.publish == true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MANUAL_NOTES: ${{ inputs.notes }}
+          VERSION_NAME: ${{ steps.version.outputs.version_name }}
+          VERSION_CODE: ${{ steps.version.outputs.version_code }}
+          HAP_NAME: ${{ steps.collect.outputs.hap_name }}
         run: |
           set -euo pipefail
-          VERSION_NAME="${{ steps.collect.outputs.version_name }}"
-          VERSION_CODE="${{ steps.collect.outputs.version_code }}"
-
-          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+          if [[ "${GITHUB_REF_TYPE}" == tag ]]; then
             TAG="${GITHUB_REF_NAME}"
+            CREATE_FLAGS=(--verify-tag)
+            EDIT_FLAGS=()
           else
-            TAG="build-$(date -u +%Y%m%d)-${GITHUB_RUN_NUMBER}"
+            TAG="build-${GITHUB_RUN_ID}"
+            CREATE_FLAGS=(--target "${GITHUB_SHA}" --prerelease)
+            EDIT_FLAGS=(--prerelease)
           fi
           TITLE="PuraPily ${VERSION_NAME} (${VERSION_CODE}) 未签名包"
 
           # 说明来源优先级：手动输入 > annotated tag 的 message > 空
           TAG_NOTES=""
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-            git fetch --tags --force --quiet origin 2>/dev/null || true
             if [ "$(git cat-file -t "refs/tags/${TAG}" 2>/dev/null || echo none)" = "tag" ]; then
               # 直接读 tag 对象再跳过 object/type/tag/tagger 那段头部，
               # 比 for-each-ref 的 %(contents) 更少踩格式细节。
@@ -400,7 +423,7 @@ jobs:
             echo "| --- | --- |"
             echo "| 版本 | ${VERSION_NAME} (${VERSION_CODE}) |"
             echo "| 构建模式 | \`${BUILD_MODE}\` |"
-            echo "| 产物 | \`${{ steps.collect.outputs.hap_name }}\` |"
+            echo "| 产物 | \`${HAP_NAME}\` |"
             echo "| 提交 | \`${GITHUB_SHA:0:7}\` |"
             echo ""
             echo "> ⚠️ 本包**未签名**，仅供调试与自签名流程使用，无法直接安装到设备。"
@@ -410,17 +433,17 @@ jobs:
             git log --oneline -10
             echo ""
             echo "</details>"
-          } > /tmp/release-notes.md
+          } > "${RUNNER_TEMP}/release-notes.md"
 
           if gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
             echo "Release ${TAG} 已存在，覆盖产物并刷新说明"
             gh release upload "${TAG}" dist/* --repo "${GITHUB_REPOSITORY}" --clobber
-            gh release edit "${TAG}" --repo "${GITHUB_REPOSITORY}" \
-              --title "${TITLE}" --notes-file /tmp/release-notes.md
+            gh release edit "${TAG}" --repo "${GITHUB_REPOSITORY}" "${EDIT_FLAGS[@]}" \
+              --title "${TITLE}" --notes-file "${RUNNER_TEMP}/release-notes.md"
           else
-            gh release create "${TAG}" dist/* \
+            gh release create "${TAG}" dist/* "${CREATE_FLAGS[@]}" \
               --repo "${GITHUB_REPOSITORY}" \
               --title "${TITLE}" \
-              --notes-file /tmp/release-notes.md
+              --notes-file "${RUNNER_TEMP}/release-notes.md"
           fi
           echo "已发布：${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/${TAG}"

@@ -1,65 +1,87 @@
 #!/usr/bin/env bash
-# 发版脚本：改版本号 → commit → annotated tag → push
-#
-# 用法: scripts/release.sh <版本号> <说明文件>
-# 例:   scripts/release.sh 2.0.6 docs/next-release.md
-# Windows（CMD / PowerShell）: scripts\release.cmd <版本号> <说明文件>
-#   （release.cmd 只是转交本脚本的入口，逻辑全在这里）
-#
-# 规则:
-# - versionCode = 主版本*1000000 + 次版本*1000 + 修订号（2.0.5 → 2000005）
-# - 说明文件内容原样进 tag message（--cleanup=verbatim，# 开头的行不会被删），
-#   同一份文字会成为 GitHub Release 正文、以及应用内「检查更新」展示的内容，
-#   所以措辞请按用户视角写
-# - 必须在 Git Bash / Linux 下运行；工作区必须干净；tag 不可重复
 set -euo pipefail
 
-if [ $# -ne 2 ]; then
-  echo "用法: scripts/release.sh <版本号> <说明文件>" >&2
-  echo "例:   scripts/release.sh 2.0.6 docs/next-release.md" >&2
+usage() {
+  echo "用法: scripts/release.sh [--dry-run] <版本号> <说明文件>"
+  echo "Windows: scripts\release.cmd [--dry-run] <版本号> <说明文件>"
+}
+
+fail() {
+  echo "错误: $*" >&2
+  exit 1
+}
+
+if [[ ${1:-} == --help || ${1:-} == -h ]]; then
+  usage
+  exit 0
+fi
+
+dry_run=false
+if [[ ${1:-} == --dry-run ]]; then
+  dry_run=true
+  shift
+fi
+if [[ $# != 2 ]]; then
+  usage >&2
   exit 1
 fi
 
-VERSION="$1"
-NOTES_FILE="$2"
+version="$1"
+tag="v$version"
+[[ -f "$2" ]] && LC_ALL=C grep -q '[^[:space:]]' -- "$2" || fail "说明文件不存在或为空：$2"
+notes_file=$(realpath -- "$2")
+cd "$(git rev-parse --show-toplevel)"
+source scripts/release-version.sh
+code=$(release_version_code "$version")
 
-if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  echo "错误: 版本号必须是 X.Y.Z 形式，收到 '$VERSION'" >&2
-  exit 1
-fi
-if [ ! -f "$NOTES_FILE" ]; then
-  echo "错误: 说明文件不存在: $NOTES_FILE" >&2
-  exit 1
-fi
-if [ -n "$(git status --porcelain)" ]; then
-  echo "错误: 工作区有未提交改动，先提交或暂存:" >&2
-  git status --short >&2
-  exit 1
-fi
-if git rev-parse -q --verify "refs/tags/v${VERSION}" >/dev/null; then
-  echo "错误: tag v${VERSION} 已存在（本地）。已发布过的话远端也在，换个版本号" >&2
-  exit 1
+[[ "$(git symbolic-ref --quiet --short HEAD)" == main ]] || fail "请在 main 分支上运行"
+[[ -z "$(git status --porcelain)" ]] || fail "请先提交或移走工作区中的改动"
+read_app_version
+current_version_code=$(release_version_code "$VERSION_NAME")
+(( code > VERSION_CODE && code > current_version_code )) ||
+  fail "目标版本须高于当前版本 $VERSION_NAME ($VERSION_CODE)"
+if git show-ref --verify --quiet "refs/tags/$tag"; then
+  fail "本地 tag $tag 已存在"
 fi
 
-MAJOR="${VERSION%%.*}"
-REST="${VERSION#*.}"
-MINOR="${REST%%.*}"
-PATCH="${REST##*.}"
-CODE=$((MAJOR * 1000000 + MINOR * 1000 + PATCH))
+push_url=$(git remote get-url --push origin)
+remote_refs=$(git ls-remote --refs "$push_url" refs/heads/main "refs/tags/$tag")
+remote_main=$(awk '$2 == "refs/heads/main" { print $1 }' <<< "$remote_refs")
+remote_tag=$(awk -v ref="refs/tags/$tag" '$2 == ref { print $1 }' <<< "$remote_refs")
+[[ -n "$remote_main" ]] || fail "远端 main 不存在"
+[[ -z "$remote_tag" ]] || fail "远端 tag $tag 已存在"
+git merge-base --is-ancestor "$remote_main" HEAD 2>/dev/null ||
+  fail "本地 main 未包含远端最新提交，请先同步 origin/main"
 
-sed -i "s/\"versionCode\": [0-9]*/\"versionCode\": ${CODE}/; s/\"versionName\": \"[^\"]*\"/\"versionName\": \"${VERSION}\"/" AppScope/app.json5
-echo "版本号已更新:"
-grep -E "versionName|versionCode" AppScope/app.json5
+echo "版本 $VERSION_NAME ($VERSION_CODE) → $version ($code)"
+echo "目标 origin/main、$tag"
+echo "发版说明预览"
+sed -n '1,8p' "$notes_file"
+if "$dry_run"; then
+  echo "预检通过。"
+  exit 0
+fi
 
-git add AppScope/app.json5
-git commit -q -m "release: ${VERSION}"
-git tag -a "v${VERSION}" --cleanup=verbatim -F "$NOTES_FILE"
-echo "--- tag message 预览（前 3 行）---"
-git cat-file -p "refs/tags/v${VERSION}" | sed '1,/^$/d' | head -3
-echo "---"
+git var GIT_AUTHOR_IDENT >/dev/null
+git var GIT_COMMITTER_IDENT >/dev/null
+sed -i -E \
+  -e "s/^([[:space:]]*\"versionCode\"[[:space:]]*:[[:space:]]*)[0-9]+/\1$code/" \
+  -e "s/^([[:space:]]*\"versionName\"[[:space:]]*:[[:space:]]*)\"[^\"]*\"/\1\"$version\"/" \
+  AppScope/app.json5
+read_app_version
+[[ "$VERSION_NAME" == "$version" && "$VERSION_CODE" == "$code" ]] ||
+  fail "写入版本号后校验失败"
 
-echo "推送 main 与 tag..."
-git push origin main
-git push origin "v${VERSION}"
-echo "完成。CI 会自动构建并发布，盯进度:"
-echo "  gh run watch --repo aryue/PuraPily"
+git add -- AppScope/app.json5
+git commit -m "release: $version"
+git tag -a "$tag" --cleanup=verbatim -F "$notes_file"
+
+if ! git push --atomic --no-follow-tags origin refs/heads/main "refs/tags/$tag"; then
+  echo "推送未确认成功，发布提交和 tag 已保留在本地。" >&2
+  echo "确认远端状态并解决推送问题后，可重试：" >&2
+  echo "  git push --atomic --no-follow-tags origin refs/heads/main refs/tags/$tag" >&2
+  exit 1
+fi
+
+echo "已推送 $tag，GitHub Actions 将构建并发布未签名 HAP。"
+echo "构建记录：gh run list --workflow build-unsigned.yml --branch $tag"
