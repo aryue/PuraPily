@@ -1,3 +1,6 @@
+import { SplitPaneLayout } from '../components/SplitPaneLayout';
+import { SPLIT_DEFAULT_RATIO, SPLIT_EXPAND_THRESHOLD, clampSplitWidth, splitPrimaryWidth, splitResize,
+  splitSecondaryWidth, splitSecondaryX } from '../utils/SplitPaneGeometry';
 import { AdjustmentMotion } from '../controlcenter/model/AdjustmentMotion';
 import { PlaybackAudioOutputMonitor } from '../utils/PlaybackAudioOutput';
 import { PlayerLevelBar } from '../components/PlayerLevelBar';
@@ -15,6 +18,7 @@ import { VideoListItem } from '../components/VideoListItem';
 import { AppContinuation, ContinuationPage } from '../services/AppContinuation';
 import { HOME_CHANNEL_CURVE, HOME_CHANNEL_DURATION } from '../utils/HomeChannelMotion';
 import { window, display, LengthMetrics } from '@kit.ArkUI';
+import { FullscreenDeviceOrientation } from '../utils/FullscreenDeviceOrientation';
 import { logInfo, logWarn, logError } from '../utils/Logger';
 import { audio } from '@kit.AudioKit';
 import { common } from '@kit.AbilityKit';
@@ -117,11 +121,10 @@ struct LivePlayerPage {
   /** 拖动分界柄期间冻结面板内容宽度，避免每帧重排（普通页 referenceLandscapeTabWidth 同款） */
   // 拖动期间不冻结任何 tab：直播页两个 tab 都比普通页评论列表轻，统一用 '100%'
   // 跟随 Swiper 容器重排，切 tab 前后内容宽度完全一致，不会出现比例突变。
-  /** 竖屏全屏按钮：请求横屏后，旋转完成再落到横屏全屏态；退出时恢复竖屏方向 */
+  /** 竖屏全屏按钮：请求横屏后，旋转完成再落到横屏全屏态。 */
   private pendingLandscapeFullscreen: boolean = false;
-  private portraitFullscreenOrigin: boolean = false;
-  /** 强制回竖屏后要释放方向锁，否则用户之后手动旋转会被 PORTRAIT 锁死 */
-  private pendingRestoreRotation: boolean = false;
+  private fullscreenExitTimer: number = -1;
+  private fullscreenDeviceOrientation: FullscreenDeviceOrientation = new FullscreenDeviceOrientation();
   /** 全屏横向锁定：进横屏全屏即锁 AUTO_ROTATION_LANDSCAPE，退出时交还全局旋转设置。
    *  普通页 prepareFullscreenEnvironment / restoreOrientationOnly 同款口径，手机转竖屏不会掉出全屏。 */
   private liveFullscreenLocked: boolean = false;
@@ -226,12 +229,12 @@ struct LivePlayerPage {
   /** 横屏分栏比例：播放区占窗口宽度的比例（默认 2/3，与普通播放页一致）。
    *  只属于当前页面实例、不落盘：重新进入分栏界面必然回默认值；单纯横竖屏切换不经过
    *  aboutToAppear，比例自然保留；不同分栏页跳转通过 landscapePlayerRatio 路由参数继承。 */
-  @State landscapeRatio: number = 2 / 3;
+  @State landscapeRatio: number = SPLIT_DEFAULT_RATIO;
   /** 拖动分界柄时的临时展开量（0..1，1 = 播放区占满窗口） */
   @State landscapeExpand: number = 0;
   /** 横屏全屏：信息面板推出屏幕，播放区占满窗口 */
   @State liveFullscreen: boolean = false;
-  private landscapeResizeStart: number = 2 / 3;
+  private landscapeResizeStart: number = SPLIT_DEFAULT_RATIO;
   /** 横屏信息面板里弹幕区实际可用高度（由布局回填，用于决定显示条数） */
   @State chatSlotHeight: number = 0;
 
@@ -286,18 +289,9 @@ struct LivePlayerPage {
     return context.px2vp(Math.round(context.vp2px(value)));
   }
 
-  /** 播放区最小 280、信息面板最小 220，小窗口按窗口宽度收缩（与普通播放页同限位） */
-  private landscapeClampedWidth(width: number): number {
-    const cw = this.viewportWidth || this.screenWv();
-    const minimum = Math.min(280, cw * 0.4);
-    const panelMinimum = Math.min(220, cw * 0.3);
-    return Math.max(1, Math.max(minimum, Math.min(cw - panelMinimum, width)));
-  }
-
   private landscapePlayerWidth(): number {
     const cw = this.viewportWidth || this.screenWv();
-    const base = this.landscapeClampedWidth(cw * (this.landscapeRatio || 2 / 3));
-    return base + (cw - base) * this.landscapeExpandAmount();
+    return splitPrimaryWidth(cw, this.landscapeRatio || SPLIT_DEFAULT_RATIO, this.landscapeExpandAmount());
   }
 
   private landscapePlayerX(): number {
@@ -360,8 +354,8 @@ struct LivePlayerPage {
    *  进全屏（expand>0）时 ratio 不变，宽度保持 resting，面板靠 x 整块平移推出，与普通页一致。 */
   private landscapePanelWidth(): number {
     const cw = this.viewportWidth || this.screenWv();
-    const resting = this.landscapeClampedWidth(cw * (this.landscapeRatio || 2 / 3));
-    return Math.max(1, this.landscapeLayoutPixel(cw - resting - 2 * this.landscapeInset()));
+    return Math.max(1, this.landscapeLayoutPixel(splitSecondaryWidth(
+      cw, this.landscapeRatio || SPLIT_DEFAULT_RATIO, this.landscapeInset())));
   }
 
   /** 简介卡片可用宽度（面板宽减去 List 左右各 12vp padding），实时跟随分栏比例。
@@ -378,34 +372,19 @@ struct LivePlayerPage {
 
   /** 展开时整块面板随播放区推出屏幕，而不是靠条件渲染瞬间消失 */
   private landscapePanelX(): number {
-    const expand = this.landscapeExpandAmount();
-    return (this.landscapeSwapped() ? -(this.landscapePanelWidth() + 2 * this.landscapeInset()) * expand
-      : this.landscapePlayerWidth()) + this.landscapeInset();
-  }
-
-  /** 32vp 触控区以分界线为中心（左右两侧都能起拖），4vp 可见条向详情侧偏 2vp 贴边，
-   *  不压住视频画面。逐值照抄普通页 ReferenceLandscapeResizeHandle 的最终口径，
-   *  见 docs/landscape-resize-20261025.md「拖动柄贴简介边缘」。 */
-  private landscapeHandleX(): number {
-    return this.landscapePanelX() + (this.landscapeSwapped() ? this.landscapePanelWidth() : 0) - 16;
+    return splitSecondaryX(this.landscapePlayerWidth(), this.landscapePanelWidth(),
+      this.landscapeInset(), this.landscapeExpandAmount(), this.landscapeSwapped());
   }
 
   /**
-   * 全屏时信息面板已整块推出屏幕（`landscapePanelX/Width` 会算到窗外、宽度归 1），
+   * 全屏时信息面板已整块推出屏幕，
    * 浮层菜单不能跟着面板走，仍按「收起态」面板的位置与宽度摆放。
    */
   private landscapeDockPanelX(): number {
     if (!this.liveFullscreen) return this.landscapePanelX();
     const cw = this.viewportWidth || this.screenWv();
-    const resting = this.landscapeClampedWidth(cw * (this.landscapeRatio || 2 / 3));
+    const resting = clampSplitWidth(cw, cw * (this.landscapeRatio || SPLIT_DEFAULT_RATIO));
     return this.landscapeSwapped() ? this.landscapeInset() : resting + this.landscapeInset();
-  }
-
-  private landscapeDockPanelWidth(): number {
-    if (!this.liveFullscreen) return this.landscapePanelWidth();
-    const cw = this.viewportWidth || this.screenWv();
-    const resting = this.landscapeClampedWidth(cw * (this.landscapeRatio || 2 / 3));
-    return Math.max(1, this.landscapeLayoutPixel(cw - resting - 2 * this.landscapeInset()));
   }
 
   /** 信息面板配色：与普通页 ReferencePanel / ReferenceIntro 同一套深浅口径 */
@@ -424,7 +403,7 @@ struct LivePlayerPage {
 
   /** 分栏时三点菜单跟随播放区右下（与顶栏「更多」同侧）；全屏沿用收起态面板 dock */
   private landscapeMenuDockWidth(): number {
-    if (this.liveFullscreen) return this.landscapeDockPanelWidth();
+    if (this.liveFullscreen) return this.landscapePanelWidth();
     return Math.max(1, Math.min(360, this.landscapePlayerWidth() - 2 * this.landscapeInset()));
   }
 
@@ -440,15 +419,15 @@ struct LivePlayerPage {
     if (cw <= 0) return;
     const delta = this.landscapeSwapped() ? -offset : offset;
     const proposed = this.landscapeLayoutPixel(cw * this.landscapeResizeStart + delta);
-    const maximum = this.landscapeClampedWidth(cw);
-    this.landscapeRatio = this.landscapeClampedWidth(proposed) / cw;
-    this.landscapeExpand = Math.max(0, Math.min(1, (proposed - maximum) / Math.max(1, cw - maximum)));
+    const resize = splitResize(cw, proposed);
+    this.landscapeRatio = resize.ratio;
+    this.landscapeExpand = resize.expand;
   }
 
   private beginLandscapeResize(): void {
     if (this.liveFullscreen) return;
     const cw = this.viewportWidth || this.screenWv();
-    this.landscapeResizeStart = cw > 0 ? this.landscapePlayerWidth() / cw : 2 / 3;
+    this.landscapeResizeStart = cw > 0 ? this.landscapePlayerWidth() / cw : SPLIT_DEFAULT_RATIO;
     // 不冻结 tab 内容：两页都用 '100%' 跟随容器，随分栏比例同步重排
   }
 
@@ -465,7 +444,7 @@ struct LivePlayerPage {
       return;
     }
     this.landscapeResize(offset);
-    if (this.landscapeExpand >= 0.62) {
+    if (this.landscapeExpand >= SPLIT_EXPAND_THRESHOLD) {
       // 从松手时的真实矩形连续放大到全屏，动画落定后才置逻辑标志（几何等价，无跳变）。
       this.settleInformation(false);
       this.applySystemBars(true);
@@ -492,25 +471,35 @@ struct LivePlayerPage {
   private lockFullscreenLandscape(): void {
     if (this.liveFullscreenLocked || !this.mw) return;
     this.liveFullscreenLocked = true;
+    this.fullscreenDeviceOrientation.start();
     try {
       this.mw.enableLandscapeMultiWindow().catch(() => {});
       this.mw.setPreferredOrientation(window.Orientation.AUTO_ROTATION_LANDSCAPE).catch(() => {});
     } catch (_e) { logWarn('[LivePlayer] 全屏横向锁定失败'); }
   }
 
-  /** 退出全屏：解横向锁定并把方向交还全局旋转设置（普通页 restoreOrientationOnly 口径）。
-   *  竖屏进入的全屏由 restorePortraitFullscreenRotation 强制回竖屏，不在这里重复下发。 */
-  private unlockFullscreenLandscape(): void {
+  private async unlockFullscreenLandscape(): Promise<void> {
     if (!this.liveFullscreenLocked) return;
     this.liveFullscreenLocked = false;
+    this.fullscreenDeviceOrientation.stop();
     if (!this.mw) return;
-    try {
-      this.mw.disableLandscapeMultiWindow().catch(() => {});
-      this.applyRotationMode().catch(() => {});
-    } catch (_e) {}
+    await this.mw.disableLandscapeMultiWindow().catch(() => {});
+    if (!this.disposed && !this.liveFullscreenLocked) await this.applyRotationMode();
+  }
+
+  private finishFullscreenExit(): void {
+    clearTimeout(this.fullscreenExitTimer);
+    this.fullscreenExitTimer = -1;
+    this.liveFullscreen = false;
+    this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 },
+      duration: 260, curve: Curve.EaseOut }, () => {
+      this.landscapeExpand = 0;
+    });
+    this.applySystemBars(false);
   }
 
   private toggleLandscapeFullscreen(): void {
+    if (this.fullscreenExitTimer !== -1) return;
     const enabled = !this.liveFullscreen;
     // 进/退全屏都是同一条连续缩放曲线；liveFullscreen 只作逻辑标志，在动画落定后切换。
     if (enabled) {
@@ -521,18 +510,20 @@ struct LivePlayerPage {
         this.landscapeExpand = 1;
       });
     } else {
-      this.liveFullscreen = false;
-      if (this.portraitFullscreenOrigin) this.restorePortraitFullscreenRotation();
-      else this.unlockFullscreenLandscape();
-      this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 },
-        duration: 260, curve: Curve.EaseOut }, () => {
-        this.landscapeExpand = 0;
-      });
+      const target = this.fullscreenDeviceOrientation.returnLandscape(this.rotationOrientation(), this.landscapeLayout(),
+        this.getUIContext().getHostContext() as common.UIAbilityContext);
+      if (target) {
+        this.finishFullscreenExit();
+      } else {
+        // 保持全屏画面，等竖屏视口到达。系统未旋转时再收回横屏分栏。
+        this.fullscreenExitTimer = setTimeout(() => this.finishFullscreenExit(), 900);
+      }
+      void this.unlockFullscreenLandscape();
     }
     // 全屏与分栏都默认纯净观看：进/退全屏一律收起控件，单击播放区再唤出
     this.settleInformation(false);
     // 全屏隐藏系统状态栏、退回分栏恢复显示（对齐普通横屏播放页）
-    this.applySystemBars(enabled);
+    if (enabled) this.applySystemBars(true);
   }
 
   /** 竖屏全屏入口：请求横屏并锁横屏，旋转完成后由 onAreaChange 落到横屏全屏态
@@ -540,22 +531,8 @@ struct LivePlayerPage {
   private enterPortraitFullscreen(): void {
     if (this.landscapeLayout() || this.pendingLandscapeFullscreen || !this.mw) return;
     this.pendingLandscapeFullscreen = true;
-    this.portraitFullscreenOrigin = true;
     // 锁横屏必须在请求旋转时就下发，否则旋转落定后手机一转又会掉回竖屏页面
     this.lockFullscreenLandscape();
-  }
-
-  /** 退出「竖屏进入的全屏」：先强制回竖屏，旋转落定后把方向交还给全局设置（避免 PORTRAIT 锁死） */
-  private restorePortraitFullscreenRotation(): void {
-    this.portraitFullscreenOrigin = false;
-    this.pendingRestoreRotation = true;
-    // 方向由 pendingRestoreRotation 在回到竖屏后统一交还，这里只清掉全屏锁标记
-    this.liveFullscreenLocked = false;
-    if (!this.mw) return;
-    try {
-      this.mw.disableLandscapeMultiWindow().catch(() => {});
-      this.mw.setPreferredOrientation(window.Orientation.PORTRAIT).catch(() => {});
-    } catch (_e) {}
   }
 
   /** 分栏比例的入口口径（普通页 referenceLandscapeRestoreRatio / @State 默认 2/3 同款）：
@@ -564,7 +541,7 @@ struct LivePlayerPage {
    *  aboutToAppear，且 onAreaChange 不动 landscapeRatio，比例自然保留。 */
   private initialLandscapeRatio(params: Record<string, Object> | undefined): number {
     const passed = params ? Number(params['landscapePlayerRatio']) : NaN;
-    return Number.isFinite(passed) && passed > 0 && passed < 1 ? passed : 2 / 3;
+    return Number.isFinite(passed) && passed > 0 && passed < 1 ? passed : SPLIT_DEFAULT_RATIO;
   }
 
   // ========== 手势状态（onVT 风格） ==========
@@ -1108,6 +1085,8 @@ struct LivePlayerPage {
   }
 
   aboutToDisappear() {
+    this.fullscreenDeviceOrientation.stop();
+    clearTimeout(this.fullscreenExitTimer);
     AppContinuation.unregister(this);
     this.disposed = true;
     // ⭐ 存活计数先减自己：还有别的播放页活着（如直播页下面压着的视频播放页）就不能恢复
@@ -1160,6 +1139,7 @@ struct LivePlayerPage {
   /** ⭐ 页面隐藏（切后台/跳转）：后台播放开启则保持播放，否则暂停 */
   onPageHide(): void {
     this.pageHidden = true;
+    this.fullscreenDeviceOrientation.stop();
     // ⭐ 提前一步恢复状态栏内容色：pop 出栈或被普通页面覆盖时，此刻路由栈已指向目标页，
     //    立即恢复主题口径（目标页还是播放页则交给对方 onPageShow 强制白字）。
     //    切后台时栈顶仍是本页，不会误发。
@@ -1192,6 +1172,7 @@ struct LivePlayerPage {
   /** 回前台仅恢复系统暂停，保留用户主动暂停。 */
   onPageShow(): void {
     this.pageHidden = false;
+    if (this.liveFullscreenLocked) this.fullscreenDeviceOrientation.start();
     this.startLiveChat();
     this.registerContinuation();
     try {
@@ -1910,21 +1891,20 @@ struct LivePlayerPage {
 
   // ==================== 屏幕旋转控制 ====================
 
+  private rotationOrientation(): window.Orientation {
+    switch (this.rotationMode) {
+      case 'system': return window.Orientation.AUTO_ROTATION_RESTRICTED;
+      case 'auto': return window.Orientation.AUTO_ROTATION;
+      case 'portrait': return window.Orientation.PORTRAIT;
+      default: return window.Orientation.AUTO_ROTATION_LANDSCAPE;
+    }
+  }
+
   /** 应用当前旋转模式到窗口 */
   private async applyRotationMode(): Promise<void> {
     if (!this.mw) return;
     try {
-      let orientation: window.Orientation;
-      if (this.rotationMode === 'system') {
-        orientation = window.Orientation.AUTO_ROTATION_RESTRICTED;
-      } else if (this.rotationMode === 'auto') {
-        orientation = window.Orientation.AUTO_ROTATION;
-      } else if (this.rotationMode === 'portrait') {
-        orientation = window.Orientation.PORTRAIT;
-      } else {
-        orientation = window.Orientation.AUTO_ROTATION_LANDSCAPE;
-      }
-      await this.mw.setPreferredOrientation(orientation);
+      await this.mw.setPreferredOrientation(this.rotationOrientation());
     } catch (_e) {
       logError(`[LivePlayer] 旋转模式应用失败: ${_e}`);
     }
@@ -2142,9 +2122,7 @@ struct LivePlayerPage {
         this.lastPanelTabChangeAt = Date.now();
       })
     }
-    .width(this.landscapePanelWidth())
-    .height(this.landscapePanelHeight())
-    .position({ x: this.landscapePanelX(), y: this.landscapePanelTop() })
+    .width('100%').height('100%')
     .backgroundColor(this.panelBgColor())
     .borderRadius({ topLeft: this.cardBorderRadius, topRight: this.cardBorderRadius,
       bottomLeft: this.cardBorderRadius, bottomRight: this.cardBorderRadius })
@@ -2321,33 +2299,11 @@ struct LivePlayerPage {
       // 底部控件不加实色/渐变底板：普通页 ReferenceLandscapeBottomControls 只留 padding，
       // 按钮靠自身玻璃材质浮在画面上，播放区与屏幕底边之间不留遮罩带
     }
-    .width(this.landscapePlayerWidth())
-    .height(this.landscapeAreaHeight())
-    .position({ x: this.landscapePlayerX(), y: this.landscapeAreaTop() })
+    .width('100%').height('100%')
     .clip(true)
     .id('live-landscape-player-controls')
     .opacity(1 - this.informationProgress)
     .hitTestBehavior(this.informationVisible ? HitTestMode.Default : HitTestMode.BLOCK_DESCENDANTS)
-  }
-
-  @Builder
-  private LandscapeResizeHandle() {
-    Row() {
-      // 条默认居中在分界线上，向详情侧偏 2vp ⇒ 整条落在详情面板内、贴边且不压画面
-      Row().width(4).height(42).borderRadius(2).backgroundColor('#45494F')
-        .translate({ x: this.landscapeSwapped() ? -2 : 2 })
-    }.width(32).height(72).justifyContent(FlexAlign.Center)
-      .id('live-landscape-resize-handle')
-      .accessibilityText('拖动调节直播画面与信息区大小')
-      .position({ x: this.landscapeHandleX(),
-        y: this.landscapeAreaTop() + (this.landscapeAreaHeight() - 72) / 2 })
-      // 拖动展开时播放区会临时变宽，提到上层保证任何中间态 32vp 触控区都可拖
-      .zIndex(1)
-      .gesture(PanGesture({ direction: PanDirection.Horizontal, distance: 1 })
-        .onActionStart(() => { this.beginLandscapeResize(); })
-        .onActionUpdate((event: GestureEvent) => { this.landscapeResize(event.offsetX); })
-        .onActionEnd((event: GestureEvent) => { this.finishLandscapeResize(event.offsetX); })
-        .onActionCancel(() => { this.finishLandscapeResize(0, true); }))
   }
 
   private menuTextColor(): string { return this.isDarkMode ? '#EEEFF1' : '#18191C'; }
@@ -2628,9 +2584,27 @@ struct LivePlayerPage {
 
       // 横屏：播放区承载全部控件（可显隐），另一栏是详情/推荐 tab 面板，中间分界柄可调大小、可拖入全屏
       if (this.landscapeLayout()) {
-        this.LandscapeInformationPanel()
-        if (!this.liveFullscreen) { this.LandscapeResizeHandle() }
-        this.LandscapePlayerControls()
+        SplitPaneLayout({
+          primary: () => { this.LandscapePlayerControls() },
+          secondary: () => { this.LandscapeInformationPanel() },
+          primaryWidth: this.landscapePlayerWidth(),
+          primaryHeight: this.landscapeAreaHeight(),
+          primaryX: this.landscapePlayerX(),
+          primaryY: this.landscapeAreaTop(),
+          secondaryWidth: this.landscapePanelWidth(),
+          secondaryHeight: this.landscapePanelHeight(),
+          secondaryX: this.landscapePanelX(),
+          secondaryY: this.landscapePanelTop(),
+          showHandle: !this.liveFullscreen,
+          swapped: this.landscapeSwapped(),
+          dividerTop: this.landscapeAreaTop(),
+          dividerHeight: this.landscapeAreaHeight(),
+          handleId: 'live-landscape-resize-handle',
+          handleLabel: '拖动调节直播画面与信息区大小',
+          onResizeStart: () => this.beginLandscapeResize(),
+          onResizeUpdate: (offset: number) => this.landscapeResize(offset),
+          onResizeEnd: (offset: number, cancelled: boolean) => this.finishLandscapeResize(offset, cancelled)
+        })
       }
 
       if (this.showBottomHint) {
@@ -2689,6 +2663,8 @@ struct LivePlayerPage {
       this.viewportWidth = width;
       this.viewportHeight = height;
       if ((width > height) !== wasLandscape) {
+        clearTimeout(this.fullscreenExitTimer);
+        this.fullscreenExitTimer = -1;
         // 旋转会换一套布局：拖动进度、全屏都是横屏临时态，不跨方向保留。
         this.landscapeExpand = 0;
         this.liveFullscreen = false;
@@ -2702,13 +2678,6 @@ struct LivePlayerPage {
           this.liveFullscreen = true;
           this.informationVisible = false;
           this.informationProgress = 1;
-        } else {
-          this.portraitFullscreenOrigin = false;
-          if (this.pendingRestoreRotation && width < height) {
-            // 已经回到竖屏：释放临时的 PORTRAIT 锁，交还用户全局旋转设置
-            this.pendingRestoreRotation = false;
-            setTimeout(() => { if (!this.disposed) this.applyRotationMode().catch(() => {}); }, 400);
-          }
         }
         // 分栏显示系统状态栏、竖屏/全屏隐藏：随新方向重新下发（同时刷新状态栏高度测量）
         this.applySystemBars();

@@ -1,3 +1,6 @@
+import { SplitPaneLayout } from '../components/SplitPaneLayout';
+import { SPLIT_DEFAULT_RATIO, SPLIT_EXPAND_THRESHOLD, splitPrimaryWidth, splitResize,
+  splitSecondaryWidth, splitSecondaryX } from '../utils/SplitPaneGeometry';
 import { ijkPlaybackRequested, supportsIjkPlayback, createPlaybackPlayer } from '../services/PlaybackFactory';
 import { IjkPlaybackPlayer } from '../services/IjkPlaybackPlayer';
 import { IjkWarmPool, IjkWarmTake } from '../services/IjkWarmPool';
@@ -50,6 +53,7 @@ import { BusinessError } from '@kit.BasicServicesKit';
 import { VibrateUtils } from '../utils/VibrateUtils';
 import { MaterialUtil } from '../utils/MaterialUtil';
 import { window } from '@kit.ArkUI';
+import { FullscreenDeviceOrientation } from '../utils/FullscreenDeviceOrientation';
 import { preferences } from '@kit.ArkData';
 import { common, ConfigurationConstant } from '@kit.AbilityKit';
 import deviceInfo from '@ohos.deviceInfo';
@@ -347,9 +351,9 @@ struct VideoPlayerPage {
   private commentRequestSequence: number = 0;
   private commentRequestKey: string = '';
   @State referencePanelOffset: number = 0
-  @State private referenceLandscapePlayerRatio: number = 2 / 3
+  @State private referenceLandscapePlayerRatio: number = SPLIT_DEFAULT_RATIO
   @State private referenceLandscapeExpandProgress: number = 0
-  private referenceLandscapeResizeStart: number = 2 / 3
+  private referenceLandscapeResizeStart: number = SPLIT_DEFAULT_RATIO
   private resizeStartedAt: number = 0
   private resizeEventCount: number = 0
   private resizeLayoutCount: number = 0
@@ -618,6 +622,7 @@ struct VideoPlayerPage {
   // ⭐ fs 期间内容分支冻结键（'portrait'|'lv'|'isLs'），进入全屏前快照
   private preFsBranch: string = 'portrait'
   private fullscreenSource: FullscreenSource | null = null
+  private fullscreenDeviceOrientation: FullscreenDeviceOrientation = new FullscreenDeviceOrientation();
   @State private fullscreenRotationTransition: boolean = false
   private fullscreenRotationTarget: boolean | null = null
   private fullscreenRotationEntering: boolean = false
@@ -1495,12 +1500,6 @@ struct VideoPlayerPage {
       panelOffset: this.referencePanelOffset
     };
   }
-  /** ⭐ 内容分支常驻渲染：与常驻播放器层配合，旋转只改几何不换子树 */
-  @Builder
-  buildContentBranch() {
-    this.ReferencePortrait()
-  }
-
   /** ⭐ 关灯+竖屏非全屏（本布局分支内必为竖屏）+横画幅，且开启"关灯视频外弹幕"：弹幕平移到视频下方空白区 */
   private isLightsOffDanmakuOutside(): boolean {
     return this.isLightsOff && this.ar >= 1 && this.lightsOffDanmakuOutside;
@@ -4245,6 +4244,7 @@ struct VideoPlayerPage {
    */
   onPageHide(): void {
     this.playerPageVisible = false;
+    this.fullscreenDeviceOrientation.stop();
     // ⭐ 记录本次隐藏的成因：栈顶已变成别的页面就是跳页，不是切后台；
     //    pushUrl 时序可能让这里仍读到本页，故 onBackground 确认时会用 Ability 记录的栈顶复核。
     //    同一路由的另一个播放页（点相关推荐 push 出的 B）path 与本节相同，还得靠实例编号区分。
@@ -4348,6 +4348,7 @@ struct VideoPlayerPage {
    */
   onPageShow(): void {
     this.playerPageVisible = true;
+    if (this.fs && this.referenceLayout && !this.isPcDevice) this.fullscreenDeviceOrientation.start();
     // ⭐ 登记「我是当前最上层的播放页实例」。被 push 出来的同路由页会覆盖这个值，
     //    被覆盖的旧页因此在切后台时不会误判自己仍在栈顶（见 onAppBackgroundConfirmed）。
     const previousTopId = this.topPlayerPageInstanceId();
@@ -4400,6 +4401,7 @@ struct VideoPlayerPage {
   }
 
   aboutToDisappear() {
+    this.fullscreenDeviceOrientation.stop();
     if (this.neighborWarmTimer_ !== -1) {
       clearTimeout(this.neighborWarmTimer_);
       this.neighborWarmTimer_ = -1;
@@ -5959,7 +5961,7 @@ struct VideoPlayerPage {
       const audioManager = audio.getAudioManager();
       const sessionManager = audioManager.getSessionManager();
       const strategy: audio.AudioSessionStrategy = {
-        concurrencyMode: audio.AudioConcurrencyMode.CONCURRENCY_MIX_WITH_OTHERS
+        concurrencyMode: audio.AudioConcurrencyMode.CONCURRENCY_DEFAULT
       };
       await sessionManager.activateAudioSession(strategy);
     } catch (e) { }
@@ -7580,10 +7582,10 @@ struct VideoPlayerPage {
     this.captureFSSnapshot();
     this.fsEntering = true;
     this.fsHapticPrev = 0;
-    if (this.referenceLayout && !this.isPcDevice && (this.ar >= 1) !== this.isLs &&
+    if (this.referenceLayout && !this.isPcDevice && this.fullscreenTargetLandscape() !== this.isLs &&
       (!this.fsAnimOn || this.fsPanProgress >= 0.62)) {
       this.isAnimatingToFS = true;
-      await this.rotateReferenceFullscreen(true);
+      await this.rotateReferenceFullscreen(true, this.fullscreenTargetLandscape());
       return;
     }
     // ⭐ 'none' 模式：瞬时切换，无过渡动画
@@ -7653,6 +7655,7 @@ struct VideoPlayerPage {
 
   private async prepareFullscreenEnvironment(): Promise<void> {
     if (!this.mw || this.isPcDevice) return;  // ⭐ PC：窗口不旋转，跳过旋转准备（窗口内全屏）
+    if (this.referenceLayout) this.fullscreenDeviceOrientation.start();
     try {
       // 告知系统应用进入横屏全屏播放状态（小窗模式下将切换为横向悬浮窗）
       await this.mw.enableLandscapeMultiWindow();
@@ -7677,14 +7680,12 @@ struct VideoPlayerPage {
   // ⭐ 仅恢复屏幕方向和多窗口横屏状态（不管理状态栏），用于退出全屏动画期间提前执行
   private async restoreOrientationOnly(): Promise<void> {
     if (!this.mw || this.isPcDevice) return;  // ⭐ PC：无旋转概念，跳过恢复
+    this.fullscreenDeviceOrientation.stop();
     try {
       // 告知系统退出横屏全屏播放状态（小窗恢复为竖向悬浮窗）
-      await this.mw.disableLandscapeMultiWindow();
+      await this.mw.disableLandscapeMultiWindow().catch(() => {});
       if (this.referenceLayout && this.fullscreenSource) {
-        const sourceOrientation = this.fullscreenRotationTransition
-          ? (this.fullscreenSource.isLandscape ? window.Orientation.AUTO_ROTATION_LANDSCAPE : window.Orientation.PORTRAIT)
-          : this.fullscreenSource.orientation;
-        await this.mw.setPreferredOrientation(sourceOrientation);
+        await this.mw.setPreferredOrientation(this.fullscreenSource.orientation);
         return;
       }
       const lock = AppStorage.get<string>('screenOrientationLock') ?? '跟随系统';
@@ -7709,6 +7710,13 @@ struct VideoPlayerPage {
       }
       await this.mw.setPreferredOrientation(orientation);
     } catch (_e) {}
+  }
+
+  private fullscreenReturnLandscape(): boolean {
+    const source = this.fullscreenSource;
+    if (!source) return this.isLs;
+    return this.fullscreenDeviceOrientation.returnLandscape(source.orientation, this.isLs,
+      this.getUIContext().getHostContext() as common.UIAbilityContext);
   }
 
   private restoreFullscreenSource(): void {
@@ -7750,8 +7758,7 @@ struct VideoPlayerPage {
   }
 
   /** Let the system own rotation; a second rectangle animation after rotation causes jumps. */
-  private async rotateReferenceFullscreen(entering: boolean): Promise<void> {
-    const target = entering ? this.fullscreenTargetLandscape() : (this.fullscreenSource?.isLandscape ?? false);
+  private async rotateReferenceFullscreen(entering: boolean, target: boolean): Promise<void> {
     this.fullscreenRotationTransition = true;
     this.fullscreenRotationEntering = entering;
     this.fullscreenRotationTarget = target;
@@ -7770,9 +7777,6 @@ struct VideoPlayerPage {
       const ready = await this.waitForFullscreenViewport(target);
       if (ready) {
         this.commitFullscreenRotationLayout();
-        if (!entering && this.mw && this.fullscreenSource) {
-          await this.mw.setPreferredOrientation(this.fullscreenSource.orientation);
-        }
       } else {
         logWarn('[FSDBG] viewport rotation timed out; retain current orientation and restore source layout');
         this.restoreFullscreenSource();
@@ -7807,7 +7811,7 @@ struct VideoPlayerPage {
     this.captureFSSnapshot();
     this.fsEntering = true;
     if (this.referenceLayout && !this.isPcDevice && this.fullscreenTargetLandscape() !== this.isLs) {
-      await this.rotateReferenceFullscreen(true);
+      await this.rotateReferenceFullscreen(true, this.fullscreenTargetLandscape());
       return;
     }
     // ⭐ 等待系统环境准备完成（旋转、状态栏），避免旋转黑帧泄露
@@ -7878,11 +7882,14 @@ struct VideoPlayerPage {
     setTimeout(() => { this.icp = false; }, 0);
     if (this.cv) this.resetCT();
 
-    if (this.referenceLayout && !this.isPcDevice && this.fullscreenSource &&
-      this.fullscreenSource.isLandscape !== this.isLs) {
-      this.captureFSSnapshot();
-      await this.rotateReferenceFullscreen(false);
-      return;
+    if (this.referenceLayout && !this.isPcDevice && this.fullscreenSource) {
+      const target = this.fullscreenReturnLandscape();
+      if (target !== this.isLs) {
+        this.captureFSSnapshot();
+        await this.rotateReferenceFullscreen(false, target);
+        return;
+      }
+      this.restoreFullscreenSource();
     }
 
     // ⭐ 动画关闭：瞬时切换，无过渡动画
@@ -10638,27 +10645,25 @@ struct VideoPlayerPage {
         }
         Stack() {
           Stack() {
-            // ⭐ 内容分支常驻渲染：fs 期间冻结在进入前的分支（preFsBranch 快照），
-            // 旋转不再切分支 → 详情页零重挂载、无封面重解码风暴；冻结分支被下方背景板盖住
-            this.buildContentBranch()
-            // ⭐ 全屏背景板：常挂载保持子树稳定（挂载/卸载会使常驻层兄弟位置变化导致重建抖动），
-            //    仅全屏时可见；退出插值期间提前隐藏，让内容渐显过程可见；并承接窗口旋转回调 onCA
-            Column()
-              .width('100%')
-              .height('100%')
-              .backgroundColor(this.ovPlateBg())
-              .visibility(this.fs && this.fsLerpDir !== 2 ? Visibility.Visible : Visibility.Hidden)
-              .onAreaChange(this.onCA)
-            // ⭐ 常驻播放器层（XComponent 单实例，跨分支常驻，几何随状态驱动）
-            this.buildPlayerOverlay()
-            if (this.referencePortraitFeedActive() && this.referenceFeedPreviewPinned) { this.ReferenceFeedPinnedPage() }
-            if (this.referenceLayout && !this.fs && !this.isLs && !this.referenceInfoHidden && !this.floatingMorph) { this.ReferenceChrome() }
-            this.ReferenceFeedPlaybackOverlay()
-            // Above the feed information gradient, which otherwise intercepts reset taps.
-            this.buildFullscreenResetButton()
-            if (this.referenceLayout && this.isLs && !this.fs && !this.floatingMorph && !this.isLightsOff) {
-              this.ReferenceLandscapeResizeHandle()
-            }
+            SplitPaneLayout({
+              primary: () => { this.ReferencePrimaryLayers() },
+              secondary: () => { this.ReferencePortrait() },
+              secondaryWidth: this.isLs ? this.referenceLandscapePanelWidth() : this.cw,
+              secondaryHeight: this.referencePanelHeight(),
+              secondaryX: this.isLs ? this.referenceLandscapePanelX() : 0,
+              secondaryY: this.isLs ? this.referenceSafeTop() : this.referenceDetailPanelTop(),
+              showHandle: this.referenceLayout && this.isLs && !this.fs && !this.floatingMorph && !this.isLightsOff,
+              swapped: this.isLayoutSwapped,
+              dividerTop: this.referenceLandscapeAreaTop(),
+              dividerHeight: this.referenceLandscapeAreaHeight(),
+              handleId: 'reference-landscape-resize-handle',
+              handleLabel: '拖动调节视频区和简介区大小',
+              onResizeStart: () => this.referenceLandscapeBeginResize(),
+              onResizeUpdate: (offset: number) => this.referenceLandscapeResize(offset),
+              onResizeEnd: (offset: number, cancelled: boolean) => {
+                this.referenceLandscapeFinishResize(offset, cancelled);
+              }
+            }).backgroundColor('#000000').onAreaChange(this.onCA)
           }
           // Keep feed dragging on its own node so the page-entry offset below cannot overwrite it.
           // 显式尺寸：裁剪框按页面边界算，不能跟着子节点推导出来的盒子走。
@@ -11943,8 +11948,8 @@ struct VideoPlayerPage {
   }
 
   private referenceLandscapePanelX(): number {
-    return this.referenceLayoutPixel((this.isLayoutSwapped ? -(this.referenceLandscapePanelWidth() + 2 * this.safeCM()) *
-      (this.referenceLandscapeExpandProgress || 0) : this.referenceLandscapePlayerWidth()) + this.safeCM());
+    return this.referenceLayoutPixel(splitSecondaryX(this.referenceLandscapePlayerWidth(),
+      this.referenceLandscapePanelWidth(), this.safeCM(), this.referenceLandscapeExpandProgress || 0, this.isLayoutSwapped));
   }
 
   private referenceLandscapeTabWidth(tab: number): number {
@@ -11955,19 +11960,13 @@ struct VideoPlayerPage {
   }
 
   private referenceLandscapePanelWidth(): number {
-    return Math.max(1, this.referenceLayoutPixel(this.cw - this.referenceLandscapeClampedWidth(
-      this.cw * (this.referenceLandscapePlayerRatio ?? 2 / 3)) - 2 * this.safeCM()));
+    return Math.max(1, this.referenceLayoutPixel(splitSecondaryWidth(
+      this.cw, this.referenceLandscapePlayerRatio ?? SPLIT_DEFAULT_RATIO, this.safeCM())));
   }
 
   private referenceLandscapePlayerWidth(): number {
-    const base = this.referenceLandscapeClampedWidth(this.cw * (this.referenceLandscapePlayerRatio ?? 2 / 3));
-    return base + (this.cw - base) * (this.referenceLandscapeExpandProgress || 0);
-  }
-
-  private referenceLandscapeClampedWidth(width: number): number {
-    const minimum = Math.min(280, this.cw * 0.4);
-    const panelMinimum = Math.min(220, this.cw * 0.3);
-    return Math.max(1, Math.max(minimum, Math.min(this.cw - panelMinimum, width)));
+    return splitPrimaryWidth(this.cw, this.referenceLandscapePlayerRatio ?? SPLIT_DEFAULT_RATIO,
+      this.referenceLandscapeExpandProgress || 0);
   }
 
   private referenceLandscapeResize(offset: number): void {
@@ -11975,13 +11974,13 @@ struct VideoPlayerPage {
     if (this.referenceLandscapeResizeActive) this.resizeEventCount++;
     const delta = this.isLayoutSwapped ? -offset : offset;
     const proposed = this.referenceLayoutPixel(this.cw * this.referenceLandscapeResizeStart + delta);
-    const maximum = this.referenceLandscapeClampedWidth(this.cw);
-    this.referenceLandscapePlayerRatio = this.referenceLandscapeClampedWidth(proposed) / this.cw;
-    this.referenceLandscapeExpandProgress = Math.max(0, Math.min(1, (proposed - maximum) / (this.cw - maximum)));
+    const resize = splitResize(this.cw, proposed);
+    this.referenceLandscapePlayerRatio = resize.ratio;
+    this.referenceLandscapeExpandProgress = resize.expand;
   }
 
   private referenceLandscapeBeginResize(): void {
-    if (this.fs || this.isAnimatingToFS) return;
+    if (this.fs || this.isAnimatingToFS || this.cw <= 0) return;
     this.referenceLandscapeResizeStart = this.referenceLandscapePlayerWidth() / this.cw;
     this.referenceResizePanelWidth = this.referenceLandscapePanelWidth();
     this.referenceResizeSurfaceW = Math.max(1, this.ovVideoW());
@@ -12007,7 +12006,7 @@ struct VideoPlayerPage {
       return;
     }
     this.referenceLandscapeResize(offset);
-    if (this.referenceLandscapeExpandProgress >= 0.62) {
+    if (this.referenceLandscapeExpandProgress >= SPLIT_EXPAND_THRESHOLD) {
       // Capture the held Surface before fullscreen changes its geometry. The
       // existing fullscreen animation continues from this exact rectangle.
       await this.enterFullscreenAnimated();
@@ -12018,14 +12017,6 @@ struct VideoPlayerPage {
         this.referenceLandscapeExpandProgress = 0;
       });
     }
-  }
-
-  private referenceLandscapeDividerX(): number {
-    return this.isLayoutSwapped ? this.cw - this.referenceLandscapePlayerWidth() : this.referenceLandscapePlayerWidth();
-  }
-
-  private referenceLandscapeHandleX(): number {
-    return this.referenceLandscapePanelX() + (this.isLayoutSwapped ? this.referenceLandscapePanelWidth() : 0) - 16;
   }
 
   private referenceLandscapeViewportWidth(): number {
@@ -14401,54 +14392,58 @@ struct VideoPlayerPage {
     }
   }
 
+  // Keep the fullscreen backing and native Surface mounted across rotation and fullscreen.
   @Builder
-  ReferenceLandscapeResizeHandle() {
-    Row() {
-      Row().width(4).height(42).borderRadius(2).backgroundColor('#45494F')
-        .translate({ x: this.isLayoutSwapped ? -2 : 2 })
-    }.width(32).height(72).justifyContent(FlexAlign.Center)
-      .id('reference-landscape-resize-handle')
-      .accessibilityText('拖动调节视频区和简介区大小')
-      .position({ x: this.referenceLandscapeHandleX(),
-        y: this.referenceLandscapeAreaTop() + (this.referenceLandscapeAreaHeight() - 72) / 2 })
-      .gesture(PanGesture({ direction: PanDirection.Horizontal, distance: 1 })
-        .onActionStart(() => { this.referenceLandscapeBeginResize(); })
-        .onActionUpdate((event: GestureEvent) => { this.referenceLandscapeResize(event.offsetX); })
-        .onActionEnd((event: GestureEvent) => { this.referenceLandscapeFinishResize(event.offsetX); })
-        .onActionCancel(() => { this.referenceLandscapeFinishResize(0, true); }))
+  ReferencePrimaryLayers() {
+    Stack({ alignContent: Alignment.TopStart }) {
+      // ⭐ 全屏背景板：常挂载保持子树稳定（挂载/卸载会使常驻层兄弟位置变化导致重建抖动），
+      //    仅全屏时可见；退出插值期间提前隐藏，让内容渐显过程可见；并承接窗口旋转回调 onCA
+      Column()
+        .width('100%')
+        .height('100%')
+        .backgroundColor(this.ovPlateBg())
+        .visibility(this.fs && this.fsLerpDir !== 2 ? Visibility.Visible : Visibility.Hidden)
+        .onAreaChange(this.onCA)
+      // ⭐ 常驻播放器层（XComponent 单实例，跨分支常驻，几何随状态驱动）
+      this.buildPlayerOverlay()
+      if (this.referencePortraitFeedActive() && this.referenceFeedPreviewPinned) { this.ReferenceFeedPinnedPage() }
+      if (this.referenceLayout && !this.fs && !this.isLs && !this.referenceInfoHidden && !this.floatingMorph) { this.ReferenceChrome() }
+      this.ReferenceFeedPlaybackOverlay()
+      // Above the feed information gradient, which otherwise intercepts reset taps.
+      this.buildFullscreenResetButton()
+    }.width('100%').height('100%').hitTestBehavior(HitTestMode.None)
+  }
+
+  private referencePanelHeight(): number {
+    if (this.isLs) return Math.max(1, this.ch - this.referenceSafeTop() - this.safeCM());
+    const videoHeight = this.referenceFeedComments ? Math.max(100, this.ch * 0.34) : this.referenceDetailAreaHeight();
+    return Math.max(120, this.ch - this.referenceSafeTop() - videoHeight);
   }
 
   @Builder
   ReferencePortrait() {
-    Stack({ alignContent: Alignment.TopStart }) {
-      Column() {
-        Column() { this.ReferencePanel() }.width('100%').height('100%')
-          // 已有简介不随下一分P的首帧等待隐藏，切集期间只更新选中状态。
-          .visibility(this.waitingForFirstFrame && !this.vd ? Visibility.Hidden : Visibility.Visible)
-      }.width(this.isLs ? this.referenceLandscapePanelWidth() : this.cw)
-        .onAreaChange((_old: Area, area: Area) => {
-          if (this.referenceLandscapeResizeActive) {
-            const now = Date.now();
-            this.resizeLayoutCount++;
-            this.resizeLayoutMaxGap = Math.max(this.resizeLayoutMaxGap, now - this.resizeLayoutLastAt);
-            this.resizeLayoutLastAt = now;
-          }
-        })
-        .backgroundColor(this.isDarkMode ? '#17181A' : '#FFFFFF')
-        // Clip the wallpaper, native header and body together at the panel's outer edge.
-        // A square backing behind a separately rounded body leaves exposed top corners.
-        .borderRadius({ topLeft: this.isLs ? this.cardBorderRadius : 12,
-          topRight: this.isLs ? this.cardBorderRadius : 12,
-          bottomLeft: this.isLs ? this.cardBorderRadius : 0,
-          bottomRight: this.isLs ? this.cardBorderRadius : 0 }).clip(true)
-        .height(this.isLs ? Math.max(1, this.ch - this.referenceSafeTop() - this.safeCM()) :
-          Math.max(120, this.ch - (this.referenceSafeTop() +
-            (this.referenceFeedComments ? Math.max(100, this.ch * 0.34) : this.referenceDetailAreaHeight()))))
-        .position({ x: this.isLs ? this.referenceLandscapePanelX() : 0,
-          y: this.isLs ? this.referenceSafeTop() : this.referenceDetailPanelTop() })
-        .visibility(!this.isLs && !this.referenceFeedComments && this.referenceFeedProgress >= 1 ? Visibility.Hidden : Visibility.Visible)
-        .hitTestBehavior(this.referenceModeAnimating ? HitTestMode.None : HitTestMode.Default)
-    }.width('100%').height('100%').backgroundColor('#000000').onAreaChange(this.onCA)
+    Column() {
+      Column() { this.ReferencePanel() }.width('100%').height('100%')
+        // 已有简介不随下一分P的首帧等待隐藏，切集期间只更新选中状态。
+        .visibility(this.waitingForFirstFrame && !this.vd ? Visibility.Hidden : Visibility.Visible)
+    }.width('100%').height('100%')
+      .onAreaChange((_old: Area, area: Area) => {
+        if (this.referenceLandscapeResizeActive) {
+          const now = Date.now();
+          this.resizeLayoutCount++;
+          this.resizeLayoutMaxGap = Math.max(this.resizeLayoutMaxGap, now - this.resizeLayoutLastAt);
+          this.resizeLayoutLastAt = now;
+        }
+      })
+      .backgroundColor(this.isDarkMode ? '#17181A' : '#FFFFFF')
+      // Clip the wallpaper, native header and body together at the panel's outer edge.
+      // A square backing behind a separately rounded body leaves exposed top corners.
+      .borderRadius({ topLeft: this.isLs ? this.cardBorderRadius : 12,
+        topRight: this.isLs ? this.cardBorderRadius : 12,
+        bottomLeft: this.isLs ? this.cardBorderRadius : 0,
+        bottomRight: this.isLs ? this.cardBorderRadius : 0 }).clip(true)
+      .visibility(!this.isLs && !this.referenceFeedComments && this.referenceFeedProgress >= 1 ? Visibility.Hidden : Visibility.Visible)
+      .hitTestBehavior(this.referenceModeAnimating ? HitTestMode.None : HitTestMode.Default)
   }
 
   private referencePortraitFeedActive(): boolean {

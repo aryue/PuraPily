@@ -45,7 +45,7 @@ for (const isPgc_ of [false, true]) {
   p.referencePanelBodyTouch(touch(context.TouchType.Move, 140));
   assert.equal(p.referencePanelOffset, -70);
 }
-const panel = between('  ReferencePanel() {', '  ReferenceLandscapeResizeHandle() {');
+const panel = between('  ReferencePanel() {', '  ReferencePrimaryLayers() {');
 assert.ok(!panel.includes('this.bDetailCard()'), 'PGC must not fall back to the legacy intro');
 assert.ok(panel.includes('this.ReferenceIntro()'));
 const episodes = between('  episodeSheetContent() {', '  seasonSheetContent() {');

@@ -13,7 +13,7 @@ function between(start, end) {
 }
 const methods = [
   between('  private fullscreenTargetLandscape():', '  // ⭐ 退出全屏后恢复系统栏'),
-  between('  private snapshotPreFsBranch():', '  /** ⭐ 内容分支常驻渲染'),
+  between('  private snapshotPreFsBranch():', '  /** ⭐ 关灯+竖屏非全屏'),
   between('  private contentBranchKey():', '  /** ⭐ 转场状态翻转'),
   between('  private async restoreOrientationOnly():', '  private restoreFullscreenSource():'),
   between('  private restoreFullscreenSource():', '  // ⭐ 带动画进入全屏'),
@@ -36,7 +36,9 @@ async function test(feed) {
     fs: false, fsEntering: false, isAnimatingToFS: true, rotationInProgress: false,
     fsLerpSnapX: 0, fsLerpSnapY: 39, fsLerpSnapW: 440, fsLerpSnapH: 247.5,
     fsLerpSnapVW: 440, fsLerpSnapVH: 247.5,
-    mw: { getPreferredOrientation: () => 42, setPreferredOrientation: async orientation => { orientations.push(orientation); } },
+    fullscreenDeviceOrientation: { start() {}, stop() {} },
+    mw: { getPreferredOrientation: () => 42, disableLandscapeMultiWindow: async () => {},
+      setPreferredOrientation: async orientation => { orientations.push(orientation); } },
     updateIsLandscapeVertical() {}, updateVideoSize() {}, initOverlayRectSync() {}, manageSB() {}, resetFullscreenVideo() {},
     loadReferenceIntroExtras() {}
   });
@@ -48,7 +50,7 @@ async function test(feed) {
       p.commitFullscreenRotationLayout();
     }, 40);
   };
-  const entering = p.rotateReferenceFullscreen(true);
+  const entering = p.rotateReferenceFullscreen(true, true);
   await pause(5);
   assert.equal(p.fsEntering, true, 'hold the original picture until the window really rotates');
   assert.equal(p.contentBranchKey(), 'portrait', 'do not mount landscape details during rotation');
@@ -63,14 +65,15 @@ async function test(feed) {
 
   // Simulate unrelated state changes while fullscreen; returning restores the captured source.
   p.referenceFeed = !feed; p.referencePanelOffset = 0; p.referenceInfoHidden = false;
-  p.restoreOrientationOnly = async () => {
+  p.mw.setPreferredOrientation = async orientation => {
+    orientations.push(orientation);
     setTimeout(() => {
       p.cw = 440; p.ch = 744; p.isLs = false;
       p.commitFullscreenRotationLayout();
     }, 40);
   };
   p.isAnimatingToFS = true;
-  const exiting = p.rotateReferenceFullscreen(false);
+  const exiting = p.rotateReferenceFullscreen(false, false);
   await pause(5);
   assert.equal(p.fs, true, 'do not show landscape detail layout before portrait viewport arrives');
   assert.equal(p.fsEntering, true);
@@ -79,12 +82,13 @@ async function test(feed) {
   assert.equal(p.referenceFeedProgress, feed ? 1 : 0);
   assert.equal(p.referencePanelOffset, -23); assert.equal(p.referenceInfoHidden, true);
   assert.equal(p.fsPanProgress, 0); assert.equal(p.isAnimatingToFS, false);
-  assert.equal(orientations.at(-1), 42, 'restore the original window orientation policy');
+  assert.deepEqual(orientations, [42], 'restore the original policy in one request');
 }
 (async () => {
   const directionPage = new context.exports.Page();
   const requested = [];
   Object.assign(directionPage, { referenceLayout: true, isPcDevice: false,
+    fullscreenDeviceOrientation: { start() {} },
     mw: { enableLandscapeMultiWindow: async () => {}, setPreferredOrientation: async value => requested.push(value) } });
   for (const isLandscape of [false, true]) for (const ar of [9/16, 3/4, 1, 16/9]) {
     Object.assign(directionPage, { ar, isLs: isLandscape, fullscreenSource: { isLandscape } });
@@ -106,7 +110,8 @@ async function test(feed) {
     }).outputText, context);
     const compiledPage = new context.exports.CompiledPage();
     Object.assign(compiledPage, { referenceLayout: true, isPcDevice: false, isLs: true,
-      ar: 9/16, fullscreenSource: { isLandscape: true }, mw: directionPage.mw });
+      ar: 9/16, fullscreenSource: { isLandscape: true }, mw: directionPage.mw,
+      fullscreenDeviceOrientation: directionPage.fullscreenDeviceOrientation });
     await compiledPage.prepareFullscreenEnvironment();
     assert.equal(requested.at(-1), 2, 'compiled portrait video fullscreen must preserve landscape');
   }
@@ -115,11 +120,19 @@ async function test(feed) {
   const p = new context.exports.Page();
   const applied = [];
   Object.assign(p, { referenceLayout: true, isPcDevice: false,
+    isLs: true,
+    getUIContext: () => ({ getHostContext: () => ({}) }),
+    fullscreenDeviceOrientation: { stop() {}, returnLandscape: (policy, current) => {
+      assert.equal(policy, 42);
+      assert.equal(current, true);
+      return true;
+    } },
     fullscreenSource: { isLandscape: false, orientation: 42 },
     mw: { disableLandscapeMultiWindow: async () => {}, setPreferredOrientation: async value => { applied.push(value); } } });
   p.fullscreenRotationTransition = true;
+  assert.equal(p.fullscreenReturnLandscape(), true, 'landscape posture overrides portrait entry geometry');
   await p.restoreOrientationOnly();
-  assert.equal(applied.at(-1), 1, 'rotate to the source viewport before restoring auto orientation');
+  assert.deepEqual(applied, [42], 'rotating exit restores auto orientation directly');
   p.fullscreenRotationTransition = false;
   await p.restoreOrientationOnly();
   assert.equal(applied.at(-1), 42, 'same-orientation exit must retain the original orientation policy');

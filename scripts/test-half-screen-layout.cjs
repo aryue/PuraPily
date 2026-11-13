@@ -4,6 +4,11 @@ const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const ts = require(process.env.ARK_TYPESCRIPT || 'D:/Program Files/Huawei/DevEco Studio/sdk/default/openharmony/ets/build-tools/ets-loader/node_modules/typescript');
 const source = fs.readFileSync(path.resolve(__dirname, '../entry/src/main/ets/pages/VideoPlayerPage.ets'), 'utf8').replace(/\r\n/g, '\n');
+const geometry = { exports: {} };
+const geometrySource = fs.readFileSync(path.resolve(__dirname, '../entry/src/main/ets/utils/SplitPaneGeometry.ets'), 'utf8');
+vm.runInNewContext(ts.transpileModule(geometrySource, {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 }
+}).outputText, geometry);
 function between(start, end) {
   const from = source.indexOf(start);
   const to = source.indexOf(end, from + start.length);
@@ -18,6 +23,7 @@ const context = { exports: {}, clearTimeout, KeyboardAvoidMode: { NONE: 4 }, Tou
 }) }, media: { VideoScaleType: {
   VIDEO_SCALE_TYPE_FIT: 'stretch', VIDEO_SCALE_TYPE_FIT_CROP: 'crop', VIDEO_SCALE_TYPE_SCALED_ASPECT: 'contain'
 } } };
+Object.assign(context, geometry.exports);
 context.Curve = { EaseOut: 'ease-out' };
 vm.runInNewContext(ts.transpileModule(`export class Page {
   ${between('  private safeCM():', '  /** ⭐ 播放页竖屏评论区')}
@@ -342,10 +348,11 @@ function verifyLandscapeResize(page) {
         const width = page.referenceLandscapePlayerWidth();
         assert.ok(width >= last && width - last <= 5.000001, 'resize follows each drag frame');
         last = width;
-        close(page.referenceLandscapeDividerX(), isLayoutSwapped ? cw - width : width);
         const introEdge = page.referenceLandscapePanelX() + (isLayoutSwapped ? page.referenceLandscapePanelWidth() : 0);
-        close(page.referenceLandscapeHandleX() + 16, introEdge);
-        const visibleGripX = page.referenceLandscapeHandleX() + 14 + (isLayoutSwapped ? -2 : 2);
+        const handleX = geometry.exports.splitHandleX(page.referenceLandscapePanelX(),
+          page.referenceLandscapePanelWidth(), isLayoutSwapped);
+        close(handleX + 16, introEdge);
+        const visibleGripX = handleX + 14 + (isLayoutSwapped ? -2 : 2);
         close(isLayoutSwapped ? visibleGripX + 4 : visibleGripX, introEdge);
         close(page.referenceLandscapeMediaWidth() / page.referenceLandscapeMediaHeight(), 16/9);
         const margin = page.safeCM() * (1 - page.referenceLandscapeExpandProgress);
@@ -469,7 +476,7 @@ if (fs.existsSync(compiledFile)) {
     }
   }
   const names = ['closePlaybackOptionPanel', 'onDanmakuComposerChanged', 'landscapeDanmakuComposerHeight', 'danmakuComposerBottomInset', 'referenceLandscapeAreaHeight', 'referenceLandscapePlayerX', 'referenceLandscapePanelX', 'onLandscapePlaybackSideChanged', 'referenceHalfScreenControlsActive', 'safeCM', 'referenceLandscapeViewportWidth', 'referenceLandscapePlayerWidth', 'referenceLandscapeMediaWidth', 'referenceLandscapeMediaHeight',
-    'referenceLandscapeClampedWidth', 'referenceLandscapeResize', 'referenceLandscapeDividerX', 'referenceLandscapeHandleX', 'referenceLandscapePanelWidth', 'referenceLandscapeAreaTop',
+    'referenceLandscapeResize', 'referenceLandscapePanelWidth', 'referenceLandscapeAreaTop',
     'referenceLandscapeBeginResize', 'referenceLandscapeFinishResize', 'referenceLandscapeRestoreRatio', 'onRelatedVideoClick',
     'referenceIntroScrollOffset', 'ovRectX', 'ovRectY', 'ovRectW', 'ovRectH', 'ovVideoW', 'ovVideoH'];
   const bodies = names.map(name => {
@@ -478,7 +485,7 @@ if (fs.existsSync(compiledFile)) {
     const end = compiled.indexOf('\n    }', start);
     return compiled.slice(start, end + 6);
   }).join('\n');
-  const runtime = { exports: {}, clearTimeout, Curve: { EaseOut: 'ease-out' }, KeyboardAvoidMode: { NONE: 4 } };
+  const runtime = { ...geometry.exports, exports: {}, clearTimeout, Curve: { EaseOut: 'ease-out' }, KeyboardAvoidMode: { NONE: 4 } };
   vm.runInNewContext(ts.transpileModule(`export class Page { ${bodies} }`, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 }
   }).outputText, runtime);

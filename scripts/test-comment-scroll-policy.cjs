@@ -30,7 +30,7 @@ for (const inRefresh of [true, false, true]) {
     assert.equal(calls.cachedCount[0], inRefresh ? 4 : 1, 'keep a bounded cache of heavy comment rows');
   }
 }
-const refreshPage = compiled.slice(compiled.indexOf('    ReferenceCommentPage('), compiled.indexOf('    ReferenceLandscapeResizeHandle('));
+const refreshPage = compiled.slice(compiled.indexOf('    ReferenceCommentPage('), compiled.indexOf('    private async refreshReferenceComments('));
 assert.match(refreshPage, /commentListCore\.bind\(this\)\(false, !this.isLs && this.referenceFeedComments, true\)/);
 assert.ok(!refreshPage.includes('commentAreaCore.bind'), 'Refresh must not contain the card/overlay wrapper');
 assert.match(compiled, /commentAreaCore\.bind\(this\)\(false, true, true\)/, 'fullscreen keeps independent scrolling');

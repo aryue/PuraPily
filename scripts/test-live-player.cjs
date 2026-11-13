@@ -2,6 +2,10 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const ts = require('D:/Program Files/Huawei/DevEco Studio/sdk/default/openharmony/ets/build-tools/ets-loader/node_modules/typescript');
+const geometry = { exports: {} };
+vm.runInNewContext(ts.transpileModule(fs.readFileSync('entry/src/main/ets/utils/SplitPaneGeometry.ets', 'utf8'), {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 }
+}).outputText, geometry);
 const source = fs.readFileSync('entry/build/default/cache/default/default@CompileArkTS/esmodule/debug/entry/src/main/ets/pages/LivePlayerPage.ts', 'utf8');
 // Builder 的视觉口径直接读源码：编译产物会改写 builder 结构，但字符串与修饰符仍在
 const etsSource = fs.readFileSync('entry/src/main/ets/pages/LivePlayerPage.ets', 'utf8');
@@ -11,12 +15,12 @@ assert.ok(etsSource.includes("this.liveFullscreen ? '#66000000' : '#00000000'"),
   'split top bar has no gradient shade while fullscreen keeps it');
 assert.ok(etsSource.includes("@StorageLink('cardMargin') cardMargin"),
   'split margin reads the shared cardMargin setting');
-assert.ok(etsSource.includes('this.landscapePanelX() + (this.landscapeSwapped() ? this.landscapePanelWidth() : 0) - 16'),
-  'resize handle touch target straddles the divider so both sides can start a drag');
-assert.ok(etsSource.includes('.translate({ x: this.landscapeSwapped() ? -2 : 2 })'),
-  'visible handle bar sits on the detail side of the divider');
-assert.ok(etsSource.includes('justifyContent(FlexAlign.Center)'),
-  'handle keeps its centred touch target');
+const splitLayout = fs.readFileSync('entry/src/main/ets/components/SplitPaneLayout.ets', 'utf8');
+assert.ok(etsSource.includes('SplitPaneLayout({') && splitLayout.includes('.id(this.handleId)'),
+  'live uses the shared resize handle with its own id');
+assert.ok(splitLayout.includes('.translate({ x: this.swapped ? -2 : 2 })') &&
+  splitLayout.includes('justifyContent(FlexAlign.Center)'),
+  'the shared visible grip sits on the detail side of a centred touch target');
 assert.ok(!etsSource.includes('if (this.landscapeResizeActive && this.landscapeResizePanelWidth > 0) return'),
   'panel container width must never be frozen during a drag');
 assert.ok(!etsSource.includes('landscapePanelTabWidth(') && !etsSource.includes('landscapeResizeActive'),
@@ -84,14 +88,14 @@ assert.ok(etsSource.includes('if (!this.liveFullscreenLocked) this.applyRotation
   'async window init must not override an active fullscreen landscape lock');
 assert.ok(areaChangeSource.includes('if (this.liveFullscreenLocked && !this.pendingLandscapeFullscreen)'),
   'physical rotation does not reset the fullscreen page while locked');
-assert.ok(etsSource.includes('else this.unlockFullscreenLandscape();'),
-  'leaving split-origin fullscreen hands orientation back to the global setting');
+assert.ok(etsSource.includes('void this.unlockFullscreenLandscape();'),
+  'leaving fullscreen hands orientation back to the global setting');
 function section(start, end) {
   const a = source.indexOf(start), b = source.indexOf(end, a);
   assert.ok(a >= 0 && b > a);
   return source.slice(a, b);
 }
-const ctx = { exports: {}, clearTimeout, setTimeout, getLiveRoomInfo: async () => null, logInfo() {}, Curve: { EaseOut: 0 }, fetchLiveRoomsByArea: async () => [{ roomId: 3 }, { roomId: 2 }],
+const ctx = { ...geometry.exports, exports: {}, clearTimeout, setTimeout, getLiveRoomInfo: async () => null, logInfo() {}, Curve: { EaseOut: 0 }, fetchLiveRoomsByArea: async () => [{ roomId: 3 }, { roomId: 2 }],
   fetchRecommendedLiveRooms: async () => [{ roomId: 1 }, { roomId: 2 }, { roomId: 3 }, { roomId: 3 }],
   AppStorage: { setOrCreate(key, value) { ctx.isFullscreenFlag = value; }, set() {}, get: () => undefined },
   window: { Orientation: { AUTO_ROTATION_LANDSCAPE: 1, PORTRAIT: 2, AUTO_ROTATION_RESTRICTED: 3, AUTO_ROTATION: 4 },
@@ -105,7 +109,7 @@ const methods = section('  private portraitRoom()', '  private async setPortrait
   section('  private introRooms(', '  private async switchRoom(') +
   section('  private async switchRoom(', '  private resetLive(') +
   section('  private applyStreamQuality(', '  private async startPlay(') +
-  section('  private onTM(', '  private async applyRotationMode(');
+  section('  private onTM(', '  private LiveAction(');
 vm.runInNewContext(ts.transpileModule(`export class Page { constructor() { this.startLiveChat = () => {}; this.finishLevelGesture = () => {}; this.previewRelease = Promise.resolve(); this.previewTask = Promise.resolve(); this.previewGeneration = 0; this.activeSlot = 0; this.previewRoomId = 0; this.touchActive = true; } ${methods} }`, {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 }
 }).outputText, ctx);
@@ -148,8 +152,17 @@ async function main() {
   near(p.videoLeft(), p.landscapePlayerX() + (p.landscapePlayerWidth() - p.videoW()) / 2, 'video follows the swapped area');
   p.landscapePlaybackSide = 'left';
   // 分界限位：播放区至少 280，信息区至少 220
-  near(p.landscapeClampedWidth(10), 280, 'minimum player width');
-  near(p.landscapeClampedWidth(790), 800 - 220, 'panel keeps its minimum width');
+  near(geometry.exports.clampSplitWidth(800, 10), 280, 'minimum player width');
+  near(geometry.exports.clampSplitWidth(800, 790), 800 - 220, 'panel keeps its minimum width');
+  near(geometry.exports.clampSplitWidth(400, 10), 160, 'the minimum adapts to a narrow window');
+  const customResize = geometry.exports.splitResize(800, 750, 200, 150);
+  near(customResize.ratio, 650 / 800, 'resize respects custom minimum widths');
+  near(customResize.expand, 100 / 150, 'expansion starts at the custom limit');
+  near(geometry.exports.splitPrimaryWidth(800, customResize.ratio, customResize.expand, 200, 150),
+    750, 'the custom width and expansion produce the dragged size');
+  near(geometry.exports.splitSecondaryWidth(800, customResize.ratio, 10, 200, 150),
+    130, 'the secondary pane retains its resting width while expanding');
+  near(geometry.exports.splitHandleX(500, 300, false, 40), 480, 'custom handle width stays centered');
   // 全屏：连续展开量驱动几何（liveFullscreen 只是逻辑标志，不再瞬变）
   Object.assign(p, { liveFullscreen: true, landscapeExpand: 1 });
   near(p.landscapePlayerX(), 0, 'fullscreen player starts at the window edge');
@@ -161,7 +174,7 @@ async function main() {
     'fullscreen panel keeps its resting width instead of collapsing');
   assert.ok(p.landscapePanelX() >= 800, 'fullscreen panel is translated off-screen (edge on the zero-margin layout)');
   // 面板宽度按整像素对齐，允许 1vp 误差
-  assert.ok(Math.abs(p.landscapeDockPanelWidth() - (800 - 800 * 2 / 3 - 2 * p.landscapeInset())) <= 1,
+  assert.ok(Math.abs(p.landscapeMenuDockWidth() - (800 - 800 * 2 / 3 - 2 * p.landscapeInset())) <= 1,
     'menu keeps the resting panel width in fullscreen');
   near(p.landscapeDockPanelX(), 800 * 2 / 3 + p.landscapeInset(), 'menu stays on the panel side in fullscreen');
   p.landscapePlaybackSide = 'right';
@@ -169,7 +182,6 @@ async function main() {
   p.landscapePlaybackSide = 'left';
   Object.assign(p, { liveFullscreen: false, landscapeExpand: 0 });
   near(p.landscapeDockPanelX(), p.landscapePanelX(), 'split landscape keeps the live panel position');
-  near(p.landscapeDockPanelWidth(), p.landscapePanelWidth(), 'split landscape keeps the live panel width');
   // 分栏菜单贴播放区右下（三点按钮也在播放区），全屏沿用收起态面板 dock
   Object.assign(p, { viewportWidth: 800, viewportHeight: 400, liveFullscreen: false,
     landscapeRatio: 2 / 3, landscapeExpand: 0, landscapePlaybackSide: 'left' });
@@ -192,9 +204,10 @@ async function main() {
   near(p.landscapePanelTop() + p.landscapePanelHeight(), 400, 'detail panel reaches the window bottom');
   near(p.landscapeAreaTop() + p.landscapeAreaHeight(), 400, 'player area reaches the window bottom');
   // 拖动柄：32vp 触控区整体落在详情面板内，左右布局都成立
-  near(p.landscapeHandleX(), p.landscapePanelX() - 16, 'resize handle touch target straddles the divider');
+  near(geometry.exports.splitHandleX(p.landscapePanelX(), p.landscapePanelWidth(), false), p.landscapePanelX() - 16, 'resize handle touch target straddles the divider');
   p.landscapePlaybackSide = 'right';
-  near(p.landscapeHandleX(), p.landscapePanelX() + p.landscapePanelWidth() - 16,
+  near(geometry.exports.splitHandleX(p.landscapePanelX(), p.landscapePanelWidth(), true),
+    p.landscapePanelX() + p.landscapePanelWidth() - 16,
     'swapped handle touch target straddles the divider');
   p.landscapePlaybackSide = 'left';
   // 设置项仍生效：cardMargin 非零时两侧同步留边（普通页 safeCM 同口径）
@@ -256,20 +269,31 @@ async function main() {
   assert.equal(p.panelPrimaryColor(), '#18191C');
   near(p.panelTabIndicatorTravel(), 14 + 20 + 14, 'tab indicator follows the swiper progress');
   // 竖屏全屏按钮：请求横屏并标记旋转后落到横屏全屏
+  delete p.applyRotationMode;
   Object.assign(p, { viewportWidth: 400, viewportHeight: 800, landscapeExpand: 0, liveFullscreen: false,
-    pendingLandscapeFullscreen: false, portraitFullscreenOrigin: false });
-  let requestedOrientation = null;
+    pendingLandscapeFullscreen: false, fullscreenExitTimer: -1, rotationMode: 'auto',
+    fullscreenDeviceOrientation: { start() {}, stop() {}, returnLandscape: () => true },
+    settleInformation() {} });
+  const portraitOrientations = [];
   p.mw = { enableLandscapeMultiWindow: () => Promise.resolve(),
     disableLandscapeMultiWindow: () => Promise.resolve(),
-    setPreferredOrientation: (o) => { requestedOrientation = o; return Promise.resolve(); } };
+    setPreferredOrientation: (o) => { portraitOrientations.push(o); return Promise.resolve(); } };
   p.enterPortraitFullscreen();
   assert.equal(p.pendingLandscapeFullscreen, true, 'portrait fullscreen waits for the rotation');
-  assert.equal(p.portraitFullscreenOrigin, true);
-  assert.equal(requestedOrientation, 1, 'portrait fullscreen requests landscape orientation');
-  p.restorePortraitFullscreenRotation();
-  assert.equal(p.portraitFullscreenOrigin, false, 'exiting fullscreen releases the portrait origin');
-  assert.equal(requestedOrientation, 2, 'exiting fullscreen requests portrait orientation');
-  // 全屏横向锁定：横屏分栏进全屏锁横屏，退出交还全局设置；竖屏入口仍强制回竖屏
+  assert.deepEqual(portraitOrientations, [1], 'portrait fullscreen requests landscape orientation');
+  Object.assign(p, { viewportWidth: 800, viewportHeight: 400, landscapeExpand: 1, liveFullscreen: true });
+  p.toggleLandscapeFullscreen();
+  await new Promise(setImmediate);
+  assert.deepEqual(portraitOrientations, [1, 4], 'portrait entry can return directly to landscape split');
+  p.fullscreenDeviceOrientation.returnLandscape = () => false;
+  Object.assign(p, { landscapeExpand: 1, liveFullscreen: true, liveFullscreenLocked: true });
+  p.toggleLandscapeFullscreen();
+  assert.equal(p.liveFullscreen, true, 'keep fullscreen until the portrait viewport arrives');
+  await new Promise(setImmediate);
+  assert.deepEqual(portraitOrientations, [1, 4, 4], 'portrait return also restores only the automatic policy');
+  p.finishFullscreenExit();
+  p.fullscreenDeviceOrientation.returnLandscape = () => true;
+  // 全屏横向锁定：横屏分栏进全屏锁横屏，退出交还全局设置。
   let orientations = [];
   let rotationRestores = 0;
   p.mw = { enableLandscapeMultiWindow: () => Promise.resolve(),
@@ -277,7 +301,7 @@ async function main() {
     setPreferredOrientation: (o) => { orientations.push(o); return Promise.resolve(); } };
   p.applyRotationMode = async () => { rotationRestores++; };
   Object.assign(p, { viewportWidth: 800, viewportHeight: 400, liveFullscreen: false,
-    landscapeExpand: 0, portraitFullscreenOrigin: false, pendingLandscapeFullscreen: false,
+    landscapeExpand: 0, pendingLandscapeFullscreen: false,
     liveFullscreenLocked: false, settleInformation() {} });
   p.toggleLandscapeFullscreen();
   assert.equal(p.liveFullscreenLocked, true, 'split-origin fullscreen locks the window landscape');
@@ -285,6 +309,7 @@ async function main() {
   assert.equal(p.liveFullscreen, true, 'fullscreen flag settles after the expand animation');
   p.toggleLandscapeFullscreen();
   assert.equal(p.liveFullscreenLocked, false, 'leaving fullscreen releases the landscape lock');
+  await new Promise(setImmediate);
   assert.equal(rotationRestores, 1, 'leaving fullscreen restores the global rotation setting');
   // 拖柄甩入全屏走同一把锁
   orientations = [];
@@ -334,7 +359,15 @@ async function main() {
   assert.equal(p.liveFullscreen, true, 'dragging past the threshold enters fullscreen');
   near(p.landscapePlayerWidth(), 800, 'fullscreen owns the geometry after release');
   p.liveFullscreen = false;
-  Object.assign(p, { landscapeRatio: 2 / 3, landscapeExpand: 0 });
+  Object.assign(p, { landscapeRatio: 2 / 3, landscapeExpand: 0, landscapePlaybackSide: 'right' });
+  p.beginLandscapeResize();
+  p.landscapeResize(-40);
+  assert.ok(Math.abs(p.landscapePlayerWidth() - (800 * 2 / 3 + 40)) <= 1,
+    'drag grows the player in the opposite direction when swapped');
+  p.finishLandscapeResize(0, true);
+  near(p.landscapeRatio, 2 / 3, 'cancelling a swapped drag restores the original ratio');
+  near(p.landscapeExpand, 0, 'cancelling clears the expansion');
+  p.landscapePlaybackSide = 'left';
   // 去掉上面的桩，后面要继续验真实的信息显隐
   delete p.settleInformation;
   // 控件全部搬到播放区：分栏与全屏的单击都切控件显隐，侧栏面板是常驻结构
