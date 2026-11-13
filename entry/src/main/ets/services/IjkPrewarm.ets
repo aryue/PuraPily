@@ -22,7 +22,10 @@ export class IjkPrewarm {
     const referer = result.mediaReferer ?? 'https://www.bilibili.com/';
     const cookie = AppStorage.get<string>('biliCookie') || '';
     const forced = AppStorage.get<number>('prewarmSeekMs') ?? 0;
-    const seekMs = forced > 0 ? forced : (resumeSec > 0 ? Math.round(resumeSec * 1000) : 0);
+    const resumeMs = Math.round(resumeSec * 1000);
+    const duration = dash.timelength || 0;
+    const seekMs = forced > 0 ? forced :
+      (resumeMs > 0 && (duration <= 0 || duration > resumeMs + 2000) ? resumeMs : 0);
     try {
       const v = native.prewarmUrl(video.baseUrl, agent, referer, cookie, 512 * 1024, seekMs);
       const a = native.prewarmUrl(audio.baseUrl, agent, referer, cookie, 64 * 1024, seekMs);

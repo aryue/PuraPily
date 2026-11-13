@@ -479,7 +479,10 @@ void *purapily_prefix_take(const char *url, const char *agent, const char *refer
         int kept = found->pb != NULL;
         pthread_mutex_unlock(&found->lock);
         if (failed) { retire(found); return NULL; }
-        OH_LOG_Print(LOG_APP,LOG_INFO,0,"Prefix","take limit=%{public}d filled=%{public}d net=%{public}d",found->limit,filled,kept);
+        OH_LOG_Print(LOG_APP,LOG_INFO,0,"Prefix",
+            "take limit=%{public}d filled=%{public}d net=%{public}d target_ms=%{public}d age_ms=%{public}lld",
+            found->limit,filled,kept,found->seek_ms,
+            (long long)((av_gettime_relative()-found->created)/1000));
     }
     return found; // transfers pool ownership, including a pending job
 }

@@ -91,6 +91,8 @@ struct StartupOpen {
     const CacheCtx *ctx;
     AVIOInterruptCB parent;
     const char *url;
+    int64_t started_at;
+    int64_t finished_at;
     atomic_int cancelled;
     atomic_int done;
     AVIOContext *pb;
@@ -476,6 +478,7 @@ static void *startup_open(void *opaque)
     if (pb && (avio_read(pb, &first_byte, 1) != 1 || avio_seek(pb, 0, SEEK_SET) != 0))
         avio_closep(&pb);
     attempt->pb = pb;
+    attempt->finished_at = av_gettime_relative();
     atomic_store(&attempt->done, 1);
     return NULL;
 }
@@ -487,6 +490,7 @@ static StartupOpen *start_open(const CacheCtx *ctx, const char *url, pthread_t *
     attempt->ctx = ctx;
     attempt->parent = ctx->ic;
     attempt->url = url;
+    attempt->started_at = av_gettime_relative();
     atomic_init(&attempt->cancelled, 0);
     atomic_init(&attempt->done, 0);
     if (!pthread_create(thread, NULL, startup_open, attempt)) return attempt;
@@ -522,6 +526,10 @@ static AVIOContext *open_startup(CacheCtx *ctx)
     for (int i = 0; i < 2; i++) {
         if (!attempts[i]) continue;
         pthread_join(threads[i], NULL);
+        OH_LOG_Print(LOG_APP, LOG_INFO, 0, "PlaybackNetwork",
+            "startup attempt=%{public}s start_ms=%{public}lld finish_ms=%{public}lld ok=%{public}d selected=%{public}d",
+            i ? "backup" : "base", (long long)((attempts[i]->started_at - started) / 1000),
+            (long long)((attempts[i]->finished_at - started) / 1000), attempts[i]->pb != NULL, i == winner);
         if (i == winner) continue;
         if (attempts[i]->pb) avio_closep(&attempts[i]->pb);
         av_free(attempts[i]);

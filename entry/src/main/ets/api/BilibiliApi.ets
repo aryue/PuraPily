@@ -1347,9 +1347,7 @@ export function prefetchVideoPlayback(id: string, cid: number, qn: number): void
       .then((result: PlayUrlResult) => {
         // 复用列表的有界前缀任务；续播时前缀直接对准目标分片，未完成也由播放线程接管同一份数据。
         // 本地进度优先（列表阶段就能用），没有就退回 playurl 返回的服务端续播点。
-        const local: number = PlaybackProgress.current(id, cid);
-        const resume: number = local >= 0 ? local :
-          Math.max(0, Math.round((result.lastPlayTimeMs ?? 0) / 1000));
+        const resume: number = PlaybackProgress.prewarmPosition(id, cid, result.lastPlayTimeMs ?? 0);
         IjkPrewarm.warm(result, resume);
         PlaybackWarmPlayer.get().start(cid, result);
       })
@@ -1362,9 +1360,7 @@ export function prefetchVideoPlayback(id: string, cid: number, qn: number): void
     const realCid: number = cid || detail.cid || detail.pages?.[0]?.cid || 0;
     return getVideoPlayUrl(detail.bvid, realCid, qn)
       .then((result: PlayUrlResult) => {
-        const local: number = PlaybackProgress.current(detail.bvid, realCid);
-        const resume: number = local >= 0 ? local :
-          Math.max(0, Math.round((result.lastPlayTimeMs ?? 0) / 1000));
+        const resume: number = PlaybackProgress.prewarmPosition(detail.bvid, realCid, result.lastPlayTimeMs ?? 0);
         IjkPrewarm.warm(result, resume);
         PlaybackWarmPlayer.get().start(realCid, result);
       });

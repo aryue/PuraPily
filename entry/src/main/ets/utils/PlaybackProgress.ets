@@ -48,6 +48,12 @@ export class PlaybackProgress {
     return PlaybackProgress.resume(entry.position, entry.duration, entry.completed);
   }
 
+  static prewarmPosition(id: string, cid: number, serverMs: number): number {
+    let position = PlaybackProgress.current(id, cid);
+    if (position < 0) position = PlaybackProgress.currentByCid(cid);
+    return position >= 0 ? position : Math.max(0, serverMs / 1000);
+  }
+
   /**
    * 按 cid 兜底查续播点（列表阶段用）：首页卡片的 id 可能是 aid（数字），而播放页
    * 保存进度时 key 里用的是 bvid，两者拼出的 key 不同 —— 直接用 current() 会永远
