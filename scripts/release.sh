@@ -35,7 +35,8 @@ source scripts/release-version.sh
 code=$(release_version_code "$version")
 
 [[ "$(git symbolic-ref --quiet --short HEAD)" == main ]] || fail "请在 main 分支上运行"
-[[ -z "$(git status --porcelain)" ]] || fail "请先提交或移走工作区中的改动"
+[[ -z "$(git status --porcelain -- AppScope/app.json5)" ]] ||
+  fail "AppScope/app.json5 有未提交改动，请先处理，发版提交会更新该文件"
 read_app_version
 current_version_code=$(release_version_code "$VERSION_NAME")
 (( code > VERSION_CODE && code > current_version_code )) ||
@@ -72,8 +73,7 @@ read_app_version
 [[ "$VERSION_NAME" == "$version" && "$VERSION_CODE" == "$code" ]] ||
   fail "写入版本号后校验失败"
 
-git add -- AppScope/app.json5
-git commit -m "release: $version"
+git commit --only -m "release: $version" -- AppScope/app.json5
 git tag -a "$tag" --cleanup=verbatim -F "$notes_file"
 
 if ! git push --atomic --no-follow-tags origin refs/heads/main "refs/tags/$tag"; then

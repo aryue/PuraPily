@@ -6147,6 +6147,7 @@ struct VideoPlayerPage {
       if (mediaReferer) mediaHeaders['Referer'] = mediaReferer;
       // ⭐ 服务端续播点兜底：路由未带进度（从番剧页/推荐/搜索进入）时，用该集自己的观看位置恢复
       this.applyServerResumePoint(result);
+      if (AppStorage.get<boolean>('startupFromBeginning') === true) this.initialProgress_ = 0;
       this.startupSourceDurationMs_ = result.dash?.timelength || 0;
       profile?.mark('resume-ms', Math.round(this.initialProgress_ * 1000));
       // 更新为服务器实际返回的画质（可能被降级）。只描述当前这条：
@@ -15288,10 +15289,10 @@ struct VideoPlayerPage {
       .hitTestBehavior((!this.isLs && this.referenceFeed ? !this.referenceInfoHidden : this.cv) && !this.mp ? HitTestMode.Default : HitTestMode.None)
   }
 
-  private referenceFeedChromeHitTest(): HitTestMode {
+  private referenceFeedChromeHitTest(visibleMode: HitTestMode = HitTestMode.Default): HitTestMode {
     // None 只让容器自身透传，子节点仍会命中并截住评论的第二次拖动。
     // 保留信息栏的淡出动画，但让整棵隐藏子树退出触摸测试。
-    return this.referenceFeed && !this.referenceFeedComments ? HitTestMode.Default : HitTestMode.BLOCK_DESCENDANTS;
+    return this.referenceFeed && !this.referenceFeedComments ? visibleMode : HitTestMode.BLOCK_DESCENDANTS;
   }
 
   @Builder
@@ -15302,11 +15303,13 @@ struct VideoPlayerPage {
           Row({ space: 4 }) {
             Image($r('app.media.ref_fullscreen')).width(12).height(12).fillColor('#FFFFFF')
             Text('全屏播放').fontSize(12).fontColor('#FFFFFF')
-          }.padding(8).borderRadius(18).backgroundColor('#AA17181A').onClick(() => this.toggleFS())
+          }.padding(8).borderRadius(18).backgroundColor('#AA17181A')
+            .id('reference-feed-fullscreen').onClick(() => this.toggleFS())
         }.width('100%').justifyContent(FlexAlign.Center)
-          .position({ x: 0, y: this.referenceFullscreenButtonTop() }).zIndex(8)
+          // 与底部信息层重叠时优先命中按钮，横向留白继续透传给下层。
+          .position({ x: 0, y: this.referenceFullscreenButtonTop() }).zIndex(9)
           .opacity(this.referenceFeedProgress * (1 - this.referenceFeedCommentAmount()))
-          .hitTestBehavior(this.referenceFeedChromeHitTest())
+          .hitTestBehavior(this.referenceFeedChromeHitTest(HitTestMode.None))
       }
       Column({ space: 6 }) {
         if (this.referenceInfoHidden) {

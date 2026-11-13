@@ -41,6 +41,12 @@
 #define CACHE_EVICT_AT (300LL * 1024 * 1024)   // 超过 300MB 开始清理
 #define IDX_MAGIC "PDC4"
 #define STARTUP_BACKUP_DELAY_US 350000
+static atomic_int startup_backup_delay_us = STARTUP_BACKUP_DELAY_US;
+
+void purapily_cache_set_startup_backup_delay(int delay_ms)
+{
+    atomic_store(&startup_backup_delay_us, delay_ms == 0 ? 0 : STARTUP_BACKUP_DELAY_US);
+}
 
 extern void *purapily_prefix_take(const char *,const char *,const char *,const char *);
 extern int64_t purapily_prefix_size(void *,const AVIOInterruptCB *);
@@ -93,6 +99,7 @@ struct StartupOpen {
     const char *url;
     int64_t started_at;
     int64_t finished_at;
+    int64_t bytes_read;
     atomic_int cancelled;
     atomic_int done;
     AVIOContext *pb;
@@ -475,8 +482,11 @@ static void *startup_open(void *opaque)
     // A successful HTTP open alone does not tell us whether the body is stalled.
     // Rewind inside the AVIO buffer so the demuxer sees the first byte.
     uint8_t first_byte;
-    if (pb && (avio_read(pb, &first_byte, 1) != 1 || avio_seek(pb, 0, SEEK_SET) != 0))
-        avio_closep(&pb);
+    if (pb) {
+        int ready = avio_read(pb, &first_byte, 1) == 1 && avio_seek(pb, 0, SEEK_SET) == 0;
+        attempt->bytes_read = pb->bytes_read;
+        if (!ready) avio_closep(&pb);
+    }
     attempt->pb = pb;
     attempt->finished_at = av_gettime_relative();
     atomic_store(&attempt->done, 1);
@@ -501,6 +511,7 @@ static StartupOpen *start_open(const CacheCtx *ctx, const char *url, pthread_t *
 static AVIOContext *open_startup(CacheCtx *ctx)
 {
     int64_t started = av_gettime_relative();
+    int delay_us = atomic_load(&startup_backup_delay_us);
     pthread_t threads[2];
     StartupOpen *attempts[2] = { start_open(ctx, ctx->url, &threads[0]), NULL };
     if (!attempts[0]) return NULL;
@@ -510,7 +521,7 @@ static AVIOContext *open_startup(CacheCtx *ctx)
     while (!startup_interrupted(attempts[0])) {
         int primary_done = atomic_load(&attempts[0]->done);
         if (primary_done && attempts[0]->pb) { winner = 0; break; }
-        if (!backup_started && (primary_done || av_gettime_relative() - started >= STARTUP_BACKUP_DELAY_US)) {
+        if (!backup_started && (primary_done || av_gettime_relative() - started >= delay_us)) {
             backup_started = 1;
             attempts[1] = start_open(ctx, ctx->backup_url, &threads[1]);
         }
@@ -527,9 +538,10 @@ static AVIOContext *open_startup(CacheCtx *ctx)
         if (!attempts[i]) continue;
         pthread_join(threads[i], NULL);
         OH_LOG_Print(LOG_APP, LOG_INFO, 0, "PlaybackNetwork",
-            "startup attempt=%{public}s start_ms=%{public}lld finish_ms=%{public}lld ok=%{public}d selected=%{public}d",
+            "startup attempt=%{public}s start_ms=%{public}lld finish_ms=%{public}lld ok=%{public}d selected=%{public}d body_bytes=%{public}lld",
             i ? "backup" : "base", (long long)((attempts[i]->started_at - started) / 1000),
-            (long long)((attempts[i]->finished_at - started) / 1000), attempts[i]->pb != NULL, i == winner);
+            (long long)((attempts[i]->finished_at - started) / 1000), attempts[i]->pb != NULL, i == winner,
+            (long long)attempts[i]->bytes_read);
         if (i == winner) continue;
         if (attempts[i]->pb) avio_closep(&attempts[i]->pb);
         av_free(attempts[i]);
@@ -544,9 +556,9 @@ static AVIOContext *open_startup(CacheCtx *ctx)
     }
     ctx->startup_net = attempts[winner];
     OH_LOG_Print(LOG_APP, LOG_INFO, 0, "PlaybackNetwork",
-        "startup CDN winner=%{public}s backup_attempted=%{public}d cost_ms=%{public}lld",
+        "startup CDN winner=%{public}s backup_attempted=%{public}d cost_ms=%{public}lld delay_ms=%{public}d",
         winner == 1 ? "backup" : "base", backup_started,
-        (long long)((av_gettime_relative() - started) / 1000));
+        (long long)((av_gettime_relative() - started) / 1000), delay_us / 1000);
     return ctx->startup_net->pb;
 }
 

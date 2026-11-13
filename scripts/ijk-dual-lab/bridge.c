@@ -6,6 +6,7 @@
 
 int ijk_lab_register_dual(void);
 void purapily_cache_set_dir(const char *dir);
+void purapily_cache_set_startup_backup_delay(int delay_ms);
 int purapily_prefetch_head_async(const char *dir, const char *url, const char *agent,
                                  const char *referer, const char *cookie);
 void register_player_backend(napi_env env, napi_value exports);
@@ -20,8 +21,8 @@ static int read_string(napi_env env, napi_value value, char *buffer, size_t capa
 
 static napi_value source(napi_env env, napi_callback_info info)
 {
-    napi_value args[11], result;
-    size_t argc = 11;
+    napi_value args[12], result;
+    size_t argc = 12;
     char directory[512], video[16384], audio[16384], path[600];
     char videoBackup[16384] = "", audioBackup[16384] = "";
     char agent[4096] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36";
@@ -58,6 +59,9 @@ static napi_value source(napi_env env, napi_callback_info info)
     int64_t videoBps = 0, audioBps = 0;
     if (argc >= 10) napi_get_value_int64(env, args[9], &videoBps);
     if (argc >= 11) napi_get_value_int64(env, args[10], &audioBps);
+    int32_t backupDelayMs = 350;
+    if (argc >= 12) napi_get_value_int32(env, args[11], &backupDelayMs);
+    purapily_cache_set_startup_backup_delay(backupDelayMs);
     // 稀疏分段缓存（64KB 块 + 段表）：默认开启，--ps diskCache off 关闭做 A/B。
     // 连续前缀版的「带续播点重开 prepared→frame +1.1s」回归已由稀疏分块消除。
     purapily_cache_set_dir(cacheOn ? directory : NULL);

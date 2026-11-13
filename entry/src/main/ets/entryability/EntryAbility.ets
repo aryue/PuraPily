@@ -203,6 +203,12 @@ export default class EntryAbility extends UIAbility {
     if (want.parameters?.['diskCache'] !== undefined) {
       AppStorage.setOrCreate('playbackDiskCache', String(want.parameters['diskCache']) !== 'off');
     }
+    if (want.parameters?.['startupBackupDelay'] !== undefined) {
+      AppStorage.setOrCreate('startupBackupDelayMs', String(want.parameters['startupBackupDelay']) === '0' ? 0 : 350);
+    }
+    if (String(want.parameters?.['startupFromBeginning']) === 'true') {
+      AppStorage.setOrCreate('startupFromBeginning', true);
+    }
     // 点击瞬间首帧区间任务（官方 addTask 形态）默认关闭：实测赶不上首帧；
     // --ps headPrefetch on 开启做对照，待连接池补齐后再转正。
     if (want.parameters?.['headPrefetch'] !== undefined) {

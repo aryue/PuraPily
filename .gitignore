@@ -52,7 +52,7 @@ __pycache__/
 /.codeartsdoer/
 /.atomcode/
 /.merkle-snapshot.json
-
+/.release-notes.md
 # ── 本地设计稿与临时图 ──
 /design-refs/
 /generated-images/

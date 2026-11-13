@@ -34,20 +34,26 @@ const refreshPage = compiled.slice(compiled.indexOf('    ReferenceCommentPage(')
 assert.match(refreshPage, /commentListCore\.bind\(this\)\(false, !this.isLs && this.referenceFeedComments, true\)/);
 assert.ok(!refreshPage.includes('commentAreaCore.bind'), 'Refresh must not contain the card/overlay wrapper');
 assert.match(compiled, /commentAreaCore\.bind\(this\)\(false, true, true\)/, 'fullscreen keeps independent scrolling');
-const hitTestMethod = compiled.match(/referenceFeedChromeHitTest\(\): HitTestMode \{([\s\S]*?)\n    \}/);
+const hitTestMethod = compiled.match(/referenceFeedChromeHitTest\(visibleMode: HitTestMode = HitTestMode.Default\): HitTestMode \{([\s\S]*?)\n    \}/);
 assert.ok(hitTestMethod, 'compiler must retain the chrome hit-test method');
-const chromeHitTest = new Function('HitTestMode', hitTestMethod[1]);
+const chromeHitTest = new Function('HitTestMode', 'visibleMode = HitTestMode.Default', hitTestMethod[1]);
 const hitTestModes = { Default: 0, None: 3, BLOCK_DESCENDANTS: 5 };
 for (const referenceFeed of [false, true]) {
   for (const referenceFeedComments of [false, true]) {
     assert.equal(chromeHitTest.call({ referenceFeed, referenceFeedComments }, hitTestModes),
       referenceFeed && !referenceFeedComments ? 0 : 5,
       'hidden chrome must exclude every descendant, including Slider and action buttons');
+    assert.equal(chromeHitTest.call({ referenceFeed, referenceFeedComments }, hitTestModes, hitTestModes.None),
+      referenceFeed && !referenceFeedComments ? 3 : 5,
+      'fullscreen row must pass through touches outside the button and exclude the button while comments are open');
   }
 }
 const chrome = compiled.slice(compiled.indexOf('    ReferenceChrome('));
-assert.equal((chrome.match(/\.hitTestBehavior\(this.referenceFeedChromeHitTest\(\)\)/g) || []).length, 2,
-  'both fullscreen shortcut and bottom chrome must apply the subtree policy');
+assert.match(chrome, /Row\.id\('reference-feed-fullscreen'\);\s+Row\.onClick\(\(\) => this\.toggleFS\(\)\);/);
+const shortcut = chrome.slice(chrome.indexOf('y: this.referenceFullscreenButtonTop()'));
+const chromeRow = chrome.slice(chrome.indexOf('y: this.feedChromeTop()'));
+assert.match(shortcut, /Row\.zIndex\(9\);[\s\S]*?Row\.hitTestBehavior\(this\.referenceFeedChromeHitTest\(HitTestMode\.None\)\);/);
+assert.match(chromeRow, /Column\.zIndex\(8\);[\s\S]*?Column\.hitTestBehavior\(this\.referenceFeedChromeHitTest\(\)\);/);
 const intercept = compiled.match(/referencePanelTouchIntercept\(event: TouchEvent\): HitTestMode \{([\s\S]*?)\n    \}/);
 assert.ok(intercept, 'inertia interception must survive CompileArkTS');
 vm.runInNewContext(ts.transpileModule(`export function intercept(event) { ${intercept[1]} }`,

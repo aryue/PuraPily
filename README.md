@@ -128,7 +128,7 @@ PuraPily 面向 HarmonyOS，提供视频、直播、番剧、动态与个人空�
 
 ## 发版
 
-在工作区干净、已同步 `origin/main` 的 `main` 分支准备发版。说明文件可以放在仓库外，正文会写入 annotated tag 并用于 GitHub Release。
+在已同步 `origin/main` 的 `main` 分支准备发版。发版提交只包含 `AppScope/app.json5`，该文件需要没有未提交改动。其他文件的本地改动和暂存内容可以保留。说明文件可以在仓库内或仓库外编辑，当前正文会写入 annotated tag 并用于 GitHub Release。
 
 ```powershell
 scripts\release.cmd --dry-run 2.1.2 ..\release-notes.md
