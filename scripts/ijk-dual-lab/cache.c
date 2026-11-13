@@ -70,6 +70,7 @@ typedef struct {
     int64_t net_end;             // 本条连接可服务到的逻辑末尾（total 或 INT64_MAX）
     int64_t network_bytes;
     int64_t network_logged_at, network_logged_bytes, network_read_max_us;
+    int first_network_read;
     int64_t expected_bps, sample_bytes, sample_read_us;
     int slow_source;
     int64_t net_pos;
@@ -405,6 +406,12 @@ static int failover_once(CacheCtx *ctx)
 static void record_network_read(CacheCtx *ctx, int n, int64_t started)
 {
     int64_t now = av_gettime_relative();
+    if (n > 0 && !ctx->first_network_read) {
+        ctx->first_network_read = 1;
+        OH_LOG_Print(LOG_APP, LOG_INFO, 0, "PlaybackNetwork",
+            "first media read offset=%{public}lld bytes=%{public}d wait_us=%{public}lld",
+            (long long)ctx->net_pos, n, (long long)(now - started));
+    }
     if (n > 0 && !ctx->using_backup && ctx->expected_bps > 0) {
         ctx->sample_bytes += n;
         ctx->sample_read_us += now - started;

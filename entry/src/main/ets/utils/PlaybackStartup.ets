@@ -140,6 +140,12 @@ export class PlaybackStartup {
     PlaybackStartup.report(event);
   }
 
+  static frameSignal(source: string, waiting: boolean): void {
+    if (PlaybackStartup.sessionStart <= 0) return;
+    hilog.info(DOMAIN, TAG, '[Startup] frame-signal=%{public}s offset=%{public}dms waiting=%{public}d',
+      source, Date.now() - PlaybackStartup.sessionStart, waiting ? 1 : 0);
+  }
+
   static deactivate(span: PlaybackSpan | null): void {
     if (span !== null && PlaybackStartup.activeSpan === span) {
       PlaybackStartup.activeSpan = null;

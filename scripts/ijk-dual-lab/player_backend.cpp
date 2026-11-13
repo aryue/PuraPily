@@ -38,6 +38,7 @@ void Deliver(napi_env env, napi_value callback, void *, void *data)
 }
 
 struct Player {
+    int id = 0;
     std::atomic<int64_t> prepareAt{0};
     IjkMediaPlayer *native = nullptr;
     OHNativeWindow *window = nullptr;
@@ -92,16 +93,21 @@ int MessageLoop(void *argument)
     auto native = static_cast<IjkMediaPlayer *>(argument);
     auto player = static_cast<Player *>(ijkmp_get_weak_thiz(native));
     AVMessage message;
+    bool firstFrameRendered = false;
     while (ijkmp_get_msg(native, &message, 1) > 0) {
-        if (player && (message.what == FFP_MSG_OPEN_INPUT ||
+        if (player && !firstFrameRendered && (message.what == FFP_MSG_OPEN_INPUT ||
             message.what == FFP_MSG_FIND_STREAM_INFO || message.what == FFP_MSG_COMPONENT_OPEN ||
             message.what == FFP_MSG_PREPARED || message.what == FFP_MSG_VIDEO_DECODED_START ||
-            message.what == FFP_MSG_VIDEO_RENDERING_START)) {
+            message.what == FFP_MSG_VIDEO_RENDERING_START || message.what == FFP_MSG_BUFFERING_START ||
+            message.what == FFP_MSG_BUFFERING_END || message.what == FFP_MSG_SEEK_COMPLETE ||
+            message.what == FFP_MSG_ACCURATE_SEEK_COMPLETE)) {
             const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now().time_since_epoch()).count();
             OH_LOG_Print(LOG_APP, LOG_INFO, 0, "IjkBackend",
-                "startup event=%{public}d elapsed=%{public}lldms", message.what,
-                static_cast<long long>(now - player->prepareAt.load()));
+                "startup event=%{public}d elapsed=%{public}lldms id=%{public}d arg1=%{public}d arg2=%{public}d",
+                message.what, static_cast<long long>(now - player->prepareAt.load()),
+                player->id, message.arg1, message.arg2);
+            firstFrameRendered = message.what == FFP_MSG_VIDEO_RENDERING_START;
         }
         if (player && player->events) {
             auto event = new Event{message.what, message.arg1, message.arg2};
@@ -176,6 +182,7 @@ napi_value Create(napi_env env, napi_callback_info info)
         "playback config queue_mib=%{public}d framedrop=%{public}d max_fps=%{public}d min_packets=200",
         PURA_PROBE_QUEUE_MIB, PURA_PROBE_FRAMEDROP, PURA_MAX_FPS);
     int id = nextId++;
+    player->id = id;
     std::string identity = "purapily-" + std::to_string(id);
     ijkmp_set_id(player->native, identity.data());
     players.emplace(id, player);
@@ -195,14 +202,16 @@ napi_value Prepare(napi_env env, napi_callback_info info)
     uint64_t surface = 0;
     try { surface = std::stoull(String(env, args[2])); } catch (...) { return Number(env, -1); }
     int rc = player->bind(surface);
-    OH_LOG_Print(LOG_APP, LOG_INFO, 0, "IjkBackend", "prepare surface=%{public}llu bind=%{public}d", static_cast<unsigned long long>(surface), rc);
-    if (rc) return Number(env, rc);
     double position = 0;
     napi_get_value_double(env, args[3], &position);
 #if defined(PURA_PROBE_START_MS) && PURA_PROBE_START_MS >= 0
     position = PURA_PROBE_START_MS;
     OH_LOG_Print(LOG_APP, LOG_INFO, 0, "IjkBackend", "diagnostic fixed_start=%{public}.0f", position);
 #endif
+    OH_LOG_Print(LOG_APP, LOG_INFO, 0, "IjkBackend",
+        "prepare surface=%{public}llu bind=%{public}d id=%{public}d target_ms=%{public}.0f",
+        static_cast<unsigned long long>(surface), rc, player->id, position);
+    if (rc) return Number(env, rc);
     ijkmp_set_option_int(player->native, 4, "seek-at-start", static_cast<int64_t>(position));
     auto path = String(env, args[1]);
     rc = ijkmp_set_data_source(player->native, path.c_str());
@@ -227,7 +236,11 @@ napi_value Control(napi_env env, napi_callback_info info)
         case 1: return Number(env, ijkmp_start(player->native));
         case 2: return Number(env, ijkmp_pause(player->native));
         case 3: return Number(env, ijkmp_seek_to(player->native, static_cast<long>(value)));
-        case 4: ijkmp_set_playback_rate(player->native, value); break;
+        case 4:
+            ijkmp_set_playback_rate(player->native, value);
+            OH_LOG_Print(LOG_APP, LOG_INFO, 0, "IjkBackend", "playback rate requested=%{public}.2f applied=%{public}.2f",
+                value, ijkmp_get_property_float(player->native, FFP_PROP_FLOAT_PLAYBACK_RATE, 1));
+            break;
         case 5: ijkmp_android_set_volume(player->native, value, value); break;
         case 6: return Number(env, ijkmp_get_current_position(player->native));
         case 7: return Number(env, ijkmp_get_duration(player->native));

@@ -36,6 +36,7 @@ export class FloatingPiP {
   private onPlaybackTime_: (time: number) => void = (time: number): void => {
     const player = PlayerService.getInstance();
     if (player.videoPlayer !== this.observedVideo_) return;
+    if (this.seekPlayer_ === player.videoPlayer && this.activeSeekMs_ >= 0) return;
     if (player.playerState) player.playerState.currentTime = time / 1000;
     if (this.observedVideo_?.state === 'playing') {
       player.getDashServer?.()?.prefetchForPlayback?.(time, player.playerState?.playbackRate || 1);
@@ -46,6 +47,11 @@ export class FloatingPiP {
   private seekPlayer_: PlaybackPlayer | null = null;
   private pendingSeekMs_: number = -1;
   private lastSeekAt_: number = 0;
+  private activeSeekMs_: number = -1;
+  private seekDoneTimer_: number = -1;
+  private onSeekDone_: (position: number) => void = (position: number): void => {
+    if (this.activeSeekMs_ >= 0 && Math.abs(position - this.activeSeekMs_) <= 1000) this.finishSeek();
+  };
   private seekDelay_: number = -1;
   private seekInterval_: number = -1;
   private seekDirection_: number = 0;
@@ -185,15 +191,12 @@ export class FloatingPiP {
     LiveViewHelper.setControlHandlers({
       play: () => { FloatingVideoTransition.clearPausedFrame(); player.play(); this.syncPlayback(); },
       pause: () => { player.pause(); this.syncPlayback(); },
-      seek: (time: number) => {
-        const current = player.videoPlayer?.currentTime ?? 0;
-        this.pendingSeekMs_ = -1;
-        this.seekBy((time - current) / 1000);
-      }
+      seek: (time: number) => { this.seekTo(time); }
     });
   }
 
   private endPlaybackObservation(): void {
+    this.resetSeek();
     if (!this.observedVideo_) return;
     this.observedVideo_.off('stateChange', this.onPlaybackState_);
     this.observedVideo_.off('timeUpdate', this.onPlaybackTime_);
@@ -237,28 +240,68 @@ export class FloatingPiP {
     const player = PlayerService.getInstance();
     const video = player.videoPlayer;
     if (!player.hasActivePlayer || !video) return;
+    let current = player.audioPlayer ? player.audioPlayer.currentTime : video.currentTime;
+    if (!Number.isFinite(current) || current < 0) current = video.currentTime;
+    if (!Number.isFinite(current) || current < 0) current = 0;
+    // 连点时从最后一次请求的进度累计。
+    if (this.seekPlayer_ === video && this.pendingSeekMs_ >= 0 &&
+      (this.activeSeekMs_ >= 0 || (Date.now() - this.lastSeekAt_ < 1200 &&
+        Math.abs(current - this.pendingSeekMs_) > 750))) current = this.pendingSeekMs_;
+    this.seekTo(current + seconds * 1000);
+  }
+
+  private seekTo(position: number): void {
+    const player = PlayerService.getInstance();
+    const video = player.videoPlayer;
+    if (!player.hasActivePlayer || !video || !Number.isFinite(position)) return;
     try {
-      let current = player.audioPlayer ? player.audioPlayer.currentTime : video.currentTime;
-      if (!Number.isFinite(current) || current < 0) current = video.currentTime;
-      if (!Number.isFinite(current) || current < 0) current = 0;
-      const now = Date.now();
-      // seek 完成前的连续点击也应累计，不能反复从尚未更新的 currentTime 跳转。
-      if (this.seekPlayer_ === video && this.pendingSeekMs_ >= 0 && now - this.lastSeekAt_ < 1200 &&
-        Math.abs(current - this.pendingSeekMs_) > 750) current = this.pendingSeekMs_;
       const duration = video.duration > 0 ? video.duration : (player.playerState?.duration ?? 0) * 1000;
-      let target = Math.max(0, Math.round(current + seconds * 1000));
+      let target = Math.max(0, Math.round(position));
       if (Number.isFinite(duration) && duration > 0) target = Math.min(duration, target);
-      video.seek(target, media.SeekMode.SEEK_CLOSEST);
-      FloatingVideoTransition.clearPausedFrame();
-      player.audioPlayer?.seek(target, media.SeekMode.SEEK_CLOSEST);
-      this.seekPlayer_ = video;
+      if (this.seekPlayer_ !== video) {
+        this.resetSeek();
+        this.seekPlayer_ = video;
+        video.on('seekDone', this.onSeekDone_);
+      }
       this.pendingSeekMs_ = target;
-      this.lastSeekAt_ = now;
+      this.lastSeekAt_ = Date.now();
+      FloatingVideoTransition.clearPausedFrame();
       if (player.playerState) player.playerState.currentTime = target / 1000;
       AppStorage.setOrCreate('cardCurrentTime', target / 1000);
       LiveViewHelper.updateProgress(target / 1000);
-      logInfo(`[FloatingPiP] seekBy(${seconds}): ${current} -> ${target}ms`);
-    } catch (error) { logWarn(`[FloatingPiP] seek: ${error}`); }
+      if (this.activeSeekMs_ < 0) this.sendSeek(video, target);
+    } catch (error) { this.resetSeek(); logWarn(`[FloatingPiP] seek: ${error}`); }
+  }
+
+  private sendSeek(video: PlaybackPlayer, target: number): void {
+    this.activeSeekMs_ = target;
+    this.seekDoneTimer_ = setTimeout(() => this.finishSeek(), 900);
+    try {
+      // 先下发音频，视频即使同步回调也可以直接交接到排队的目标。
+      PlayerService.getInstance().audioPlayer?.seek(target, media.SeekMode.SEEK_CLOSEST);
+      video.seek(target, media.SeekMode.SEEK_CLOSEST);
+      logInfo(`[FloatingPiP] seek to ${target}ms`);
+    } catch (error) { this.resetSeek(); logWarn(`[FloatingPiP] seek: ${error}`); }
+  }
+
+  private finishSeek(): void {
+    clearTimeout(this.seekDoneTimer_);
+    this.seekDoneTimer_ = -1;
+    const previous = this.activeSeekMs_;
+    this.activeSeekMs_ = -1;
+    const video = this.seekPlayer_;
+    if (video && PlayerService.getInstance().videoPlayer === video && this.pendingSeekMs_ !== previous) {
+      this.sendSeek(video, this.pendingSeekMs_);
+    }
+  }
+
+  private resetSeek(): void {
+    clearTimeout(this.seekDoneTimer_);
+    this.seekDoneTimer_ = -1;
+    this.seekPlayer_?.off('seekDone', this.onSeekDone_);
+    this.seekPlayer_ = null;
+    this.activeSeekMs_ = -1;
+    this.pendingSeekMs_ = -1;
   }
 
   syncPlayback(): void {

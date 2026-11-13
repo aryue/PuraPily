@@ -43,8 +43,11 @@ async function main(){
  storage.set('videoMinimized',true);await pip.open(ui,1920,1080);
  controllers.at(-1).action('playbackStateChanged',0);controllers.at(-1).action('playbackStateChanged',1);
  assert.equal(player.pauses,1);assert.equal(player.plays,1);
-  const makeVideo = (time, duration = 100000) => ({ currentTime: time, duration,
-    targets: [], seek(target, mode) { assert.equal(mode, 2); this.targets.push(target); } });
+  const makeVideo = (time, duration = 100000) => ({ currentTime: time, duration, listeners: new Map(),
+    targets: [], seek(target, mode) { assert.equal(mode, 2); this.targets.push(target); },
+    on(event, callback) { this.listeners.set(event, callback); },
+    off(event) { this.listeners.delete(event); },
+    seekDone() { this.listeners.get('seekDone')?.(this.targets.at(-1)); } });
   player.hasActivePlayer = true;
   player.videoPlayer = makeVideo(30000); player.audioPlayer = makeVideo(30000);
   player.playerState = { currentTime: 30, duration: 100 };
@@ -52,9 +55,14 @@ async function main(){
   assert.equal(player.videoPlayer.targets.at(-1), 45000);
   assert.equal(player.audioPlayer.targets.at(-1), 45000, 'audio/video seek to the same time');
   controllers.at(-1).action('fastForward');
-  assert.equal(player.videoPlayer.targets.at(-1), 60000, 'rapid clicks accumulate before currentTime updates');
+  assert.deepEqual(player.videoPlayer.targets, [45000], 'wait for the in-flight seek before sending another');
+  assert.equal(player.playerState.currentTime, 60, 'rapid clicks accumulate before currentTime updates');
+  player.videoPlayer.seekDone();
+  assert.deepEqual(player.videoPlayer.targets, [45000, 60000]);
   controllers.at(-1).action('fastBackward');
+  player.videoPlayer.seekDone();
   assert.equal(player.videoPlayer.targets.at(-1), 45000, 'system PiP uses the same fixed 15-second step');
+  player.videoPlayer.seekDone();
   assert.equal(player.playerState.currentTime, 45);
   assert.equal(storage.get('notificationProgress'), 45);
   player.videoPlayer = makeVideo(2000); player.audioPlayer = makeVideo(2000);
@@ -66,6 +74,7 @@ async function main(){
   player.videoPlayer = makeVideo(30000); player.audioPlayer = makeVideo(30000);
   pip.beginSeek(1); pip.endSeek();
   assert.equal(player.videoPlayer.targets.at(-1), 45000, 'short press skips exactly 15 seconds');
+  player.videoPlayer.seekDone();
   assert.equal(timers.size, 0);
   const countBeforeCancel = player.videoPlayer.targets.length;
   pip.beginSeek(-1); pip.endSeek(true);
@@ -76,8 +85,11 @@ async function main(){
   pip.beginSeek(1);
   const delay = [...timers.values()][0]; timers.clear(); delay();
   assert.equal(player.videoPlayer.targets.at(-1), 32000, 'hold starts scanning without a 15-second click');
+  player.videoPlayer.seekDone();
   const repeat = [...timers.values()][0]; repeat(); repeat(); repeat();
+  player.videoPlayer.seekDone();
   assert.equal(player.videoPlayer.targets.at(-1), 38000, 'holding continuously advances');
+  player.videoPlayer.seekDone();
   assert.equal(player.pauses, pauses + 1);
   pip.endSeek();
   assert.equal(player.videoPlayer.targets.at(-1), 38000, 'release does not add a click');
@@ -86,12 +98,14 @@ async function main(){
   player.videoPlayer = makeVideo(30000); player.audioPlayer = makeVideo(30000);
   player.playbackState = 'paused';
   pip.beginSeek(-1); const rewind = [...timers.values()][0]; timers.clear(); rewind();
+  player.videoPlayer.seekDone();
   const repeatBack = [...timers.values()][0]; repeatBack();
   assert.equal(player.videoPlayer.targets.at(-1), 26000);
+  player.videoPlayer.seekDone();
   pip.endSeek(true);
   assert.equal(player.playbackState, 'paused', 'cancel preserves prior paused state');
   assert.equal(timers.size, 0);
-  const listeners=new Map();
+  const listeners=player.videoPlayer.listeners;
   player.videoPlayer.on=(event,callback)=>listeners.set(event,callback);
   player.videoPlayer.off=(event,callback)=>{assert.equal(listeners.get(event),callback);listeners.delete(event)};
   pip.takeoverPlayback();

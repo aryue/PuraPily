@@ -461,6 +461,7 @@ struct VideoPlayerPage {
   private referenceFeedTouchDirection: number = 0
   private referenceFeedTouchAllowed: boolean = false
   private referenceFeedPanOwnsTouch: boolean = false
+  private referenceFeedPlayerTouchTracking: boolean = false
   private referenceFeedDragOriginY: number = 0
   // 手势起始于换页动画途中时，动画还会继续走，原点已经过期；等动画结束要重新锚定，
   // 否则手指一动页面会从动画终点跳回「半路 + 位移」。
@@ -2407,7 +2408,7 @@ struct VideoPlayerPage {
         // （旧版 play/pause 都调 togglePP，后台已暂停时点通知栏"暂停"反而触发播放）
         play: () => { this.mediaSessionPlay(); },
         pause: () => { if (this.play) { this.togglePP(); } },
-        seek: (time: number) => { this.seek(time / 1000, false); },
+        seek: (time: number) => { this.seek(time / 1000, false, true); },
       });
       LiveViewHelper.create(this.getUIContext().getHostContext() as common.Context, this.vi.title, this.vi.cover,
         this.vi.bvid, this.dur, this.vd?.owner?.name ?? '').catch(() => {});
@@ -2494,6 +2495,7 @@ struct VideoPlayerPage {
     }
     // 等 300ms 让播放器稳定
     await new Promise<void>(r => setTimeout(r, 300));
+    if (Math.abs(this.rt - 1.0) > 0.01) return;
     let videoPos: number = 0;
     let audioPos: number = 0;
     try { videoPos = this.av.currentTime; } catch (_e) {}
@@ -2527,7 +2529,7 @@ struct VideoPlayerPage {
       this.videoSpeedFixTimer_ = -1;
     }
     if (this.isSpeed2x_) {
-      try { this.av?.setSpeed(this.rateToSpeedIdx(1.0)); } catch (_e) {}
+      try { this.av?.setSpeed(this.rateToSpeedIdx(this.rt)); } catch (_e) {}
       this.isSpeed2x_ = false;
       this.isSpeedFixIn2xPhase_ = false;
     }
@@ -3147,6 +3149,8 @@ struct VideoPlayerPage {
   // ⭐ seek 补提交目标（last-wins）：seek 在途时到来的新目标记在这里，由 finally 补一次
   //   原先是直接 return 丢弃，表现为"点进度条点两次才生效 / 松手后跳回去"
   private pendingSeekTarget_: number = -1
+  private pendingSeekFast_: boolean = false
+  private pendingSeekResetControls_: boolean = false
   // 当前这轮 seek 是否交互路径（决定过期 seekDone 的容差：CLOSEST 很准，PREV_SYNC 会退一个 GOP）
   private seekFastMode_: boolean = false
   // ⭐ 音频淡变令牌 + 当前增益：连续 seek 时后一次淡变必须作废前一次的步进，
@@ -3209,7 +3213,7 @@ struct VideoPlayerPage {
   private textSelectDialogId_: number = -1
   // ⭐ seek完成Promise的resolve函数
   private videoSeekResolve_: (() => void) | null = null
-  private audioSeekResolve_: (() => void) | null = null
+  private audioSeekResolve_: ((position: number) => void) | null = null
   // ⭐ 视频第一帧渲染完成的resolve函数
   private startRenderFrameResolve_: (() => void) | null = null
   // ⭐ 音视频同步定时器
@@ -4243,6 +4247,7 @@ struct VideoPlayerPage {
    * 后台播放只允许真正切后台，页面跳转始终暂停，包括尚未准备完成的播放器。
    */
   onPageHide(): void {
+    this.referenceCancelFeedPlayerTouch();
     this.playerPageVisible = false;
     this.fullscreenDeviceOrientation.stop();
     // ⭐ 记录本次隐藏的成因：栈顶已变成别的页面就是跳页，不是切后台；
@@ -4401,6 +4406,7 @@ struct VideoPlayerPage {
   }
 
   aboutToDisappear() {
+    this.referenceCancelFeedPlayerTouch();
     this.fullscreenDeviceOrientation.stop();
     if (this.neighborWarmTimer_ !== -1) {
       clearTimeout(this.neighborWarmTimer_);
@@ -6378,9 +6384,10 @@ struct VideoPlayerPage {
     });
     // ⭐ 注册seekDone回调，用于同步等待seek完成
     this.avAudio.on('seekDone', (pos: number) => {
+      if (this.avAudio !== audioPlayer) return;
       logInfo(`[VideoPlayer] audio seekDone: ${pos}ms`);
       if (this.audioSeekResolve_) {
-        this.audioSeekResolve_();
+        this.audioSeekResolve_(pos);
         this.audioSeekResolve_ = null;
       }
     });
@@ -6454,7 +6461,7 @@ struct VideoPlayerPage {
       // （旧版 play/pause 都调 togglePP，后台已暂停时点通知栏"暂停"反而触发播放）
       play: () => { if (!this.play) { this.togglePP(); } },
       pause: () => { if (this.play) { this.togglePP(); } },
-      seek: (time: number) => { this.seek(time / 1000, false); },
+      seek: (time: number) => { this.seek(time / 1000, false, true); },
     });
     // ⭐ 创建实况窗：不阻塞起播（fire-and-forget，内部已全 try/catch；媒体会话在首帧后数百 ms 内就绪）
     LiveViewHelper.create(this.getUIContext().getHostContext() as common.Context, this.vi.title, this.vi.cover, this.vi.bvid, this.dur, this.vd?.owner?.name ?? '').catch(() => {});
@@ -6507,7 +6514,7 @@ struct VideoPlayerPage {
         // 创建等待seekDone的Promise
         const videoSeekDone = new Promise<void>(resolve => { this.videoSeekResolve_ = resolve; });
         const audioSeekDone = this.avAudio
-          ? new Promise<void>(resolve => { this.audioSeekResolve_ = resolve; })
+          ? new Promise<void>(resolve => { this.audioSeekResolve_ = (): void => resolve(); })
           : Promise.resolve();
 
         // 执行seek操作
@@ -6618,8 +6625,9 @@ struct VideoPlayerPage {
    *    只认这个回调，会让「首帧看门狗」把正常播放误判成卡死：15s 后释放并重建播放器；
    *    如果那一刻视频刚好播完，续播点会被算成 0 —— 现象就是「视频播放结束了，声音又从头开始」。
    */
-  private confirmFirstFrame(player: PlaybackPlayer): void {
+  private confirmFirstFrame(player: PlaybackPlayer, source: string): void {
     if (this.av !== player) return;
+    PlaybackStartup.frameSignal(source, this.waitingForFirstFrame);
     if (this.waitingForFirstFrame) {
       this.playbackProfile?.once('frame');
       PlaybackStartup.deactivate(this.playbackProfile);
@@ -6643,7 +6651,7 @@ struct VideoPlayerPage {
       // ⭐ 时钟在走 = 画面早就出了，只是 native 没补报 startRenderFrame。
       //    这种情况下绝不能重建播放器（播完时重建会把续播点算成 0，直接从头重播）。
       if (player.state === 'playing' && player.currentTime >= clockStart + 500) {
-        this.confirmFirstFrame(player);
+        this.confirmFirstFrame(player, 'watchdog-clock');
         logInfo('[VideoPlayer] 首帧看门狗：时钟已在走，按已出帧收尾');
         return;
       }
@@ -6668,7 +6676,7 @@ struct VideoPlayerPage {
       // ⭐ 时钟已在走就说明首帧出了：立刻摘掉「等首帧」状态与看门狗，
       //    避免 15s 定时器把正常播放误判成卡死（IJK 可能不补报 startRenderFrame）。
       if (this.waitingForFirstFrame && player.state === 'playing' && position >= clockStart + 500) {
-        this.confirmFirstFrame(player);
+        this.confirmFirstFrame(player, 'playback-clock');
         this.referenceFeedMainFrameResolve?.();
         this.referenceFeedMainFrameResolve = null;
       }
@@ -6788,12 +6796,17 @@ struct VideoPlayerPage {
       //   位置。旧实现拿它去完成新一轮的等待，结果 ct 被写成旧位置（进度条先跳回去一下），
       //   而真正那次 seekDone 就没人等了（实测 `seek end target=55 landed=148`）。
       //   判据只用「与当前目标的位置差」：SEEK_CLOSEST 落点很近，SEEK_PREV_SYNC 允许退一个 GOP。
-      if (this.sg_ && this.seekExpectedPosition >= 0 &&
+      if (this.seekProgressPending && this.seekExpectedPosition >= 0 &&
         Math.abs(pos / 1000 - this.seekExpectedPosition) > (this.seekFastMode_ ? 4 : 10)) {
         logInfo(`[VideoPlayer] 忽略过期 seekDone ${pos}ms（目标 ${this.seekExpectedPosition}s）`);
         return;
       }
       this.videoSeekPosition = pos / 1000;
+      if (this.sg_ && this.pendingSeekTarget_ >= 0) {
+        this.videoSeekResolve_?.();
+        this.videoSeekResolve_ = null;
+        return;
+      }
       const savePending = this.seekProgressPending;
       this.seekProgressPending = false;
       this.playbackProfile?.mark('seek-done', pos);
@@ -6811,7 +6824,7 @@ struct VideoPlayerPage {
     // ⭐ 注册startRenderFrame回调，用于检测视频第一帧渲染完成
     this.av.on('startRenderFrame', () => {
       if (this.av !== player || (this.referenceFeed && generation !== this.referenceSwitchGeneration)) return;
-      this.confirmFirstFrame(player);
+      this.confirmFirstFrame(player, 'native-render');
       logInfo(`[VideoPlayer] video startRenderFrame - 第一帧已渲染`);
       this.referenceSpareSurfaceMounted = true;
       this.referenceFeedMainFrameResolve?.();
@@ -7356,12 +7369,11 @@ struct VideoPlayerPage {
     //   实测 5 次连点各发一次 → 只有第一次(174s)生效，最后停在 2:54 而不是用户点的 6:19。
     if (this.sg_) {
       this.pendingSeekTarget_ = v;
+      this.pendingSeekFast_ = fast;
+      this.pendingSeekResetControls_ = rs;
       this.ct = v;
       this.bufferedUntil = v;
-      this.videoSeekPosition = -1;
       this.seekProgressPending = true;
-      this.seekExpectedPosition = v;
-      this.seekFastMode_ = fast;
       logInfo(`[VideoPlayer] seek merge → ${v.toFixed(2)}s（等在途 seek 落地后再打）`);
       return;
     }
@@ -7380,65 +7392,68 @@ struct VideoPlayerPage {
     const resume = this.play || seekPlayer.state === 'playing' || wasCompleted;
     // ⭐ 交互路径收紧等待（原 1500/600/500）：单轮 700ms 已覆盖绝大多数 seekDone，
     //   没回来的直接进入下一轮/由合并循环收口，不再让用户等满一轮超时。
-    const videoWait = fast ? 700 : 1500;
-    const audioWait = fast ? 250 : 500;
-    const renderWait = fast ? 450 : 3000;
-    const reseekWait = fast ? 250 : 500;
-    // ⭐ 交互 seek 用 SEEK_CLOSEST（跳最近帧）；默认 SEEK_PREV_SYNC 只跳上一关键帧，
-    //   长 GOP 片源上会明显"跳不到点"
-    const seekMode = fast ? media.SeekMode.SEEK_CLOSEST : media.SeekMode.SEEK_PREV_SYNC;
     let target = v;
+    let landed = false;
+    let audioLanded = false;
     try {
       // ⭐ 只有 DASH 双流（avAudio 是独立实例）才需要"暂停 → 各自 seek → 再起播"。
       //   单流/ IJK 播放器**绝不 pause**：
       //     1) 音频输出设备停/起各一次，就是快进快退时那串「啪」的爆音（淡变只能压住一部分）；
       //     2) pause 之后要等 seekDone 才 play，中间是真空静音 + 整段延迟；
       //     3) IJK 在播放中 seek 本来就会自己冲刷重解码，pause 纯属多余。
-      if (resume && seekAudio) {
-        // 淡出 40ms 再停：直接把音频缓冲截断在半波上就是那声「啪」
-        this.rampAudio_(0, 40);
-        await this.delayMs_(40);
+      if (resume && !this.mute) {
+        const fadeMs = fast ? 24 : 40;
+        this.rampAudio_(0, fadeMs);
+        await this.delayMs_(fadeMs);
         if (!stillSeeking()) return;
+      }
+      if (resume && seekAudio) {
         await Promise.all([seekPlayer.pause(), seekAudio.pause()]);
         if (!stillSeeking()) return;
         this.play = false;
-      } else if (resume) {
-        // ⭐ 单流（IJK）不暂停，但 seek 会清空音频缓冲、从任意采样点接续，半波截断照样会「啪」。
-        //   所以这里只把增益淡出 40ms 再发 seek，落地后淡入 —— 不换设备、不留静音间隙。
-        this.rampAudio_(0, 40);
-        await this.delayMs_(40);
-        if (!stillSeeking()) return;
       }
       // ⭐ 合并循环：每轮**等这一次真的落地**（seekDone 或超时）再改打最新目标。
       //   在途时补发的 seek 会被 IJK 丢掉，所以宁可少发、不能乱发。
       for (let round = 0; round < 4; round++) {
+        // 淡出或等待读线程时收到的操作可以直接替换尚未发送的目标。
+        if (this.pendingSeekTarget_ >= 0) {
+          target = this.pendingSeekTarget_;
+          this.pendingSeekTarget_ = -1;
+          fast = this.pendingSeekFast_;
+          rs = this.pendingSeekResetControls_;
+        }
+        this.videoSeekPosition = -1;
+        this.seekExpectedPosition = target;
+        this.seekFastMode_ = fast;
+        this.seekProgressPending = true;
         this.videoSeekResolve_ = null;
         this.audioSeekResolve_ = null;
-        let landed = false;
+        landed = false;
+        audioLanded = false;
         const videoSeekDone = new Promise<void>(resolve => {
           this.videoSeekResolve_ = (): void => { landed = true; resolve(); };
         });
-        const audioSeekDone = seekAudio ? new Promise<void>(resolve => { this.audioSeekResolve_ = resolve; }) : undefined;
+        const audioSeekDone = new Promise<void>(resolve => {
+          if (seekAudio) this.audioSeekResolve_ = (position: number): void => {
+            audioLanded = Math.abs(position - target * 1000) <= 120;
+            resolve();
+          };
+          else resolve();
+        });
+        const seekMode = fast ? media.SeekMode.SEEK_CLOSEST : media.SeekMode.SEEK_PREV_SYNC;
         seekPlayer.seek(target * 1000, seekMode);
-        seekAudio?.seek(target * 1000);
-        // Wait for paused/completed seeks too, before saving the actual position or replaying.
-        // 第 2 轮起放宽：此时大概率是在等上一次真正落位，催太紧只会把 seek 丢掉。
-        await Promise.race([videoSeekDone, this.delayMs_(round === 0 ? videoWait : videoWait + 500)]);
+        seekAudio?.seek(target * 1000, media.SeekMode.SEEK_CLOSEST);
+        const videoWait = (fast ? 700 : 1500) + (round === 0 ? 0 : 500);
+        await Promise.all([
+          Promise.race([videoSeekDone, this.delayMs_(videoWait)]),
+          seekAudio ? Promise.race([audioSeekDone, this.delayMs_(fast ? 250 : 500)]) : audioSeekDone
+        ]);
         if (!stillSeeking()) return;
-        if (audioSeekDone) {
-          await Promise.race([audioSeekDone, this.delayMs_(audioWait)]);
-          if (!stillSeeking()) return;
-        }
         this.videoSeekResolve_ = null;
         this.audioSeekResolve_ = null;
         const next = this.pendingSeekTarget_;
-        this.pendingSeekTarget_ = -1;
         if (next >= 0 && Math.abs(next - target) > 0.05) {
-          target = next;
-          this.ct = next;
-          this.bufferedUntil = next;
-          this.videoSeekPosition = -1;
-          this.seekExpectedPosition = next;
+          if (round === 3) break;
           // ⭐ 上一轮是超时收的（seekDone 没回来）说明读线程可能还在处理它；IJK 会丢掉
           //   这期间的新 seek。留一拍让它先清掉 seek_req，再打最新目标 —— 否则最后这一下
           //   会被丢掉，画面停在旧目标上（实测 5 连点停在第一次点的时间）。
@@ -7448,6 +7463,7 @@ struct VideoPlayerPage {
           }
           continue;
         }
+        this.pendingSeekTarget_ = -1;
         break;
       }
       // 视频已被换掉：不要再 play 新片、更不要拿旧片的进度写新片的续播点。
@@ -7466,6 +7482,11 @@ struct VideoPlayerPage {
       const needPlay = resume && !this.userPaused_ && !endedAtEof &&
         (seekAudio !== null || wasCompleted || seekPlayer.state !== 'playing');
       if (needPlay) {
+        // 两路已确认精确落点时可直接起音频；首帧事件只用于回调缺失或落点偏差的兜底。
+        const waitForFrame = seekAudio !== null && (!fast || !landed || !audioLanded ||
+          Math.abs(this.videoSeekPosition - target) > 0.12);
+        const frameDone = waitForFrame
+          ? new Promise<void>(resolve => { this.startRenderFrameResolve_ = resolve; }) : undefined;
         this.markAutoPlay('seek-need-play');
         await seekPlayer.play();
         if (!stillSeeking()) return;
@@ -7475,25 +7496,25 @@ struct VideoPlayerPage {
         //   再等 450~3000ms 纯属白等（实测占快拖链路约 40%）。
         //   与初始进度路径（initialProgress_）同一套已验证逻辑。
         if (seekAudio) {
-          const startRenderFrameDone = new Promise<void>(resolve => { this.startRenderFrameResolve_ = resolve; });
-          await Promise.race([startRenderFrameDone, this.delayMs_(renderWait)]);
-          if (this.startRenderFrameResolve_) {
-            this.startRenderFrameResolve_ = null;  // 超时未触发时清理，避免悬挂
-          }
+          if (frameDone) await Promise.race([frameDone, this.delayMs_(fast ? 450 : 3000)]);
+          this.startRenderFrameResolve_ = null;
           if (!stillSeeking()) return;
           const actualPos: number = seekPlayer.currentTime;
-          if (Math.abs(actualPos - target * 1000) > 120) {
+          if (frameDone && (!audioLanded || Math.abs(actualPos - target * 1000) > 120) &&
+            !this.userPaused_ && seekPlayer.state !== 'completed') {
             logInfo(`[VideoPlayer] seek后按实际帧对齐音频: 目标=${target * 1000}ms, 实际=${actualPos}ms`);
-            const audioReseekDone = new Promise<void>(resolve => { this.audioSeekResolve_ = resolve; });
+            const audioReseekDone = new Promise<void>(resolve => { this.audioSeekResolve_ = (): void => resolve(); });
             // ⭐ 对齐到视频**实际**帧位置：必须用 SEEK_CLOSEST 精确落点，
             //   默认 SEEK_PREV_SYNC 会退到前一个关键帧，反而在"对齐"这一步又造出偏差
             seekAudio.seek(actualPos, media.SeekMode.SEEK_CLOSEST);
-            await Promise.race([audioReseekDone, this.delayMs_(reseekWait)]);
+            await Promise.race([audioReseekDone, this.delayMs_(fast ? 250 : 500)]);
+            if (!stillSeeking()) return;
             if (this.audioSeekResolve_) {
               this.audioSeekResolve_ = null;
             }
           }
-          await seekAudio.play();
+          if (!this.userPaused_ && seekPlayer.state !== 'completed') await seekAudio.play();
+          if (!stillSeeking()) return;
         }
         // A seek to the last frame can complete during the render-frame wait.
         this.play = seekPlayer.state === 'playing';
@@ -7503,6 +7524,7 @@ struct VideoPlayerPage {
       this.rampAudio_(1, 0);
     } finally {
       logInfo(`[VideoPlayer] seek end target=${target.toFixed(2)}s landed=${this.videoSeekPosition.toFixed(2)}s gain=${this.audioGain_.toFixed(2)}`);
+      this.startRenderFrameResolve_ = null;
       this.videoSeekResolve_ = null;
       this.audioSeekResolve_ = null;
       this.sg_ = false;
@@ -7510,16 +7532,19 @@ struct VideoPlayerPage {
       // 换片之后的善后不能落在新片上：同一个 av + 同一代际才回写进度。
       const sameVideo = stillSeeking();
       const pending = this.pendingSeekTarget_;
+      const pendingFast = this.pendingSeekFast_;
+      const pendingResetControls = this.pendingSeekResetControls_;
       this.pendingSeekTarget_ = -1;
       if (pending < 0) {
-        if (sameVideo && seekPlayer.state !== 'error' && this.videoSeekPosition >= 0 && target < this.dur - 1) {
+        if (sameVideo && seekPlayer.state !== 'error' && this.videoSeekPosition >= 0) {
           this.seekProgressPending = false;
           // Playback can reach EOF while the seek's render-frame wait is still pending.
           // Do not erase the completed callback's replay state when that wait unwinds.
           // 但只在「确实落在片尾」时才认这个状态：否则 seek 之后 state 还是旧的 completed，
           // 会把 ct 又固定回 dur，进度条看起来没动。
-          const endedDuringSeek = seekPlayer.state === 'completed' && target >= this.dur - 1.5;
-          this.referencePlaybackCompleted = endedDuringSeek;
+          const endedDuringSeek = seekPlayer.state === 'completed' &&
+            (this.referencePlaybackCompleted || target >= this.dur - 1.5);
+          if (target < this.dur - 1 || endedDuringSeek) this.referencePlaybackCompleted = endedDuringSeek;
           // currentTime can still contain the pre-seek value inside seekDone.
           this.ct = endedDuringSeek ? this.dur : Math.max(0, this.videoSeekPosition);
           // ⭐ 本地进度即时写；云端心跳由 saveWatchHistory 内部按 3 秒节流
@@ -7527,16 +7552,13 @@ struct VideoPlayerPage {
           this.saveWatchHistory();
         }
       } else if (sameVideo && Math.abs(pending - target) > 0.05) {
-        // 合并循环到上限仍有排队目标（极少见）：延后一拍再提交，避免在 finally 内递归重入
-        setTimeout(() => {
-          if (this.av === seekPlayer && !this.sg_) this.seek(pending, rs, fast);
-          else this.sk_ = false;
-        }, 0);
+        // 旧轮已经收尾，立即交给新一轮，避免定时器间隙覆盖更新的操作。
+        this.seek(pending, pendingResetControls, pendingFast);
       }
       // ⭐ 淡出后没能恢复播放（被换片 / 用户暂停 / 落在片尾 / 中途异常）：增益必须回到 1，
       //   否则下一次起播是「静音播放」，看起来像音频坏了。
       //   正在播放时交给 play 之后的淡入收尾，这里不抢。
-      if (this.audioGain_ < 0.99 && (!sameVideo || this.userPaused_ || seekPlayer.state !== 'playing')) {
+      if (!this.sg_ && this.audioGain_ < 0.99 && (!sameVideo || this.userPaused_ || seekPlayer.state !== 'playing')) {
         this.rampAudio_(1, 0);
       }
       // ⭐ seek 刚完成：重置同步节流，避免 syncAudioVideo 在视频 currentTime 稳定前
@@ -7981,6 +8003,7 @@ struct VideoPlayerPage {
   }
 
   async toggleFS() {
+    this.referenceCancelFeedPlayerTouch();
     this.cancelDelayHide();
     // ⭐ 全屏切换会整体改变布局（提示的锚点/尺寸全都按旧布局算的）⇒ 手势提示必须收掉，
     //   而且**在这一刻收**才正确：它的 110ms 淡出与全屏转场同帧启动 = "直接换内容"。
@@ -8529,6 +8552,7 @@ struct VideoPlayerPage {
       this.fullscreenTransformTouch = true;
       this.fullscreenTransformClickUntil = Date.now() + 300;
       if (this.referencePortraitFeedActive()) {
+        this.referenceCancelFeedPlayerTouch();
         this.referenceStopFeedMotion();
         this.referenceVerticalSwipe = false;
         this.referenceQueuedFeedStep = 0;
@@ -8672,8 +8696,18 @@ struct VideoPlayerPage {
       return;
     }
 
-    // 第一次点击，设置长按计时器
+    this.scheduleHoldSpeed(false);
+  }
+
+  private scheduleHoldSpeed(inFeed: boolean): void {
     this.lt_ = setTimeout(() => {
+      this.lt_ = -1;
+      if (inFeed) {
+        if (!this.referenceFeedPlayerTouchTracking || !this.referenceFeedPlayerTouchAvailable() ||
+          this.av?.state !== 'playing' || this.sk_ || this.sg_ || this.gm_ !== '' || this.ml_) return;
+        this.referenceFeedPanOwnsTouch = true;
+        this.referenceCancelFeedTap();
+      }
       if (!this.ml_ && !this.lk) {
         this.la_ = true;
         this.lp_ = true;
@@ -8689,7 +8723,7 @@ struct VideoPlayerPage {
     }, 500);
   }
 
-  private onTM(e: TouchEvent) {
+  private onTM(e: TouchEvent, feedSeekOnly: boolean = false) {
     if (this.playerTouchId_ === -1) return;
     if (e.touches.length !== 1 || e.touches[0].id !== this.playerTouchId_) {
       this.onTC();
@@ -8715,6 +8749,10 @@ struct VideoPlayerPage {
           this.lastSeekHapticPct_ = -1;  // 重置档位震动追踪，让拖动中第一次反馈正常触发
           this.triggerHaptic();  // 触觉反馈：开始拖拽进度
       } else if (ady >= 12 && ady >= adx * 1.2) {
+          if (feedSeekOnly) {
+            this.playerTouchId_ = -1;
+            return;
+          }
           // 分界线 = 播放区中线（横屏分栏不能取屏幕中线，见 levelGestureCenterX）
           const centerX = this.levelGestureCenterX();
           if (t.windowX < centerX) {
@@ -10704,6 +10742,7 @@ struct VideoPlayerPage {
           this.referenceFeedPanOwnsTouch = false;
           this.referenceFeedTouchAllowed = this.referenceInfoHidden || event.touches[0].windowY >= this.referenceSafeTop();
         }
+        this.referenceHandleFeedPlayerTouch(event);
       })
       .gestureModifier(new ReferenceFeedGestures({
         active: this.referencePortraitFeedActive() && !this.referenceFeedComments,
@@ -10721,7 +10760,8 @@ struct VideoPlayerPage {
       }))
       .onGestureJudgeBegin((info: GestureInfo, event: BaseGestureEvent) => {
         if (info.tag === 'reference-feed-pan' && (!this.referencePortraitFeedActive() ||
-          this.fullscreenTransformTouch || this.referenceFeedComments || this.mp || this.lk || this.la_ || !this.referenceFeedTouchAllowed)) return GestureJudgeResult.REJECT;
+          this.fullscreenTransformTouch || this.referenceFeedComments || this.mp || this.lk || this.la_ ||
+          this.gm_ === 'seek' || !this.referenceFeedTouchAllowed)) return GestureJudgeResult.REJECT;
         return GestureJudgeResult.CONTINUE;
       })
       // 全屏切换动画由常驻播放器层几何插值实现（见 buildPlayerOverlay）
@@ -12047,6 +12087,7 @@ struct VideoPlayerPage {
   }
   private referenceSetFeedComments(open: boolean): void {
     if (open && (this.referenceModeAnimating || !this.referenceFeed || this.fs || this.isLs)) return;
+    if (open) this.referenceCancelFeedPlayerTouch();
     const target = open ? 1 : 0;
     const origin = this.referenceFeedCommentAmount();
     // ⭐ 渲染侧 animateTo 驱动，不再逐帧 JS 回调（同 animateVidShrink 的结论）：
@@ -12755,6 +12796,7 @@ struct VideoPlayerPage {
     if (!value) this.loadReferenceIntroExtras();
     if (this.fs || this.fsEntering || this.isAnimatingToFS) return;
     if (!this.referenceModeAnimating && this.referenceFeed === value && this.referenceFeedProgress === (value ? 1 : 0)) return;
+    this.referenceCancelFeedPlayerTouch();
     this.resetFullscreenVideo();
     this.referenceModeGen++;
     this.referenceInfoHidden = false;
@@ -12955,6 +12997,7 @@ struct VideoPlayerPage {
       if (this.referenceFeedPreview) this.requestReferenceFeedPreview(this.referenceFeedPreview);
     }
     if (recognized) {
+      this.referenceCancelFeedPlayerTouch();
       this.referenceCancelFeedTap();
       this.referenceFeedPanOwnsTouch = true;
       this.sliderDragging_ = false;
@@ -13033,6 +13076,75 @@ struct VideoPlayerPage {
     if (!this.referenceFeedLoading) this.referenceFeedBounceBack();
     this.referenceFeedDragEndResolve?.();
     this.referenceFeedDragEndResolve = null;
+  }
+
+  private referenceCancelFeedPlayerTouch(): void {
+    if (!this.referenceFeedPlayerTouchTracking) return;
+    this.referenceFeedPlayerTouchTracking = false;
+    if (this.gm_ === 'seek' || this.lp_) {
+      this.onTC();
+    } else {
+      if (this.lt_ !== -1) { clearTimeout(this.lt_); this.lt_ = -1; }
+      this.playerTouchId_ = -1;
+    }
+  }
+
+  private referenceFeedPlayerTouchAvailable(): boolean {
+    return this.referencePortraitFeedActive() && !this.referenceFeedComments && !this.referenceFeedLoading &&
+      !this.referenceFeedPreparingMain && !this.referenceFeedAnimator && !this.referenceVerticalSwipe &&
+      !this.fullscreenTransformTouch && !this.mp && !this.lk && !this.sliderDragging_ && !this.seekBarTouch_ &&
+      !!this.av && this.dur > 0;
+  }
+
+  private referenceHandleFeedPlayerTouch(e: TouchEvent): void {
+    if (!this.referenceFeedPlayerTouchAvailable()) {
+      this.referenceCancelFeedPlayerTouch();
+      return;
+    }
+    if (e.type === TouchType.Down) {
+      this.referenceCancelFeedPlayerTouch();
+      if (e.touches.length !== 1 || this.sk_ || this.sg_ || this.waitingForFirstFrame) return;
+      const touch = e.touches[0];
+      // 控件可见时，只有从顶栏和底部信息层之间起手才允许横滑。
+      if (!this.referenceInfoHidden) {
+        if (touch.windowY < this.referenceSafeTop() + 44 || touch.windowY >= this.feedChromeTop()) return;
+        const fullscreenButtonTop = this.referenceFullscreenButtonTop();
+        if (this.ar >= 1 && Math.abs(touch.windowX - this.cw / 2) <= 52 &&
+          touch.windowY >= fullscreenButtonTop && touch.windowY <= fullscreenButtonTop + 36) return;
+      }
+      this.referenceFeedPlayerTouchTracking = true;
+      this.playerTouchId_ = touch.id;
+      this.sx_ = touch.windowX;
+      this.sy_ = touch.windowY;
+      this.st_ = this.ct;
+      this.gm_ = '';
+      this.ml_ = false;
+      this.la_ = false;
+      this.dtp_ = false;
+      if (this.av?.state === 'playing') this.scheduleHoldSpeed(true);
+      return;
+    }
+    if (!this.referenceFeedPlayerTouchTracking) return;
+    if (e.type === TouchType.Move && this.playerTouchId_ !== -1 &&
+      e.touches.length === 1 && e.touches[0].id === this.playerTouchId_) {
+      this.onTM(e, true);
+      if (this.gm_ === 'seek' && !this.referenceFeedPanOwnsTouch) {
+        this.referenceFeedPanOwnsTouch = true;
+        this.referenceCancelFeedTap();
+      }
+      return;
+    }
+    const target = this.ct;
+    if (e.type === TouchType.Up && e.changedTouches.some(touch => touch.id === this.playerTouchId_) &&
+      this.gm_ === 'seek' && this.sk_ && Math.abs(target - this.st_) >= 0.25) {
+      this.referenceFeedPlayerTouchTracking = false;
+      this.playerTouchId_ = -1;
+      this.gm_ = '';
+      this.sk_ = false;
+      this.seek(target, false, true);
+    } else {
+      this.referenceCancelFeedPlayerTouch();
+    }
   }
 
   private referenceHandleFeedTouch(e: TouchEvent): boolean {
@@ -13243,6 +13355,7 @@ struct VideoPlayerPage {
       this.referenceFeedBounceBack();
       return;
     }
+    this.referenceCancelFeedPlayerTouch();
     this.referenceFeedLoading = true;
     let generation = this.referenceSwitchGeneration;
     const switchStarted = Date.now();
@@ -13583,7 +13696,7 @@ struct VideoPlayerPage {
         LiveViewHelper.setControlHandlers({
           play: () => { this.mediaSessionPlay(); },
           pause: () => { if (this.play) this.togglePP(); },
-          seek: (time: number) => { this.seek(time / 1000, false); }
+          seek: (time: number) => { this.seek(time / 1000, false, true); }
         });
         LiveViewHelper.create(this.getUIContext().getHostContext() as common.Context,
           this.vi.title, this.vi.cover, this.vi.bvid, this.dur, detail.owner.name).catch(() => {});
@@ -13645,7 +13758,7 @@ struct VideoPlayerPage {
         // resume by reading the old 'playing' state and then end up paused forever.
         if (handles && this.avAudio) {
           const audioPlayer = this.avAudio;
-          const audioSeek = new Promise<void>((resolve) => { this.audioSeekResolve_ = resolve; });
+          const audioSeek = new Promise<void>(resolve => { this.audioSeekResolve_ = (): void => resolve(); });
           audioPlayer.seek(player.currentTime, media.SeekMode.SEEK_CLOSEST);
           await Promise.race([audioSeek, new Promise<void>((resolve) => setTimeout(resolve, 500))]);
           this.audioSeekResolve_ = null;
@@ -14527,6 +14640,7 @@ struct VideoPlayerPage {
   }
 
   private referenceOpenPortraitSettings(): void {
+    this.referenceCancelFeedPlayerTouch();
     this.referenceInfoHidden = false;
     // 目标系统栏状态没变就别再下发窗口指令，否则动画首帧要先等一轮 avoidArea 重算。
     this.manageSB();

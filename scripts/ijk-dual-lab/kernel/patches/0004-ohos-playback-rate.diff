@@ -1,0 +1,83 @@
+--- a/ijksdl/audio/ijksdl_aout_android_opensles.c
++++ b/ijksdl/audio/ijksdl_aout_android_opensles.c
+@@ -117,7 +117,10 @@
+ 
+     int64_t writtenTime = opaque->writtenLen * US_TO_S / (opaque->formatPcm.samplesRate * opaque->bytes_per_frame);
+ 
+-    opaque->framesWrittenNeedTime = writtenTime - nowAudioPlayedTime;
++    // OHAudio output frames and submitted source PCM diverge at variable
++    // speed. Never let that cumulative counter difference grow into clock drift.
++    const int64_t latency = writtenTime - nowAudioPlayedTime;
++    opaque->framesWrittenNeedTime = latency < 0 ? 0 : (latency > 150000 ? 150000 : latency);
+     opaque->lastCalcTime = nowTime;
+ }
+ 
+@@ -378,6 +381,16 @@
+     }
+ }
+ 
++static void AoutSetPlaybackRate(SDL_Aout *aout, float rate)
++{
++    SDL_Aout_Opaque *opaque = aout->opaque;
++    if (opaque->audioRendererNormal != NULL) {
++        OH_AudioStream_Result result = OH_AudioRenderer_SetSpeed(opaque->audioRendererNormal, rate);
++        OH_LOG_Print(LOG_APP, LOG_INFO, 0, "IjkAudioRate",
++            "rate=%{public}.2f result=%{public}d", rate, result);
++    }
++}
++
+ SDL_Aout *SDLAoutCreateForOpenSLES(FFPlayer *ffp) // 实现音频播放功能；
+ {
+     LOGI("audio->SDL_AoutAndroid_CreateForOpenSLES");
+@@ -399,6 +412,7 @@
+     aout->close_audio = AudioRendererStop; // 关闭音频
+     aout->set_volume = AoutSetVolume;       // 设置音量
+     aout->func_get_latency_seconds = AoutGetLatencySeconds;
++    aout->func_set_playback_rate = AoutSetPlaybackRate;
+ 
+     return aout;
+ }
+--- a/ijkplayer/ff_ffplay.c
++++ b/ijkplayer/ff_ffplay.c
+@@ -1679,7 +1679,9 @@
+ 
+             /* compute nominal last_duration */
+             last_duration = vp_duration(is, lastvp, vp);
+-            delay = compute_target_delay(ffp, last_duration, is);
++            // Media PTS remains in source time; frame_timer uses wall time.
++            const double rate = ffp->pf_playback_rate > 0 ? ffp->pf_playback_rate : 1.0;
++            delay = compute_target_delay(ffp, last_duration, is) / rate;
+ 
+             time= av_gettime_relative()/1000000.0;
+             if (isnan(is->frame_timer) || time < is->frame_timer)
+@@ -1709,7 +1711,7 @@
+ 
+             if (frame_queue_nb_remaining(&is->pictq) > 1) {
+                 Frame *nextvp = frame_queue_peek_next(&is->pictq);
+-                duration = vp_duration(is, vp, nextvp);
++                duration = vp_duration(is, vp, nextvp) / rate;
+                 if(!is->step && (ffp->framedrop > 0 || (ffp->framedrop && get_master_sync_type(is) != AV_SYNC_VIDEO_MASTER)) && time > is->frame_timer + duration) {
+                     frame_queue_next(&is->pictq);
+                     goto retry;
+@@ -3117,9 +3119,8 @@
+ 
+     if (ffp->pf_playback_rate_changed) {
+         ffp->pf_playback_rate_changed = 0;
+-        if (!ffp->soundtouch_enable) {
+-            SDL_AoutSetPlaybackRate(ffp->aout, ffp->pf_playback_rate);
+-        }
++        if (!ffp->soundtouch_enable)
++            set_clock_speed(&is->audclk, ffp->pf_playback_rate);
+     }
+     if (ffp->pf_playback_volume_changed) {
+         ffp->pf_playback_volume_changed = 0;
+@@ -5721,6 +5722,9 @@
+     av_log(ffp, AV_LOG_INFO, "Playback rate: %f\n", rate);
+     ffp->pf_playback_rate = rate;
+     ffp->pf_playback_rate_changed = 1;
++    // Configure OHAudio on the control thread, outside its write callback.
++    if (!ffp->soundtouch_enable && ffp->aout)
++        SDL_AoutSetPlaybackRate(ffp->aout, rate);
+ }
+ 
+ void ffp_set_playback_volume(FFPlayer *ffp, float volume)
