@@ -51,7 +51,7 @@ on:
         type: boolean
         default: false
       notes:
-        description: "Release 说明（留空则用 tag 的 message，再没有就自动生成）"
+        description: "Release 说明（留空则使用 tag 中的说明）"
         type: string
         required: false
 
@@ -384,7 +384,6 @@ jobs:
           MANUAL_NOTES: ${{ inputs.notes }}
           VERSION_NAME: ${{ steps.version.outputs.version_name }}
           VERSION_CODE: ${{ steps.version.outputs.version_code }}
-          HAP_NAME: ${{ steps.collect.outputs.hap_name }}
         run: |
           set -euo pipefail
           if [[ "${GITHUB_REF_TYPE}" == tag ]]; then
@@ -400,11 +399,17 @@ jobs:
 
           # 说明来源优先级：手动输入 > annotated tag 的 message > 空
           TAG_NOTES=""
-          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-            if [ "$(git cat-file -t "refs/tags/${TAG}" 2>/dev/null || echo none)" = "tag" ]; then
+          if [[ "${GITHUB_REF_TYPE}" == tag && -z "${MANUAL_NOTES}" ]]; then
+            # checkout 可能只留下指向构建提交的轻量引用。单独拉取远端 tag 对象。
+            git fetch --no-tags origin "refs/tags/${TAG}"
+            if [[ "$(git rev-parse 'FETCH_HEAD^{commit}')" != "$(git rev-parse HEAD)" ]]; then
+              echo "::error::远端 tag ${TAG} 已移动，与构建提交不一致"
+              exit 1
+            fi
+            if [ "$(git cat-file -t FETCH_HEAD)" = "tag" ]; then
               # 直接读 tag 对象再跳过 object/type/tag/tagger 那段头部，
               # 比 for-each-ref 的 %(contents) 更少踩格式细节。
-              TAG_NOTES="$(git cat-file -p "refs/tags/${TAG}" | sed '1,/^$/d')"
+              TAG_NOTES="$(git cat-file -p FETCH_HEAD | sed '1,/^$/d; s/\r$//')"
             else
               echo "::warning::${TAG} 是轻量 tag，没有说明。用 git tag -a --cleanup=verbatim 才会把 message 带到 Release"
             fi
@@ -413,27 +418,7 @@ jobs:
           BODY="${MANUAL_NOTES}"
           if [ -z "${BODY}" ]; then BODY="${TAG_NOTES}"; fi
 
-          {
-            if [ -n "${BODY}" ]; then
-              printf '%s\n\n' "${BODY}"
-              echo "---"
-              echo ""
-            fi
-            echo "| 项 | 值 |"
-            echo "| --- | --- |"
-            echo "| 版本 | ${VERSION_NAME} (${VERSION_CODE}) |"
-            echo "| 构建模式 | \`${BUILD_MODE}\` |"
-            echo "| 产物 | \`${HAP_NAME}\` |"
-            echo "| 提交 | \`${GITHUB_SHA:0:7}\` |"
-            echo ""
-            echo "> ⚠️ 本包**未签名**，仅供调试与自签名流程使用，无法直接安装到设备。"
-            echo ""
-            echo "<details><summary>最近提交</summary>"
-            echo ""
-            git log --oneline -10
-            echo ""
-            echo "</details>"
-          } > "${RUNNER_TEMP}/release-notes.md"
+          printf '%s' "${BODY}" > "${RUNNER_TEMP}/release-notes.md"
 
           if gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
             echo "Release ${TAG} 已存在，覆盖产物并刷新说明"

@@ -45,6 +45,7 @@ import { VideoInteractionResult } from '../api/VideoInteractionApi';
 // VideoPlayerPage.ets
 import { router, curves, SegmentButton, SegmentButtonOptions, componentUtils, display, KeyboardAvoidMode, LengthMetrics, AnimatorResult } from '@kit.ArkUI';
 import { logInfo, logWarn, logError, errMsg } from '../utils/Logger';
+import { isCommentPictureDragAutoScroll } from '../components/CommentContentRenderer';
 import { getVideoIntroCard, getVideoIntroTags, VideoIntroCard, VideoIntroTag, getVideoPlayUrl, invalidatePlayUrlCache, PlayUrlResult, getVideoDetail, getVideoComments, getCommentReplies, VideoDetail, VideoDetailOwner, VideoDetailStat, CommentItem, getVideoUserStatus, VideoPageItem, getFollowStatus, modifyFollow, clearFollowedMidsCache, getUserInfo, UserInfo, getPgcPlayUrl, getPgcSeasonInfo, getPgcEpisodeInfo, getPgcSeasonInfoByEpId, PgcSeasonInfo, PgcEpisode, getRelatedVideos, getRecommendVideos, addVideoComment, uploadCommentImage, sendDanmakuVideo, SeasonEpisode, SeasonSection, UgcSeason } from '../api/BilibiliApi';
 import { CommentInputBar, CommentImageDraft, CommentInputBarCtrl } from '../components/CommentInputBar';
 import { RecommendItem } from '../model/RecommendItem';
@@ -10499,7 +10500,8 @@ struct VideoPlayerPage {
         }
         return { offsetRemain: offset };
       })
-      .onWillScroll((xOffset: number, yOffset: number) => {
+      .onWillScroll((yOffset: number, _state: ScrollState, source: ScrollSource) => {
+        if (isCommentPictureDragAutoScroll(source)) return { offsetRemain: 0 };
         if (this.at === 1 && !this.fs && !this.isLs) {
           const shrinkEnabled: boolean = !this.referenceLayout && (AppStorage.get<boolean>('shrinkVideoOnScroll') ?? false);
           if (shrinkEnabled && yOffset > 15 && this.vidShrink < 0.5) {
@@ -10507,6 +10509,7 @@ struct VideoPlayerPage {
             this.animateVidShrink(1);
           }
         }
+        return { offsetRemain: yOffset };
       })
       .onReachEnd(() => {
         if (this.hm && !this.ldc && this.commentDataSource.totalCount() > 0) {

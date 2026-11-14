@@ -1,8 +1,18 @@
 import { StatusBarUtils } from '../utils/StatusBarUtils';
 import { CommentContent, CommentPicture } from '../api/BilibiliApi';
-import { curves, window, display } from '@kit.ArkUI';
+import { curves, window, display, promptAction } from '@kit.ArkUI';
 import { common } from '@kit.AbilityKit';
+import { http } from '@kit.NetworkKit';
+import { fileIo, fileUri } from '@kit.CoreFileKit';
+import { photoAccessHelper } from '@kit.MediaLibraryKit';
 import { logWarn } from '../utils/Logger';
+
+let commentPictureDragOwner: CommentContentRenderer | undefined;
+
+export function isCommentPictureDragAutoScroll(source: ScrollSource): boolean {
+  // ArkUI 的拖拽边缘滚动以轴输入上报。
+  return commentPictureDragOwner !== undefined && source === ScrollSource.OTHER_USER_INPUT;
+}
 
 function resizeImageUrl(url: string, width: number): string {
   if (!url || !url.includes('hdslb.com')) {
@@ -67,6 +77,8 @@ export struct CommentContentRenderer {
   @State @Watch('onShowPreviewChange') showPreview: boolean = false;
   /** 所有预览图片 URL 列表 */
   @State previewImageUrls: string[] = [];
+  private previewOriginalUrls: string[] = [];
+  @State savingImage: boolean = false;
   /** 当前预览的图片索引（@Watch：页码变化时播放淡入上移动画） */
   @State @Watch('onPreviewIndexChange') previewIndex: number = 0;
   /** 图片缩放倍数（1.0=原始，3.0=最大） */
@@ -266,6 +278,23 @@ export struct CommentContentRenderer {
   aboutToAppear(): void {
   }
 
+  aboutToDisappear(): void {
+    this.endPictureDrag();
+  }
+
+  private onPicturePreDrag(status: PreDragStatus): void {
+    if (status === PreDragStatus.READY_TO_TRIGGER_DRAG_ACTION || status === PreDragStatus.PREVIEW_LIFT_STARTED) {
+      commentPictureDragOwner = this;
+    } else if (status === PreDragStatus.ACTION_CANCELED_BEFORE_DRAG ||
+      status === PreDragStatus.PREVIEW_LANDING_FINISHED) {
+      this.endPictureDrag();
+    }
+  }
+
+  private endPictureDrag(): void {
+    if (commentPictureDragOwner === this) commentPictureDragOwner = undefined;
+  }
+
   build() {
     Column() {
       if (this.textPrefix || this.content?.message) {
@@ -328,6 +357,82 @@ export struct CommentContentRenderer {
     this.beginPreviewPan();
   }
 
+  private async savePreviewImage(): Promise<void> {
+    const source = this.previewOriginalUrls[this.previewIndex];
+    if (this.savingImage || !source) return;
+
+    const context = this.getUIContext().getHostContext() as common.Context;
+    let url = source.startsWith('//') ? `https:${source}` : source;
+    const transform = url.indexOf('@');
+    if (/^https?:\/\/[^/]+\.hdslb\.com\//i.test(url) && transform > url.lastIndexOf('/') && !url.includes('?')) {
+      url = url.substring(0, transform);
+    }
+
+    this.savingImage = true;
+    const request = http.createHttp();
+    let tempPath = '';
+    try {
+      const response = await request.request(url, {
+        expectDataType: http.HttpDataType.ARRAY_BUFFER,
+        maxLimit: 30 * 1024 * 1024,
+        header: { 'Referer': 'https://www.bilibili.com/' }
+      });
+      if (response.responseCode !== 200 || !(response.result instanceof ArrayBuffer) ||
+        response.result.byteLength === 0) {
+        throw new Error('图片下载失败');
+      }
+      const headers = response.header as Record<string, string>;
+      const contentType = Object.keys(headers).find(key => key.toLowerCase() === 'content-type');
+      const mime = contentType ? headers[contentType].split(';')[0].trim().toLowerCase() : '';
+      const extensions: Record<string, string> = {
+        'image/jpeg': 'jpg',
+        'image/png': 'png',
+        'image/gif': 'gif',
+        'image/webp': 'webp',
+        'image/avif': 'avif'
+      };
+      const extension = extensions[mime];
+      if (!extension) throw new Error('不支持的图片格式');
+      if (!this.showPreview) return;
+
+      const title = `PuraPily_${Date.now()}`;
+      tempPath = `${context.cacheDir}/${title}.${extension}`;
+      const file = await fileIo.open(tempPath, fileIo.OpenMode.CREATE | fileIo.OpenMode.WRITE_ONLY |
+        fileIo.OpenMode.TRUNC);
+      try {
+        if (await fileIo.write(file.fd, response.result) !== response.result.byteLength) {
+          throw new Error('图片写入不完整');
+        }
+      } finally {
+        await fileIo.close(file);
+      }
+      if (!this.showPreview) return;
+      const helper = photoAccessHelper.getPhotoAccessHelper(context);
+      const destinations = await helper.showAssetsCreationDialogEx([fileUri.getUriFromPath(tempPath)], [{
+        title: title,
+        fileNameExtension: extension,
+        photoType: photoAccessHelper.PhotoType.IMAGE
+      }]);
+      if (destinations.length === 0) return;
+      const destination = await fileIo.open(destinations[0], fileIo.OpenMode.WRITE_ONLY);
+      try {
+        await fileIo.copyFile(tempPath, destination.fd);
+      } finally {
+        await fileIo.close(destination);
+      }
+      promptAction.showToast({ message: '已保存到相册' });
+    } catch (error) {
+      logWarn(`[CommentContentRenderer] 保存图片失败: ${error}`);
+      promptAction.showToast({ message: '保存图片失败' });
+    } finally {
+      request.destroy();
+      if (tempPath) {
+        await fileIo.unlink(tempPath).catch(() => {});
+      }
+      this.savingImage = false;
+    }
+  }
+
   @Builder
   imagePreviewBuilder() {
     Stack() {
@@ -353,6 +458,9 @@ export struct CommentContentRenderer {
       Swiper(this.swiperController) {
         ForEach(this.previewImageUrls, (url: string) => {
           Image(url)
+            .dragPreviewOptions({}, { enableEdgeAutoScroll: false })
+            .onPreDrag((status: PreDragStatus) => this.onPicturePreDrag(status))
+            .onDragEnd(() => this.endPictureDrag())
             .width('100%')
             .height('100%')
             .objectFit(ImageFit.Contain)
@@ -406,6 +514,9 @@ export struct CommentContentRenderer {
       // 缩放中的手势绑定固定视口，图片变换不改变拖动坐标系。
       Stack() {
       Image(this.previewImageUrls[this.previewIndex])
+        .dragPreviewOptions({}, { enableEdgeAutoScroll: false })
+        .onPreDrag((status: PreDragStatus) => this.onPicturePreDrag(status))
+        .onDragEnd(() => this.endPictureDrag())
         .width('100%')
         .height('100%')
         .objectFit(ImageFit.Contain)
@@ -460,6 +571,9 @@ export struct CommentContentRenderer {
       if (this.zoomScale > 1.0) {
         Stack() {
           Image(this.previewImageUrls[this.previewIndex])
+            .dragPreviewOptions({}, { enableEdgeAutoScroll: false })
+            .onPreDrag((status: PreDragStatus) => this.onPicturePreDrag(status))
+            .onDragEnd(() => this.endPictureDrag())
             .width(100)
             .height(100)
             .objectFit(ImageFit.Contain)
@@ -524,6 +638,15 @@ export struct CommentContentRenderer {
         .justifyContent(FlexAlign.Center)
         .position({ top: 44 })
       }
+      Button(this.savingImage ? '保存中…' : '保存图片')
+        .id('comment-preview-save')
+        .fontSize(14)
+        .fontColor(Color.White)
+        .height(40)
+        .backgroundColor('#A6000000')
+        .position({ top: 32, right: 16 })
+        .enabled(!this.savingImage)
+        .onClick(() => { this.savePreviewImage(); })
     }
     .width('100%')
     .height('100%')
@@ -613,6 +736,9 @@ export struct CommentContentRenderer {
     Stack() {
       // 缩略图（按原图比例撑高）
       Image(resizeImageUrl(pic.img_src, 512))
+        .dragPreviewOptions({}, { enableEdgeAutoScroll: false })
+        .onPreDrag((status: PreDragStatus) => this.onPicturePreDrag(status))
+        .onDragEnd(() => this.endPictureDrag())
         .width('100%')
         .aspectRatio(this.originalPictureRatio(pic))
         .objectFit(ImageFit.Cover)
@@ -671,6 +797,9 @@ export struct CommentContentRenderer {
           Stack() {
             // 缩略图
             Image(resizeImageUrl(pic.img_src, 512))
+              .dragPreviewOptions({}, { enableEdgeAutoScroll: false })
+              .onPreDrag((status: PreDragStatus) => this.onPicturePreDrag(status))
+              .onDragEnd(() => this.endPictureDrag())
               .width('100%')
               .height('100%')
               .objectFit(ImageFit.Cover)
