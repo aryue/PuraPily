@@ -383,7 +383,8 @@ export struct HomePage {
   private mainWindowRef: window.Window | null = null;
   private isPageActive: boolean = false;
   private playbackListPrefetch: PlaybackListPrefetch = new PlaybackListPrefetch(() => this.isPageActive &&
-    AppStorage.get<boolean>('homeFeedActive') === true && AppStorage.get<number>('homeChannelIndex') === 2);
+    AppStorage.get<boolean>('homeFeedActive') === true && AppStorage.get<number>('homeChannelIndex') === 2,
+    () => 'home:recommend');
   private playbackListStart: number = 0;
   private playbackVisibleIndexes: Set<number> = new Set();
   @StorageLink('homeFeedActive') @Watch('syncPlaybackListPrefetch') playbackHomeActive: boolean = false;
@@ -394,14 +395,12 @@ export struct HomePage {
       this.playbackListPrefetch.pause();
       return;
     }
-    const items = this.dataSource.getRawItems().filter((item: RecommendItem) => item.id !== this.REFRESH_SEPARATOR_ID);
-    // 预热目标 = 当前第一个可见卡片（相对窗口切片的偏移）。
-    let firstVisible: number = Number.MAX_SAFE_INTEGER;
-    for (const index of this.playbackVisibleIndexes) firstVisible = Math.min(firstVisible, index);
-    if (firstVisible === Number.MAX_SAFE_INTEGER) firstVisible = this.playbackListStart;
-    const warmIndex: number = Math.max(0, Math.min(7, firstVisible - this.playbackListStart));
-    this.playbackListPrefetch.update(items.slice(this.playbackListStart, this.playbackListStart + 8),
-      AppStorage.get<number>('defaultVideoQn') ?? 116, warmIndex);
+    const items = this.dataSource.getRawItems();
+    const visible = items.filter((item: RecommendItem, index: number) =>
+      item.id !== this.REFRESH_SEPARATOR_ID && this.playbackVisibleIndexes.has(index));
+    const nearby = items.slice(this.playbackListStart, this.playbackListStart + 8)
+      .filter((item: RecommendItem) => item.id !== this.REFRESH_SEPARATOR_ID);
+    this.playbackListPrefetch.updateViewport(visible, nearby, AppStorage.get<number>('defaultVideoQn') ?? 116);
   }
   private portraitSwiperController: SwiperController = new SwiperController();
   private landscapeSwiperController: SwiperController = new SwiperController();

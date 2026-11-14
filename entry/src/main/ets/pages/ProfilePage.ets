@@ -73,6 +73,10 @@ export struct ProfilePage {
   @StorageLink('isDarkMode') isDarkMode: boolean = false;
   @StorageLink('bgp') referenceBackgroundPlay: boolean = false;
   @StorageLink('cellularPrefetch') cellularPrefetch: boolean = false;
+  @StorageLink('ijkWarmSlotsWifi') ijkWarmSlotsWifi: number = 1;
+  @StorageLink('ijkWarmSlotsCellular') ijkWarmSlotsCellular: number = 1;
+  @StorageLink('startupCdnRace') startupCdnRace: boolean = false;
+  @State startupCdnRacePending: boolean = false;
   @StorageLink('vibrateEnabled') referenceVibrate: boolean = true;
   @StorageLink('landscapePlaybackSide') landscapePlaybackSide: string = 'left';
   @StorageLink('screenOrientationLock') screenOrientationLock: string = '跟随系统';
@@ -615,6 +619,30 @@ export struct ProfilePage {
     }
   }
 
+  private async toggleStartupCdnRace(): Promise<void> {
+    if (this.startupCdnRacePending) return;
+    this.startupCdnRacePending = true;
+    try {
+      if (this.startupCdnRace) {
+        await this.referenceSaveBoolean('startupCdnRace', false);
+        return;
+      }
+      const result = await this.getUIContext().getPromptAction().showDialog({
+        title: '开启 CDN 主备竞速',
+        message: '可能加快视频加载速度，但会消耗更多流量',
+        buttons: [
+          { text: '取消', color: '#666666' },
+          { text: '开启', color: '#007DFF' }
+        ]
+      });
+      if (result.index === 1) await this.referenceSaveBoolean('startupCdnRace', true);
+    } catch (_) {
+      // 返回键或点遮罩关闭对话框时保留原设置。
+    } finally {
+      this.startupCdnRacePending = false;
+    }
+  }
+
   private async referenceSaveRotation(mode: string): Promise<void> {
     try {
       const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
@@ -713,6 +741,7 @@ export struct ProfilePage {
   }
 
   private settingLabels(kind: string): string[] {
+    if (kind === 'warmSlotsWifi' || kind === 'warmSlotsCellular') return ['1', '2', '3', '4', '5'];
     if (kind === 'kernel') return ['系统 AVPlayer', 'IJK 双轨直连（实验）'];
     if (kind === 'theme') return ['跟随系统', '浅色', '深色'];
     if (kind === 'wallpaper') return ['Pipw 二次元', 'Lorem Picsum 摄影', '设备本地图片', '关闭壁纸'];
@@ -729,6 +758,8 @@ export struct ProfilePage {
   }
 
   private settingSelection(kind: string): number {
+    if (kind === 'warmSlotsWifi') return this.ijkWarmSlotsWifi - 1;
+    if (kind === 'warmSlotsCellular') return this.ijkWarmSlotsCellular - 1;
     if (kind === 'kernel') return this.playbackKernel === 'ijk' ? 1 : 0;
     if (kind === 'theme') return ['system', 'light', 'dark'].indexOf(this.themeMode);
     if (kind === 'wallpaper') return ['pipw', 'picsum', 'local', 'none'].indexOf(this.pageWallpaperSource);
@@ -756,6 +787,18 @@ export struct ProfilePage {
     else if (kind === 'side') await this.saveLandscapePlaybackSide(index === 1 ? 'right' : 'left');
     else if (kind === 'qualityWifi') this.saveQuality('wifi', QUALITY_OPTIONS[index].qn);
     else if (kind === 'qualityCellular') this.saveQuality('cellular', QUALITY_OPTIONS[index].qn);
+    else if (kind === 'warmSlotsWifi' || kind === 'warmSlotsCellular') {
+      const key = kind === 'warmSlotsWifi' ? 'ijkWarmSlotsWifi' : 'ijkWarmSlotsCellular';
+      try {
+        if (!this.dataPreferences) return;
+        this.dataPreferences.putSync(key, index + 1);
+        this.dataPreferences.flushSync();
+        AppStorage.setOrCreate(key, index + 1);
+      } catch (error) {
+        logError('保存预热槽数失败', error);
+        this.getUIContext().getPromptAction().showToast({ message: '设置失败，请重试' });
+      }
+    }
     else if (kind === 'recommend') await this.saveApiSource('recommendApiSource', index === 0 ? 'App' : 'Web');
     else if (kind === 'danmaku') await this.saveApiSource('danmakuApiSource', index === 0 ? 'grpc' : 'xml');
     else if (kind === 'fontSize') await this.selectFontSizeMode(index === 1);
@@ -1124,6 +1167,26 @@ export struct ProfilePage {
         this.SectionTitle('网络与流量')
         PageSurface() {
           Column() {
+            if (this.playbackKernel === 'ijk') {
+              Row() {
+                Text('Wi-Fi 预热槽数').fontSize(15).fontColor(this.isDarkMode ? '#E7E9EB' : '#18191C').layoutWeight(1)
+                Text(this.ijkWarmSlotsWifi + ' ›').fontSize(13).fontColor(secondaryTextColor(this.isDarkMode))
+              }.width('100%').height(56).padding({ left: 16, right: 16 })
+                .id('setting-warm-slots-wifi').bindMenu(this.SettingsOptions('warmSlotsWifi'), this.settingsMenuOptions())
+              Row() {
+                Text('移动网络预热槽数').fontSize(15).fontColor(this.isDarkMode ? '#E7E9EB' : '#18191C').layoutWeight(1)
+                Text(this.ijkWarmSlotsCellular + ' ›').fontSize(13).fontColor(secondaryTextColor(this.isDarkMode))
+              }.width('100%').height(56).padding({ left: 16, right: 16 })
+                .id('setting-warm-slots-cellular').bindMenu(this.SettingsOptions('warmSlotsCellular'), this.settingsMenuOptions())
+              Row({ space: 12 }) {
+                Text('CDN 主备竞速').fontSize(15).fontColor(this.isDarkMode ? '#E7E9EB' : '#18191C').layoutWeight(1)
+                Toggle({ type: ToggleType.Switch, isOn: this.startupCdnRace }).selectedColor('#D34E7E')
+                  .hitTestBehavior(HitTestMode.None).accessibilityLevel('no')
+              }.width('100%').height(56).padding({ left: 16, right: 16 })
+                .id('setting-startup-cdn-race')
+                .accessibilityText(this.startupCdnRace ? 'CDN 主备竞速，已开启' : 'CDN 主备竞速，已关闭')
+                .onClick(() => { this.toggleStartupCdnRace(); })
+            }
             Row({ space: 12 }) {
               Column({ space: 4 }) {
                 Text('蜂窝网络预热取流').fontSize(15).fontColor(this.isDarkMode ? '#E7E9EB' : '#18191C')

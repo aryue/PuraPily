@@ -12,6 +12,7 @@ function section(start, end) {
 }
 const context = { exports: {} };
 const methods = section('  private referenceFeedAspect(', '  private referenceDecodeStill(') +
+  section('  private displayAspect(', '  private setAspectFromMeta(') +
   section('  private requestReferenceFeedPreview(', '  private async prepareReferenceFeedPreview(') +
   section('  private async prepareReferenceFeedPreview(', '  private async releaseReferenceFeedPreview(') +
   section('  private effectiveScaleMode(', '  private onPlaybackViewportChanged(') +

@@ -90,6 +90,24 @@ assert.equal(page.decoderAspectIgnored(0.75), false, 'a genuinely different fram
 page.vi.cid = 200;
 assert.equal(page.decoderAspectIgnored(16 / 9), false, 'meta from the previous cid is stale and must not block');
 
+// BV1kVHS6AEBR uses quarter-turn units in the view response.
+const cid = 42560848500;
+const dimension = { width: 3840, height: 2160, rotate: 1 };
+const detail = { cid, dimension, pages: [{ cid, dimension }] };
+for (const entryCid of [cid, 0]) {
+  page = makePage({ vi: { cid: entryCid }, waitingForFirstFrame: false });
+  page.applyDetailDimension(detail);
+  page.vi.cid = cid;
+  page.syncAspectFromPlayer({ width: 3840, height: 2160 });
+  assert.equal(page.ar, 9 / 16, 'rotated detail must survive encoded dimensions with or without a route CID');
+}
+for (const rotation of [1, 3, 90, -90, 270]) {
+  assert.equal(page.displayAspect(3840, 2160, rotation), 9 / 16);
+}
+for (const rotation of [undefined, 0, 2, 180]) {
+  assert.equal(page.displayAspect(3840, 2160, rotation), 16 / 9);
+}
+
 // adoptWarmAspect：播放器尺寸优先；meta 是显示尺寸时不被编码尺寸覆盖。
 page = makePage();
 page.adoptWarmAspect({ width: 1080, height: 1920 }, 1);

@@ -138,7 +138,7 @@ export class IjkPlaybackPlayer implements PlaybackPlayer {
       AppStorage.get<string>('biliCookie') || '',
       AppStorage.get<boolean>('playbackDiskCache') !== false ? 1 : 0,
       videoBackup, audioBackup, video.bandwidth || 0, dash.audioStreams[0].bandwidth || 0,
-      AppStorage.get<number>('startupBackupDelayMs') ?? 350);
+      AppStorage.get<number>('startupBackupDelayMs') ?? (AppStorage.get<boolean>('startupCdnRace') === true ? 0 : 350));
     if (!this.source) throw new Error('IJK input creation failed');
     this.width = video.width || 0;
     this.height = video.height || 0;

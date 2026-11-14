@@ -12,6 +12,7 @@
 #include <unordered_map>
 extern "C" {
 #include "ijkplayer/ijkplayer_android.h"
+#include "ijkplayer/ijkplayer_internal.h"
 int ijk_lab_register_dual(void);
 int purapily_prewarm_async(const char *url, const char *agent, const char *referer, const char *cookie, int bytes, int seek_ms);
 }
@@ -47,7 +48,16 @@ struct Player {
 
     ~Player()
     {
-        if (native) { ijkmp_shutdown(native); ijkmp_dec_ref_p(&native); }
+        if (native) {
+            ijkmp_shutdown(native);
+            // Shutdown aborts the queue. Keep our native reference and event channel
+            // alive until MessageLoop has finished handling any dequeued message.
+            if (native->msg_thread) {
+                SDL_WaitThread(native->msg_thread, nullptr);
+                native->msg_thread = nullptr;
+            }
+            ijkmp_dec_ref_p(&native);
+        }
         for (const auto &entry : windows) OH_NativeWindow_DestroyNativeWindow(entry.second);
         if (events) napi_release_threadsafe_function(events, napi_tsfn_abort);
     }

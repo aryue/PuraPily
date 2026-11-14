@@ -8,7 +8,19 @@ const start = source.indexOf('  private async cropStillToPicture(');
 const end = source.indexOf('  private async prepareReferenceFeedPreview(', start);
 assert.ok(start > 0 && end > start);
 const context = { exports: {}, logInfo() {}, logWarn(error) { throw new Error(error); } };
-vm.runInNewContext(ts.transpileModule(`export class Page { ${source.slice(start, end)} }`, {
+const geometryStart = source.indexOf('  private referenceWarmSurfaceWidth(');
+const geometryEnd = source.indexOf('  private activeVideoSurfaceId(', geometryStart);
+assert.ok(geometryStart > 0 && geometryEnd > geometryStart);
+const aspectStart = source.indexOf('  private referenceFeedAspect(');
+const aspectEnd = source.indexOf('  private referencePreviewPresentationLocked(', aspectStart);
+assert.ok(aspectStart > 0 && aspectEnd > aspectStart);
+const displayStart = source.indexOf('  private displayAspect(');
+const displayEnd = source.indexOf('\n  }', displayStart) + '\n  }'.length;
+assert.ok(displayStart > 0 && displayEnd > displayStart);
+vm.runInNewContext(ts.transpileModule(`export class Page {
+  ${source.slice(start, end)} ${source.slice(geometryStart, geometryEnd)} ${source.slice(aspectStart, aspectEnd)}
+  ${source.slice(displayStart, displayEnd)}
+}`, {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 }
 }).outputText, context);
 
@@ -24,6 +36,26 @@ function bitmap(width, height) {
 }
 async function main() {
   const page = new context.exports.Page();
+  Object.assign(page, { cw: 440, ch: 744, referenceAreaHeight: () => 248, portraitScaleByTransform: () => true });
+  for (const [current, upcoming] of [[16 / 9, 9 / 16], [9 / 16, 16 / 9]]) {
+    Object.assign(page, { ar: current, referenceWarmAspectRatio: upcoming });
+    const width = Math.min(440, 744 * upcoming);
+    assert.equal(page.referenceWarmSurfaceWidth(), width);
+    assert.equal(page.referenceWarmSurfaceHeight(), width / upcoming);
+  }
+  assert.match(source, /\.width\(this\.referenceSecondSurfaceActive \? this\.referenceWarmSurfaceWidth\(\)/);
+  assert.match(source, /\.height\(this\.referenceSecondSurfaceActive \? this\.referenceWarmSurfaceHeight\(\)/);
+  assert.match(source, /\.width\(this\.referenceSecondSurfaceActive \? [^\n]+ : this\.referenceWarmSurfaceWidth\(\)\)/);
+  assert.match(source, /\.height\(this\.referenceSecondSurfaceActive \? [^\n]+ : this\.referenceWarmSurfaceHeight\(\)\)/);
+  const pinned = source.slice(source.indexOf('  ReferenceFeedPinnedPage()'), source.indexOf('  ReferenceFeedPreviewPage()'));
+  assert.match(pinned, /referenceMediaHeight\(this\.referencePinnedAspectRatio\)/);
+  assert.doesNotMatch(pinned, /this\.ar\b/, 'live decoder dimensions must not resize a pinned frame or cover');
+  const rotated = page.referenceFeedAspect({ cid: 2, dimension: { width: 1920, height: 1080, rotate: 90 } }, 2, 0);
+  assert.equal(rotated, 9 / 16);
+  assert.equal(page.referenceFeedAspect({ cid: 2, dimension: { width: 3840, height: 2160, rotate: 1 } }, 2, 0), rotated);
+  assert.equal(page.referenceFeedDisplayAspect(rotated, 16 / 9), rotated, 'encoded dimensions must not undo display rotation');
+  assert.equal(page.referenceFeedDisplayAspect(16 / 9, 3 / 4), 3 / 4);
+  assert.equal(page.referenceFeedAspect({ cid: 2, dimension: { width: 1920, height: 1080 } }, 3, 0), 0);
   for (const [width, height, aspect] of [[1920, 1080, 9 / 16], [720, 1280, 16 / 9], [1920, 1080, 3 / 4]]) {
     const ijk = bitmap(width, height);
     assert.equal(await page.cropStillToPicture(ijk, aspect, true), ijk);

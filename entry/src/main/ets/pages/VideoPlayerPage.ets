@@ -372,7 +372,6 @@ struct VideoPlayerPage {
   @State private referenceFeedNextChrome: FeedChromeInfo | null = null
   @State referencePreviewFrame: image.PixelMap | undefined = undefined
   @State referencePinnedFrame: image.PixelMap | undefined = undefined
-  @State referencePinnedCover: string = ''
   @State referencePinnedAspectRatio: number = 1
   @State referencePinnedOpacity: number = 1
   @State referenceFeedSurfaceReady: boolean = false
@@ -398,16 +397,14 @@ struct VideoPlayerPage {
   private pendingStillReleases: image.PixelMap[] = []
   private stillSweepTimer_: number = -1
   private playbackListPrefetch: PlaybackListPrefetch = new PlaybackListPrefetch(() =>
-    this.referenceAlive && this.playerPageVisible && !this.waitingForFirstFrame && !this.isPgc_)
+    this.referenceAlive && this.playerPageVisible && !this.waitingForFirstFrame && !this.isPgc_, () =>
+    !this.referenceFeed && this.portraitPlateByArea() ? this.pageInstanceId_ : '')
   @State referenceFeedPreviewPinned: boolean = false
   @State referencePreviewVisible: boolean = false
   @State referencePreviewAspectRatio: number = 1
   @State private referenceSecondSurfaceActive: boolean = false
   private referenceWarmSession: FeedPlaybackSession | null = null
   private referenceFeedSlotPending: boolean = false
-  // 本次交接是否接的是预热实例：只有预热 surface 上已经停着那一帧，
-  // 静帧硬切才是无缝的；冷启动的 surface 还是空的，硬切会闪一帧黑。
-  private referenceFeedWarmAdopted_: boolean = false
   @State private referenceWarmAspectRatio: number = 1
   private referencePreviewReleaseJob: Promise<void> = Promise.resolve()
   private referencePreviewXc: XComponentController = new XComponentController()
@@ -4406,6 +4403,7 @@ struct VideoPlayerPage {
   }
 
   aboutToDisappear() {
+    IjkWarmPool.get().releaseScene(this.pageInstanceId_);
     this.referenceCancelFeedPlayerTouch();
     this.fullscreenDeviceOrientation.stop();
     if (this.neighborWarmTimer_ !== -1) {
@@ -6081,6 +6079,7 @@ struct VideoPlayerPage {
     const deadline = new PlaybackDeadline();
     this.initializationDeadline_ = deadline;
     PlaybackStartup.trace('init', this.playbackStartupAt);
+    if (!this.referenceFeed) IjkWarmPool.get().cancelBuildingExcept(this.vi.cid);
     // 防止重复初始化
     // ⭐ 先设置标志，防止竞态条件
     this.initPInProgress_ = true;
@@ -6205,6 +6204,7 @@ struct VideoPlayerPage {
       if (!this.offlineVideoPath_ && !this.referenceFeed && this.vi.cid > 0 && supportsIjkPlayback(result)) {
         ijkWarm = await IjkWarmPool.get().takeOrWait(this.vi.cid, result.dash?.quality ?? 0, 600);
       }
+      if (!this.referenceFeed) IjkWarmPool.get().cancelBuildingExcept(0);																		 
       // 索引探测已开始，不必先等播放器创建完成。
       const player = ijkWarm !== null ? ijkWarm.handles.video
         : (playerTask ? await deadline.wait(playerTask, '创建播放器') : await deadline.wait(createPlaybackPlayer(result), '创建播放器'));
@@ -6995,7 +6995,7 @@ struct VideoPlayerPage {
   }
 
   private referenceWarmSurfaceWidth(): number {
-    return Math.max(1, Math.min(this.cw, this.referenceAreaHeight() * Math.max(0.2, this.referenceWarmAspectRatio)));
+    return Math.max(1, Math.min(this.cw, this.ch * Math.max(0.2, this.referenceWarmAspectRatio)));
   }
 
   private referenceWarmSurfaceHeight(): number {
@@ -9790,8 +9790,8 @@ struct VideoPlayerPage {
     Stack() {
       XComponent({ id: 'video_xc', type: XComponentType.SURFACE, controller: this.xc })
         .onLoad(() => this.onPlaybackSurfaceLoaded(false))
-        .width(this.referenceSecondSurfaceActive ? (this.portraitScaleByTransform() ? this.portraitBaseW() : this.referenceWarmSurfaceWidth()) : (this.referenceLandscapeResizeActive ? this.referenceResizeSurfaceW : (this.portraitScaleByTransform() ? this.portraitBaseW() : this.ovVideoW())))
-        .height(this.referenceSecondSurfaceActive ? (this.portraitScaleByTransform() ? this.portraitBaseH() : this.referenceWarmSurfaceHeight()) : (this.referenceLandscapeResizeActive ? this.referenceResizeSurfaceH : (this.portraitScaleByTransform() ? this.portraitBaseH() : this.ovVideoH())))
+        .width(this.referenceSecondSurfaceActive ? this.referenceWarmSurfaceWidth() : (this.referenceLandscapeResizeActive ? this.referenceResizeSurfaceW : (this.portraitScaleByTransform() ? this.portraitBaseW() : this.ovVideoW())))
+        .height(this.referenceSecondSurfaceActive ? this.referenceWarmSurfaceHeight() : (this.referenceLandscapeResizeActive ? this.referenceResizeSurfaceH : (this.portraitScaleByTransform() ? this.portraitBaseH() : this.ovVideoH())))
         // ⚠️ 这里必须写成"缩小动画期间 = SHRINK_ANIM_DURATION"，**不能写 0**。
         //    实测结论：节点自带的 .animation() 会**覆盖**外层 animateTo（不是相反）——
         //      duration 写 120 → 这一层只走 120ms，比详情卡/评论区先到位（最初的现象）；
@@ -9819,8 +9819,8 @@ struct VideoPlayerPage {
       if (this.referenceSpareSurfaceMounted || this.referenceSecondSurfaceActive || !this.referenceLayout) {
       XComponent({ id: 'reference_feed_video_xc', type: XComponentType.SURFACE, controller: this.referencePreviewXc })
         .onLoad(() => this.onPlaybackSurfaceLoaded(true))
-        .width(this.referenceSecondSurfaceActive ? (this.referenceLandscapeResizeActive ? this.referenceResizeSurfaceW : (this.portraitScaleByTransform() ? this.portraitBaseW() : this.ovVideoW())) : (this.portraitScaleByTransform() ? this.portraitBaseW() : this.referenceWarmSurfaceWidth()))
-        .height(this.referenceSecondSurfaceActive ? (this.referenceLandscapeResizeActive ? this.referenceResizeSurfaceH : (this.portraitScaleByTransform() ? this.portraitBaseH() : this.ovVideoH())) : (this.portraitScaleByTransform() ? this.portraitBaseH() : this.referenceWarmSurfaceHeight()))
+        .width(this.referenceSecondSurfaceActive ? (this.referenceLandscapeResizeActive ? this.referenceResizeSurfaceW : (this.portraitScaleByTransform() ? this.portraitBaseW() : this.ovVideoW())) : this.referenceWarmSurfaceWidth())
+        .height(this.referenceSecondSurfaceActive ? (this.referenceLandscapeResizeActive ? this.referenceResizeSurfaceH : (this.portraitScaleByTransform() ? this.portraitBaseH() : this.ovVideoH())) : this.referenceWarmSurfaceHeight())
         // ⚠️ 这里必须写成"缩小动画期间 = SHRINK_ANIM_DURATION"，**不能写 0**。
         //    实测结论：节点自带的 .animation() 会**覆盖**外层 animateTo（不是相反）——
         //      duration 写 120 → 这一层只走 120ms，比详情卡/评论区先到位（最初的现象）；
@@ -9848,8 +9848,8 @@ struct VideoPlayerPage {
           .position({ x: (this.ovRectW() - this.ovVideoW()) / 2, y: (this.ovRectH() - this.ovVideoH()) / 2 })
           .hitTestBehavior(HitTestMode.None)
       }
-      if (this.referenceLayout && this.referenceFeedPreviewPinned && !this.referencePortraitFeedActive()) {
-        Image(this.referencePinnedFrame || this.referencePinnedCover || this.vi.cover).width(this.ovVideoW()).height(this.ovVideoH())
+      if (this.referenceLayout && this.referenceFeedPreviewPinned && this.referencePinnedFrame && !this.referencePortraitFeedActive()) {
+        Image(this.referencePinnedFrame).width(this.ovVideoW()).height(this.ovVideoH())
           .syncLoad(true).objectFit(this.effectiveScaleMode() === 'stretch' ? ImageFit.Fill : this.effectiveScaleMode() === 'fill' ? ImageFit.Cover : ImageFit.Contain).backgroundColor(Color.Black).hitTestBehavior(HitTestMode.None)
           .scale({ x: (this.referenceMirrorVideo ? -1 : 1) * this.fullscreenVideoScale, y: this.fullscreenVideoScale })
           .rotate({ angle: this.fullscreenVideoAngle })
@@ -11886,12 +11886,18 @@ struct VideoPlayerPage {
     // 普通播放页必须允许迟到修正：原来这里卡着 waitingForFirstFrame，预热命中后
     // 几百毫秒就置 false，详情稍晚返回就被丢掉，ar 便永久停在 16:9。
     if (this.referenceFeed && !this.waitingForFirstFrame) return;
-    const rotated = Math.abs(dimension.rotate || 0) % 180 === 90;
-    if (!this.setAspectFromMeta(rotated ? dimension.height / dimension.width : dimension.width / dimension.height,
-      this.vi.cid)) return;
+    if (!this.setAspectFromMeta(this.displayAspect(dimension.width, dimension.height, dimension.rotate),
+      page?.cid || detail.cid || this.vi.cid)) return;
     this.updateIsLandscapeVertical();
     this.updateLSVSize();
     this.updateVideoSize();
+  }
+
+  private displayAspect(width: number, height: number, rotate: number = 0): number {
+    // Bilibili view can encode a quarter turn as 1 or 3 instead of degrees.
+    const rotation = Math.abs(rotate);
+    const swapsDimensions = rotation === 1 || rotation === 3 || rotation % 180 === 90;
+    return swapsDimensions ? height / width : width / height;
   }
 
   /**
@@ -12247,10 +12253,18 @@ struct VideoPlayerPage {
 
   private referenceFeedAspect(detail: VideoDetail, cid: number, fallback: number): number {
     const page = detail.pages?.find((item: VideoPageItem) => item.cid === cid);
-    const dimension = page?.dimension || detail.dimension;
-    if (!dimension || dimension.width <= 0 || dimension.height <= 0) return fallback;
-    return Math.abs(dimension.rotate || 0) % 180 === 90
-      ? dimension.height / dimension.width : dimension.width / dimension.height;
+    const dimension = page?.dimension || (detail.cid === cid || !detail.cid ? detail.dimension : undefined);
+    if (!dimension || !Number.isFinite(dimension.width) || !Number.isFinite(dimension.height) ||
+      dimension.width <= 0 || dimension.height <= 0) return fallback;
+    return this.displayAspect(dimension.width, dimension.height, dimension.rotate);
+  }
+
+  private referenceFeedDisplayAspect(declared: number, decoded: number): number {
+    if (!(decoded > 0.05 && decoded < 20)) return declared;
+    // 旋转视频可能上报编码宽高。显示尺寸与之互为倒数时沿用目标显示尺寸。
+    if (declared > 0 && (Math.abs(decoded * declared - 1) <= 0.02 ||
+      Math.abs(decoded / declared - 1) <= 0.02)) return declared;
+    return decoded;
   }
 
   private referencePreviewPresentationLocked(): boolean {
@@ -12389,18 +12403,20 @@ struct VideoPlayerPage {
     if (!frame || !detail) return false;
     // 翻页提交时静帧还没解出来：之后到达的「当前片」静帧要补给固定页。
     // 固定页在不透明层最上面，不补的话这张图会被它挡住，只剩黑底转圈。
-    if (id === this.vi.bvid && this.referenceFeedPreviewPinned && !this.referencePinnedFrame) {
+    const ratio = this.referenceStillRatios.get(id) ?? 0;
+    if (id === this.vi.bvid && this.referenceFeedPreviewPinned && !this.referencePinnedFrame &&
+      ratio > 0 && Math.abs(ratio / this.referencePinnedAspectRatio - 1) <= 0.02) {
       this.referencePinnedFrame = frame;
-      this.referencePinnedCover = '';
-      const ratio = this.referenceStillRatios.get(id);
-      if (ratio && ratio > 0) this.referencePinnedAspectRatio = ratio;
     }
     if (id !== this.referencePreviewRequestedId) return false;
-    if (!initialize && this.referencePreviewPresentationLocked()) return true;
+    if (!initialize && this.referencePreviewPresentationLocked() &&
+      (this.referencePreviewFrame || !(ratio > 0 && Math.abs(ratio / this.referencePreviewAspectRatio - 1) <= 0.02))) return true;
     logInfo(`[ReferenceFeed] preview publish ${id} title=${detail.title} frame=${!!frame} req=${this.referencePreviewRequestedId}`);
     this.referencePreviewFrame = frame;
     this.referencePreviewDetail = detail;
-    this.referencePreviewAspectRatio = this.referenceStillRatios.get(id) ?? 1;
+    if (initialize || !this.referencePreviewPresentationLocked()) {
+      this.referencePreviewAspectRatio = ratio || 1;
+    }
     this.referencePreviewFrameReady = true;
     return true;
   }
@@ -12537,8 +12553,9 @@ struct VideoPlayerPage {
       this.referencePreviewDetail = this.referenceStillDetails.get(item.id) || null;
       this.referencePreviewFrame = undefined;
       // A cold neighbour must never inherit the preceding neighbour's geometry.
-      this.referencePreviewAspectRatio = this.referenceStillRatios.get(item.id) ||
-        (item.videoWidth > 0 && item.videoHeight > 0 ? item.videoWidth / item.videoHeight : 1);
+      const fallback = item.videoWidth > 0 && item.videoHeight > 0 ? item.videoWidth / item.videoHeight : 1;
+      this.referencePreviewAspectRatio = this.referenceDecodeRatios.get(item.id) ||
+        (cachedDetail ? this.referenceFeedAspect(cachedDetail, item.cid || cachedDetail.cid || 0, fallback) : fallback);
     }
     // 画面（静帧/解码器）才需要预览 Surface，详情已经发在上面了。
     if (!this.referencePreviewSurfaceId) return;
@@ -12602,7 +12619,9 @@ struct VideoPlayerPage {
       item.cid = cid;
       // Publish geometry before waiting for signed URLs, decoding or a Surface capture.
       // The cover and the decoded still must use the destination video's aspect.
-      const aspect = this.referenceFeedAspect(detail, cid, this.referencePreviewAspectRatio);
+      const fallback = item.videoWidth > 0 && item.videoHeight > 0 ? item.videoWidth / item.videoHeight : 1;
+      const declared = this.referenceFeedAspect(detail, cid, 0);
+      const aspect = declared || fallback;
       this.referenceWarmAspectRatio = aspect;
       if (this.referencePreviewRequestedId === item.id) {
         // 信息层与画幅解耦：文案/头像拖动途中也立刻要正确；
@@ -12622,6 +12641,9 @@ struct VideoPlayerPage {
       //   先等布局落地，surface 才会按新盒子重新分配，抓图拿到的才是目标尺寸。
       await new Promise<void>((resolve) => setTimeout(resolve, 32));
       if (!this.referenceAlive || generation !== this.referencePreviewGeneration) return false;
+      const scene = this.pageInstanceId_ + ':feed';
+      if (!IjkWarmPool.get().reservePreview(scene)) return false;
+      // 从一开始就在页面备用 Surface 上解码，暂停帧可直接抓取。
       session = new FeedPlaybackSession(item.id, this.referencePreviewSurfaceId, result);
       session.aspectRatio = aspect;
       this.referenceWarmSession = session;
@@ -12652,13 +12674,15 @@ struct VideoPlayerPage {
       // Allow the inactive Surface to adopt the decoded aspect before taking its fallback frame.
       await new Promise<void>((resolve) => setTimeout(resolve, 32));
       if (!this.referenceAlive || generation !== this.referencePreviewGeneration) return false;
+      const displayAspect = this.referenceFeedDisplayAspect(declared, decoderAspect || session.aspectRatio);
       // The x86 emulator does not expose a consistent decoder readback orientation.
-      // Keep its warm decoder, but use the target cover instead of caching corrupt stills.
+      // Keep the warm decoder even when reliable readback is unavailable.
       if (deviceInfo.abiList.includes('x86_64')) {
         this.referenceStillDetails.set(item.id, detail);
-        this.referenceStillRatios.set(item.id, session.aspectRatio);
-        if (this.referencePreviewRequestedId === item.id && !this.referencePreviewPresentationLocked()) this.referencePreviewAspectRatio = session.aspectRatio;
-        logInfo(`[ReferenceFeed] warm ready ${item.id} surface=${session.surfaceId} cover fallback`);
+        if (this.referencePreviewRequestedId === item.id && !this.referencePreviewPresentationLocked()) {
+          this.referencePreviewAspectRatio = this.referenceStillRatios.get(item.id) || displayAspect;
+        }
+        logInfo(`[ReferenceFeed] warm ready ${item.id} surface=${session.surfaceId} readback=unavailable`);
         return true;
       }
       // Decoder buffers may carry a vertical flip/rotation in their Surface transform.
@@ -12686,6 +12710,7 @@ struct VideoPlayerPage {
         captured.release().catch(() => {});
         if (this.referenceWarmSession === session) this.referenceWarmSession = null;
         await session.release();
+        if (this.referenceWarmSession === null) IjkWarmPool.get().releasePreview(this.pageInstanceId_ + ':feed');
         setTimeout(() => {
           if (this.referenceAlive) this.requestReferenceFeedPreview(item);
         }, 180 * (staleAttempt + 1));
@@ -12694,8 +12719,11 @@ struct VideoPlayerPage {
       if (staleCanvas) logWarn(`[ReferenceFeed] still stale fallback ${item.id} canvas=${capRatio.toFixed(4)} box=${boxRatio.toFixed(4)} — 重抓两轮仍未重建`);
       this.referenceWarmStaleAttempts.delete(item.id);
       // 按实际播放器的输出方式还原完整画面，再交给 Image 应用目标缩放模式。
-      const still = await this.cropStillToPicture(captured,
-        decoderAspect > 0 ? decoderAspect : session.aspectRatio, stretchedBuffer);
+      const still = await this.cropStillToPicture(captured, displayAspect, stretchedBuffer);
+      if (!this.referenceAlive || generation !== this.referencePreviewGeneration) {
+        still.release().catch(() => {});
+        return false;
+      }
       const oldFrame = this.referenceStillFrames.get(item.id);
       if (oldFrame && (oldFrame === this.referencePinnedFrame ||
         (oldFrame === this.referencePreviewFrame && this.referencePreviewPresentationLocked()))) {
@@ -12710,7 +12738,7 @@ struct VideoPlayerPage {
       //   stillRatio（= 裁掉黑边后的位图比例）只给固定页/预览页那张 Image；
       //   decodeRatio（= 解码器实测画幅）只给视频 ar。
       const stillRatio = pmRatio > 0 ? pmRatio : session.aspectRatio;
-      const decodeRatio = decoderAspect > 0 ? decoderAspect : session.aspectRatio;
+      const decodeRatio = displayAspect;
       this.referenceDecodeRatios.set(item.id, decodeRatio);
       logInfo(`[ReferenceFeed] still ${item.id} surface=${session.surfaceId} pm=${info.size?.width}x${info.size?.height} pmRatio=${pmRatio.toFixed(4)} session=${session.aspectRatio.toFixed(4)} decoder=${decoderAspect.toFixed(4)} declared=${aspect.toFixed(4)} pick=${stillRatio.toFixed(4)} warmBox=${this.referenceWarmSurfaceWidth().toFixed(0)}x${this.referenceWarmSurfaceHeight().toFixed(0)} areaH=${this.referenceAreaHeight().toFixed(0)} second=${this.referenceSecondSurfaceActive}`);
       this.referenceStillDetails.set(item.id, detail);
@@ -12742,6 +12770,7 @@ struct VideoPlayerPage {
   }
 
   private async releaseReferenceFeedPreview(): Promise<void> {
+    IjkWarmPool.get().releaseScene(this.pageInstanceId_ + ':feed');																   
     this.referencePreviewGeneration++;
     this.referencePreviewRequestedId = '';
     this.referenceFeedNextChrome = null;
@@ -13392,10 +13421,13 @@ struct VideoPlayerPage {
       // let 变量在后续闭包（.then 回调）里不会被收窄，这里固化成不可变引用。
       const targetDetail: VideoDetail = detail;
       if (this.referencePreviewRequestedId !== next.id) this.requestReferenceFeedPreview(next);
-      // Page motion must not wait for a decoder: use the target cover on a warm miss.
+      // Page motion remains independent of decoder readiness.
       const previewMatches = this.referencePreviewRequestedId === next.id;
-      const targetRatio = this.referenceStillRatios.get(next.id) ||
-        this.referenceFeedAspect(detail, nextCid, next.videoWidth > 0 && next.videoHeight > 0 ? next.videoWidth / next.videoHeight : 1);
+      const declaredRatio = this.referenceFeedAspect(detail, nextCid, 0);
+      const warmRatio = this.referenceWarmSession?.id === next.id && this.referenceWarmSession.ready
+        ? this.referenceWarmSession.aspectRatio : 0;
+      const targetRatio = this.referenceDecodeRatios.get(next.id) || this.referenceFeedDisplayAspect(declaredRatio, warmRatio) ||
+        (next.videoWidth > 0 && next.videoHeight > 0 ? next.videoWidth / next.videoHeight : 1);
       // 滑入的那一页（预览页）信息层只认「已解析的详情」：
       //   预热 detail 可能还没落地（referencePreviewDetail 为空 / 是别的稿件），
       //   这时信息层会退回到推荐队列里的兜底字段——story 队列的 title 常常是话题串、
@@ -13405,10 +13437,8 @@ struct VideoPlayerPage {
         this.referencePreviewDetail = detail;
         logInfo(`[ReferenceFeed] preview detail publish ${detail.bvid} title=${detail.title}`);
       }
-      if (!previewMatches || !this.referenceStillRatios.get(next.id)) {
-        this.referencePreviewAspectRatio = targetRatio;
-      }
-      const targetCover = next.coverUrl || detail.pic;
+      this.referencePreviewAspectRatio = previewMatches && this.referencePreviewFrame
+        ? this.referenceStillRatios.get(next.id) || targetRatio : targetRatio;
       // Keep the incoming card and committed still at identical bounds, including cold misses.
       const presentationRatio = this.referencePreviewAspectRatio;
       if (this.referenceVerticalSwipe) {
@@ -13488,6 +13518,8 @@ struct VideoPlayerPage {
       logInfo(`[ReferenceFeed] ratio commit ${next.id} decode=${(this.referenceDecodeRatios.get(next.id) ?? -1).toFixed(4)} target=${targetRatio.toFixed(4)} pick=${committedRatio.toFixed(4)} preview=${presentationRatio.toFixed(4)}`);
       if (committedRatio > 0) {
         this.ar = committedRatio;
+        this.arFromMeta_ = declaredRatio > 0;
+        this.arMetaCid_ = nextCid;
         this.vh = 1000;
         this.vw = this.ar * this.vh;
         this.updateIsLandscapeVertical();
@@ -13498,10 +13530,9 @@ struct VideoPlayerPage {
       //   vi/vd/画幅/播放状态全部先落地，避免分批刷新时露出半套旧信息。
       // ⭐ 静帧到提交时再取：翻页动画有 360ms，期间缓存表可能换图并把旧图排队释放。
       //    提前抓到局部变量的话，提交时这张位图可能已经被回收（硬切静默降级或直接抛异常）。
-      const targetFrame = this.referenceStillFrames.get(next.id) ||
-        (previewMatches ? this.referencePreviewFrame : undefined);
+      const targetFrame = (this.referencePreviewRequestedId === next.id ? this.referencePreviewFrame : undefined) ||
+        this.referenceStillFrames.get(next.id);
       this.referencePinnedFrame = targetFrame;
-      this.referencePinnedCover = targetCover;
       // 保持原设计：静帧跟「预览页当前比例」走（previewMatches 为真时就是滑入页那一套），
       // 否则退回 targetRatio。不要强行拉成和 ar 一致 —— 那会在硬切瞬间把静帧整体缩一次。
       this.referencePinnedAspectRatio = presentationRatio;
@@ -13546,6 +13577,7 @@ struct VideoPlayerPage {
       this.referenceFeedSlotPending = true;
       const retiring = this.referenceWarmSession;
       this.referenceWarmSession = null;
+      IjkWarmPool.get().releasePreview(this.pageInstanceId_ + ':feed');																	   
       this.referencePreviewGeneration++;
       this.referencePreviewPreparing = false;
       if (retiring && retiring !== warm) {
@@ -13657,7 +13689,8 @@ struct VideoPlayerPage {
         // ⚠ 静帧还盖在上面时改 ar 会让整张静帧立刻缩放（水印位置跳一下）。
         //    解码尺寸与已提交画幅只差一点点时（编码补边、对齐取整）保持画幅不变；
         //    只有真正换了方向/画幅（>2%）才更新，那属于必须纠正的错误几何。
-        const adopted = warm.aspectRatio;
+        const declared = this.referenceFeedAspect(detail, this.vi.cid, 0);
+        const adopted = this.referenceFeedDisplayAspect(declared, warm.aspectRatio);
         if (Number.isFinite(adopted) && adopted > 0) {
           const delta = this.ar > 0 ? Math.abs(adopted / this.ar - 1) : 1;
           if (delta > 0.02) {
@@ -13676,8 +13709,6 @@ struct VideoPlayerPage {
         this.avAudio = handles.audioPlayer;
         this.dashBridge_ = handles.bridge;
         this.isDashStream_ = handles.bridge !== null;
-        // 预热 surface 上停着的就是静帧那一帧 → 允许无缝硬切。
-        this.referenceFeedWarmAdopted_ = true;
         const oldSurface = this.sId;
         this.sId = warm.surfaceId;
         this.referenceSecondSurfaceActive = !this.referenceSecondSurfaceActive;
@@ -13705,7 +13736,6 @@ struct VideoPlayerPage {
         logInfo(`[ReferenceFeed] warm adopted ${detail.bvid} surface=${this.sId} ${Date.now() - started}ms`);
       } else {
         // A cached still can survive a decoder failure; retain the cold path as fallback.
-        this.referenceFeedWarmAdopted_ = false;
         await Promise.all([this.initP(), Promise.race([
           Promise.all([frame, prepared]), new Promise<void>((resolve) => setTimeout(resolve, 6000))
         ])]);
@@ -13730,26 +13760,12 @@ struct VideoPlayerPage {
       logInfo(`[ReferenceFeed] main ${generation} behind still state=${player.state} ${Date.now() - started}ms`);
       // A held finger or rebound keeps its still. New visual switches cancel this
       // wait and proceed independently; only the latest destination may play.
-      let stillCut = false;
       while (this.referenceAlive && generation === this.referenceSwitchGeneration) {
         while (!this.playerPageVisible || this.userPaused_ || this.referenceVerticalSwipe || this.referenceFeedAnimator || this.referenceFeedLoading || Math.abs(this.referenceFeedDragY) > 1) {
           if (!this.referenceAlive || generation !== this.referenceSwitchGeneration) return;
           await new Promise<void>((resolve) => setTimeout(resolve, 16));
         }
         if (!this.referenceAlive || generation !== this.referenceSwitchGeneration) return;
-        // ⭐ 先让暂停帧归位、撤掉静帧，再开始播。静帧就是这个 surface 抓的同一帧，
-        //    硬切不可见；原顺序先 play、等时钟前进 100~300ms 才露 surface，用户会看到
-        //    「静帧(t0) → 已播出几百毫秒的画面」，这正是连刷起播"跳一下"的来源。
-        if (!stillCut) stillCut = await this.revealFeedPinnedStill(generation);
-        if (!this.referenceAlive || generation !== this.referenceSwitchGeneration) return;
-        if (!this.playerPageVisible || this.userPaused_ || this.referenceVerticalSwipe || this.referenceFeedAnimator || Math.abs(this.referenceFeedDragY) > 1) {
-          if (stillCut) {
-            this.referencePinnedOpacity = 1;
-            this.referenceFeedSurfaceReady = false;
-            stillCut = false;
-          }
-          continue;
-        }
         this.referenceFeedMainPresentAfter = player.currentTime;
         let advancing = false;
         const presented = new Promise<void>((resolve) => {
@@ -13775,7 +13791,7 @@ struct VideoPlayerPage {
           this.markAutoPlay('feed-handover');
           await player.play();
         }
-        logInfo(`[ReferenceFeed] main ${generation} resume state=${player.state} after=${this.referenceFeedMainPresentAfter}${stillCut ? ' still=cut' : ''}`);
+        logInfo(`[ReferenceFeed] main ${generation} resume state=${player.state} after=${this.referenceFeedMainPresentAfter}`);
         await Promise.race([presented, new Promise<void>((resolve) => setTimeout(resolve, 15000))]);
         if (!this.referenceAlive || generation !== this.referenceSwitchGeneration) return;
         if (!advancing) {
@@ -13784,43 +13800,24 @@ struct VideoPlayerPage {
             !this.referenceVerticalSwipe && !this.referenceFeedAnimator && Math.abs(this.referenceFeedDragY) <= 1) {
             throw new Error('主播放器起播后进度未推进');
           }
-          // 硬切之后时钟没走：可能是 surface 还没真正出帧，恢复静帧继续等。
-          if (stillCut) {
-            this.referencePinnedOpacity = 1;
-            this.referenceFeedSurfaceReady = false;
-            stillCut = false;
-          }
           continue;
         }
-        if (!stillCut) {
-          // 没有可用静帧（只有封面）时保留原来的保护：确认时钟确实前进后才露 surface。
-          this.referenceFeedSurfaceReady = true;
-          await new Promise<void>((resolve) => setTimeout(resolve, 64));
-          if (!this.referenceAlive || generation !== this.referenceSwitchGeneration) return;
-          if (!this.playerPageVisible || this.userPaused_ || this.referenceVerticalSwipe || this.referenceFeedAnimator || Math.abs(this.referenceFeedDragY) > 1) {
-            this.referenceFeedSurfaceReady = false;
-            if (String(player.state) === 'playing') await player.pause();
-            continue;
-          }
-        }
-        if (this.referencePinnedOpacity > 0) {
-          this.getUIContext().animateTo({ duration: 180, curve: Curve.Linear }, () => { this.referencePinnedOpacity = 0; });
-          await new Promise<void>((resolve) => setTimeout(resolve, 180));
-          if (!this.referenceAlive || generation !== this.referenceSwitchGeneration) return;
-          if (!this.playerPageVisible || this.userPaused_ || this.referenceVerticalSwipe || this.referenceFeedAnimator || Math.abs(this.referenceFeedDragY) > 1) {
-            this.referencePinnedOpacity = 1;
-            this.referenceFeedSurfaceReady = false;
-            stillCut = false;
-            if (String(player.state) === 'playing') await player.pause();
-            continue;
-          }
+        // Surface 换位时合成器可能重新引用上一条的旧缓冲帧。
+        // 等目标解码器恢复且时间推进，再让 Surface 进视口，静帧留到布局落地。
+        this.referenceFeedSurfaceReady = true;
+        await this.delayMs_(64);
+        if (!this.referenceAlive || generation !== this.referenceSwitchGeneration || this.av !== player) return;
+        if (!this.playerPageVisible || this.userPaused_ || this.referenceVerticalSwipe ||
+          this.referenceFeedAnimator || Math.abs(this.referenceFeedDragY) > 1) {
+          this.referenceFeedSurfaceReady = false;
+          if (String(player.state) === 'playing') await player.pause();
+          continue;
         }
         break;
       }
       if (!this.referenceAlive || generation !== this.referenceSwitchGeneration || this.av !== player) return;
       this.referenceFeedPreviewPinned = false;
       this.referencePinnedFrame = undefined;
-      this.referencePinnedCover = '';
       player.setVolume(this.mute ? 0 : 1.0);
       if (this.avAudio) {
         this.avAudio.setVolume(this.mute ? 0 : 1.0);
@@ -13852,7 +13849,6 @@ struct VideoPlayerPage {
         } else {
           this.referencePinnedOpacity = 0;
           this.referencePinnedFrame = undefined;
-          this.referencePinnedCover = '';
           this.referenceFeedPreviewPinned = false;
           this.play = false;
           this.ld = false;
@@ -13894,19 +13890,6 @@ struct VideoPlayerPage {
     }
   }
 
-  /**
-   * 固定页静帧的填充方式：位图比例和视频画幅差 >5% 时，说明抓图那一刻预热 surface 还是
-   * 上一条的盒子（竖屏帧被 letterbox 进了横屏 buffer，两侧留黑）。这时用 Cover 把黑边裁掉，
-   * 正好留下中间的真实画面；用 Contain 会把整张位图缩进去，画面变成细细一条（实测出现过）。
-   * 位图比例与画幅一致时（绝大多数情况）保持原来的 fit，行为不变。
-   */
-  private stillFitForBitmap(bitmapRatio: number, targetAspect: number): ImageFit {
-    if (bitmapRatio > 0 && targetAspect > 0 && Math.abs(bitmapRatio / targetAspect - 1) > 0.05) {
-      return ImageFit.Cover;
-    }
-    return this.feedStillFit(targetAspect);
-  }
-
   private feedStillWidth(aspect: number): number {
     return this.effectiveScaleMode(aspect) === 'fitHeight'
       ? this.referenceAreaHeight() * Math.max(0.2, aspect) : this.referenceMediaWidth(aspect);
@@ -13917,79 +13900,26 @@ struct VideoPlayerPage {
       ? this.cw / Math.max(0.2, aspect) : this.referenceMediaHeight(aspect);
   }
 
-  /**
-   * 把预热 surface 上的暂停帧铺回播放位，再撤掉覆盖在上面的静帧。
-   *
-   * 静帧本来就是从这个 surface 抓的同一帧，所以这一步是无缝硬切；随后 play() 从
-   * 该帧继续，不会出现「静帧(t0) → 已播出几百毫秒的 live 帧」的跳变。
-   * 返回 true 表示 surface 已在播放位且静帧已撤（调用方不要再走淡出）。
-   */
-  private async revealFeedPinnedStill(generation: number): Promise<boolean> {
-    if (this.referenceFeedSurfaceReady) return false;
-    // 冷启动的 surface 上没有现成画面：硬切会在第一帧到达前漏出黑底，
-    // 交给调用方的「等时钟前进再露 surface」路径，期间保持封面/静帧。
-    if (!this.referenceFeedWarmAdopted_) {
-      logInfo('[ReferenceFeed] still cut skip: cold surface');
-      return false;
-    }
-    if (!this.referencePinnedFrame) {
-      logInfo('[ReferenceFeed] still cut skip: no decoded frame (cover only)');
-      return false;
-    }
-    const pinnedFrame = this.referencePinnedFrame;
-    let frameInfo: image.ImageInfo | undefined = undefined;
-    try {
-      frameInfo = pinnedFrame.getImageInfoSync();
-    } catch (_e) {
-      frameInfo = undefined;
-    }
-    if (!frameInfo || !frameInfo.size) {
-      // 位图已被释放（例如缓存表替换时旧图被回收）：这一步不能抛，
-      // 抛出去会让整条交接失败、画面永远停在静帧上。
-      logWarn('[ReferenceFeed] still cut skip: pinned frame released');
-      if (this.referencePinnedFrame === pinnedFrame) this.referencePinnedFrame = undefined;
-      return false;
-    }
-    const pmRatio = frameInfo.size.height > 0 ? frameInfo.size.width / frameInfo.size.height : 0;
-    logInfo(`[ReferenceFeed] still cut geom ar=${this.ar} pinned=${this.referencePinnedAspectRatio} pm=${frameInfo.size?.width}x${frameInfo.size?.height} pmRatio=${pmRatio} progress=${this.referenceFeedProgress} mode=${this.effectiveScaleMode()}/${this.effectiveScaleMode(this.referencePinnedAspectRatio)} box=${this.referenceMediaWidth()}x${this.referenceMediaHeight()} still=${this.feedStillWidth(this.ar)}x${this.feedStillHeight(this.ar)} areaTop=${this.referenceAreaTop()} mediaTop=${this.referenceMediaTop()} areaH=${this.referenceAreaHeight()} cw=${this.cw} ch=${this.ch}`);
-    const started = Date.now();
-    this.referenceFeedSurfaceReady = true;
-    // 联调：--ps feedStillHold 5000 时在硬切前后各停一段时间，便于逐帧截图对比几何。
-    const hold = AppStorage.get<number>('feedStillHoldMs') ?? 0;
-    // Surface 的 position 变更要等合成器下一帧才落到屏幕上；等两帧再撤静帧。
-    await this.delayMs_(hold > 0 ? hold : 34);
-    if (!this.referenceAlive || generation !== this.referenceSwitchGeneration) return false;
-    this.referencePinnedOpacity = 0;
-    await this.delayMs_(hold > 0 ? hold : 17);
-    logInfo(`[ReferenceFeed] still cut done ${Date.now() - started}ms hold=${hold}`);
-    return this.referenceAlive && generation === this.referenceSwitchGeneration;
-  }
-
   @Builder
   ReferenceFeedPinnedPage() {
     Stack() {
-      if (this.referencePinnedFrame) {
-      Image(this.referencePinnedFrame)
-        .syncLoad(true)
-        .objectFit(this.stillFitForBitmap(this.referencePinnedAspectRatio, this.ar))
-        .width(this.feedStillWidth(this.ar))
-        .height(this.feedStillHeight(this.ar))
-        .position({ x: (this.cw - this.feedStillWidth(this.ar)) / 2,
-          y: this.referenceMediaTop(this.ar) })
-      } else if (this.referencePinnedCover) {
-        // 没有解出静帧时先铺目标封面：黑底转圈既不告诉用户翻到了哪条，
-        // 也把下面已经解好的预览帧全挡住。
-        Image(this.referencePinnedCover)
-          .objectFit(this.stillFitForBitmap(this.referencePinnedAspectRatio, this.ar))
-          .width(this.feedStillWidth(this.ar))
-          .height(this.feedStillHeight(this.ar))
-          .position({ x: (this.cw - this.feedStillWidth(this.ar)) / 2,
-            y: this.referenceMediaTop(this.ar) })
+      Stack() {
+        if (this.referencePinnedFrame) {
+          Image(this.referencePinnedFrame)
+            .syncLoad(true)
+            .objectFit(this.feedStillFit(this.referencePinnedAspectRatio))
+            .width(this.feedStillWidth(this.referencePinnedAspectRatio))
+            .height(this.feedStillHeight(this.referencePinnedAspectRatio))
+        }
+        if (!this.referencePinnedFrame && !this.referenceFeedSurfaceReady) {
+          LoadingProgress().width(28).height(28).color('#FFFFFF')
+        }
       }
-      // 已保留真实首帧时，交接期间直接呈现画面；仅无画面时提示加载。
-      if (!this.referencePinnedFrame && !this.referencePinnedCover && !this.referenceFeedSurfaceReady) {
-        LoadingProgress().width(28).height(28).color('#FFFFFF')
-      }
+      .width(this.referenceMediaWidth(this.referencePinnedAspectRatio))
+      .height(this.referenceMediaHeight(this.referencePinnedAspectRatio))
+      .clip(true)
+      .position({ x: (this.cw - this.referenceMediaWidth(this.referencePinnedAspectRatio)) / 2, y: this.referenceMediaTop(this.referencePinnedAspectRatio) })
+      .hitTestBehavior(HitTestMode.None)
     }.width('100%').height('100%').backgroundColor(Color.Black)
       .opacity(this.referencePinnedOpacity).clip(true).hitTestBehavior(HitTestMode.None)
   }
@@ -13997,40 +13927,23 @@ struct VideoPlayerPage {
   @Builder
   ReferenceFeedPreviewPage() {
     Stack() {
-      if (this.referencePreviewFrame) {
+      if (this.referenceFeedPreview) {
         Stack() {
-        Image(this.referencePreviewFrame)
-        .syncLoad(true)
-        .objectFit(this.effectiveScaleMode(this.referencePreviewAspectRatio) === 'stretch' ? ImageFit.Fill : this.effectiveScaleMode(this.referencePreviewAspectRatio) === 'fill' ? ImageFit.Cover : ImageFit.Contain)
-        .width(this.effectiveScaleMode(this.referencePreviewAspectRatio) === 'fitHeight' ? this.referenceAreaHeight() * Math.max(0.2, this.referencePreviewAspectRatio) : this.referenceMediaWidth(this.referencePreviewAspectRatio))
-        .height(this.effectiveScaleMode(this.referencePreviewAspectRatio) === 'fitWidth' ? this.cw / Math.max(0.2, this.referencePreviewAspectRatio) : this.referenceMediaHeight(this.referencePreviewAspectRatio))
-        }.width(this.referenceMediaWidth(this.referencePreviewAspectRatio))
-        .height(this.referenceMediaHeight(this.referencePreviewAspectRatio)).clip(true)
-        .position({
-          x: (this.cw - this.referenceMediaWidth(this.referencePreviewAspectRatio)) / 2,
-          y: this.referenceMediaTop(this.referencePreviewAspectRatio)
-        })
-        .hitTestBehavior(HitTestMode.None)
-      } else if (this.referenceFeedPreview) {
-        // ⭐ 冷命中（这条视频还没被预热、静帧没抓下来）时别留纯黑+转圈：
-        //    屏幕上既看不出翻到了哪条，来回切的时候还会连续闪过几帧全黑。
-        //    先用队列里的封面铺满画幅，静帧到达后这一支整体被上面的分支替换。
-        Stack() {
-          if (this.referencePreviewCoverUrl()) {
-            Image(this.referencePreviewCoverUrl())
-              .objectFit(this.effectiveScaleMode(this.referencePreviewAspectRatio) === 'stretch' ? ImageFit.Fill : ImageFit.Cover)
-              .width(this.referenceMediaWidth(this.referencePreviewAspectRatio))
-              .height(this.referenceMediaHeight(this.referencePreviewAspectRatio))
+          if (this.referencePreviewFrame) {
+            Image(this.referencePreviewFrame)
+              .syncLoad(true)
+              .objectFit(this.feedStillFit(this.referencePreviewAspectRatio))
+              .width(this.feedStillWidth(this.referencePreviewAspectRatio))
+              .height(this.feedStillHeight(this.referencePreviewAspectRatio))
           }
-          LoadingProgress().width(28).height(28).color('#FFFFFF')
+          if (!this.referencePreviewFrame) {
+            LoadingProgress().width(28).height(28).color('#FFFFFF')
+          }
         }
         .width(this.referenceMediaWidth(this.referencePreviewAspectRatio))
         .height(this.referenceMediaHeight(this.referencePreviewAspectRatio))
         .clip(true)
-        .position({
-          x: (this.cw - this.referenceMediaWidth(this.referencePreviewAspectRatio)) / 2,
-          y: this.referenceMediaTop(this.referencePreviewAspectRatio)
-        })
+        .position({ x: (this.cw - this.referenceMediaWidth(this.referencePreviewAspectRatio)) / 2, y: this.referenceMediaTop(this.referencePreviewAspectRatio) })
         .hitTestBehavior(HitTestMode.None)
       }
       if (this.referenceFeedPreview && !this.referenceInfoHidden) {
@@ -14039,10 +13952,6 @@ struct VideoPlayerPage {
     }
     .width('100%').height('100%').backgroundColor(Color.Black)
     .clip(true)
-  }
-
-  private referencePreviewCoverUrl(): string {
-    return this.referenceFeedPreview?.coverUrl || '';
   }
 
   private referencePreviewDetailFor(item: RecommendItem): VideoDetail | null {

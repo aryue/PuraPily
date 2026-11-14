@@ -91,7 +91,11 @@ function loadPageHandoff(detail = null, schedule = setTimeout) {
     LiveViewHelper: { setControlHandlers() {}, async create() {} } };
   const aspectStart = source.indexOf('  private referenceFeedAspect(');
   const aspectEnd = source.indexOf('  private referencePublishStill(', aspectStart);
-  vm.runInNewContext(ts.transpileModule(`export class Page { ${source.slice(aspectStart, aspectEnd)} ${source.slice(start, end)} }`, {
+  const displayStart = source.indexOf('  private displayAspect(');
+  const displayEnd = source.indexOf('  private setAspectFromMeta(', displayStart);
+  vm.runInNewContext(ts.transpileModule(`export class Page {
+    ${source.slice(displayStart, displayEnd)} ${source.slice(aspectStart, aspectEnd)} ${source.slice(start, end)}
+  }`, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 }
   }).outputText, context);
   return new context.exports.Page();

@@ -142,6 +142,17 @@ export default class EntryAbility extends UIAbility {
     // 画质偏好：Wi-Fi 与移动网络各一档，这里按当前链路同步解析出生效值（写入 AppStorage
     // 的 defaultVideoQn）并开始监听换网。必须在首屏列表预取之前完成，否则冷启缓存键会按旧档生成。
     QualityPreferenceService.getInstance().initialize(this.context);
+    try {
+      const pref = preferences.getPreferencesSync(this.context, { name: 'my_app_settings' });
+      AppStorage.setOrCreate('startupCdnRace', pref.getSync('startupCdnRace', false) === true);
+      for (const key of ['ijkWarmSlotsWifi', 'ijkWarmSlotsCellular']) {
+        const count = pref.getSync(key, 1);
+        AppStorage.setOrCreate(key, typeof count === 'number' && Number.isInteger(count) &&
+          count >= 1 && count <= 5 ? count : 1);
+      }
+    } catch (error) {
+      hilog.warn(DOMAIN, TAG, 'CDN race preference restore failed: %{public}s', errMsg(error));
+    }
     // 字体大小设置页在运行中切回「跟随系统」后要靠系统配置回调继续跟，注册一次即可（API 24+）。
     AppScaleService.watchSystemFontScale(this.context);
     // 必须在 loadCardSettings() 之前解析：恢复持久化开关是异步的，否则会反过来覆盖本次启动的命令行值。
@@ -197,7 +208,7 @@ export default class EntryAbility extends UIAbility {
     // 实例池槽数：--ps ijkWarmSlots 2 一次预热两张卡，用于对比命中率与内存代价。
     if (want.parameters?.['ijkWarmSlots'] !== undefined) {
       const slots = Number(String(want.parameters['ijkWarmSlots'])) || 1;
-      AppStorage.setOrCreate('ijkWarmSlots', Math.max(1, Math.min(3, Math.round(slots))));
+      AppStorage.setOrCreate('ijkWarmSlots', slots);
     }
     // 稀疏分段缓存默认开启；--ps diskCache off 可一键关闭做 A/B。
     if (want.parameters?.['diskCache'] !== undefined) {

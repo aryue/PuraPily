@@ -16,6 +16,7 @@ import { RecommendItem } from '../model/RecommendItem';
 import { sendDislikeFeedback, sendDislikeUpFeedback } from '../api/FeedbackService';
 import { UserBehaviorService } from '../services/UserBehaviorService';
 import { GenericDataSource } from '../model/GenericDataSource';
+import { PlaybackListPrefetch } from '../services/PlaybackListPrefetch';
 
 @Component({ freezeWhenInactive: true })
 export struct DiscoverPage {
@@ -53,6 +54,27 @@ export struct DiscoverPage {
   private pageSize: number = 20;
   private hasMore: boolean = true;
   private isPageActive: boolean = true;
+  private playbackListPrefetch: PlaybackListPrefetch = new PlaybackListPrefetch(() => this.isPageActive &&
+    AppStorage.get<boolean>('homeFeedActive') === true && AppStorage.get<number>('homeChannelIndex') === 3,
+    () => 'home:popular');
+  private playbackVisibleIds: Set<string> = new Set();
+  private playbackFirstIndex: number = 0;
+  @StorageLink('homeFeedActive') @Watch('syncPlaybackListPrefetch') playbackHomeActive: boolean = false;
+  @StorageLink('homeChannelIndex') @Watch('syncPlaybackListPrefetch') playbackHomeChannel: number = 2;
+
+  private syncPlaybackListPrefetch(): void {
+    if (!this.isPageActive || !this.playbackHomeActive || this.playbackHomeChannel !== 3) {
+      this.playbackListPrefetch.pause();
+      return;
+    }
+    const items = this.dataSource.getRawItems();
+    const first = items.findIndex((item: RecommendItem) => this.playbackVisibleIds.has(item.id));
+    if (first >= 0) this.playbackFirstIndex = first;
+    const start = Math.max(0, Math.min(this.playbackFirstIndex, items.length - 1));
+    const visible = items.filter((item: RecommendItem) => this.playbackVisibleIds.has(item.id));
+    this.playbackListPrefetch.updateViewport(visible, items.slice(start, start + 8),
+      AppStorage.get<number>('defaultVideoQn') ?? 116);
+  }
 
   // 底部弹窗相关状态
 
@@ -71,6 +93,7 @@ export struct DiscoverPage {
   }
 
   aboutToDisappear() {
+    this.playbackListPrefetch.pause();
     // 移除媒体查询监听
     if (this.landscapeListener) {
       this.landscapeListener.off('change');
@@ -80,12 +103,14 @@ export struct DiscoverPage {
 
   onPageShow() {
     this.isPageActive = true;
+    this.syncPlaybackListPrefetch();
     // 重新检查方向，确保从播放器返回后方向正确
     this.updateOrientationFromWindow();
   }
 
   onPageHide() {
     this.isPageActive = false;
+    this.playbackListPrefetch.pause();
   }
 
   onPageShowReset() {
@@ -194,6 +219,8 @@ export struct DiscoverPage {
     const filteredItems = UserBehaviorService.filterBlockedUploadersOnly(newItems);
     if (filteredItems.length > 0) {
       if (refresh) {
+        this.playbackVisibleIds.clear();
+        this.playbackFirstIndex = 0;
         this.dataSource.reloadItems(filteredItems);
       } else {
         this.dataSource.addItems(filteredItems);
@@ -205,6 +232,7 @@ export struct DiscoverPage {
     this.isLoading = false;
     this.isRefreshing = false;
     this.isLoadingMore = false;
+    this.syncPlaybackListPrefetch();
   }
 
 
@@ -418,6 +446,11 @@ export struct DiscoverPage {
           LazyForEach(this.dataSource, (item: RecommendItem) => {
             ListItem() { this.VideoCard(item) }
               .width(Math.max(0, (this.contentWidth - 24 - (this.columnCount - 1) * this.cardListMargin) / this.columnCount))
+              .onVisibleAreaChange([0], (visible: boolean) => {
+                if (visible) this.playbackVisibleIds.add(item.id);
+                else this.playbackVisibleIds.delete(item.id);
+                if (visible || this.playbackVisibleIds.size > 0) this.syncPlaybackListPrefetch();
+              })
           }, (item: RecommendItem) => item.id)
         }
       }

@@ -17,7 +17,7 @@ export interface FeedPlaybackHandles {
 /** Owns the inactive slot until take() transfers all resources to the page. */
 export class FeedPlaybackSession {
   readonly id: string;
-  readonly surfaceId: string;
+  surfaceId: string;
   readonly source: PlayUrlResult;
   private readonly startTimeMs: number;
   aspectRatio: number = 1;
@@ -49,6 +49,17 @@ export class FeedPlaybackSession {
   reserve(): void {
     this.reserved = true;
     this.onSizeChanged = null;
+  }
+
+  rebindPaused(surfaceId: string): boolean {
+    if (!this.ready || !this.video || this.video.state !== 'paused' || !surfaceId) return false;
+    try {
+      this.video.surfaceId = surfaceId;
+      this.surfaceId = surfaceId;
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   private async prepareOwned(scaleType: media.VideoScaleType, cookie: string): Promise<boolean> {

@@ -24,11 +24,12 @@ export interface IjkWarmTake {
 const TTL_MS: number = 25000;
 /** 槽位内实例新建后 1.2s 内不因目标变化而重建，避免快速滑动时反复销毁/创建。 */
 const REBUILD_COOLDOWN_MS: number = 1200;
-const MAX_SLOTS: number = 3;
+const MAX_SLOTS: number = 5;
 
 /** 一个槽：准备好首帧并暂停的一条视频。 */
 class WarmSlot {
   session: FeedPlaybackSession | null = null;
+  pending: FeedPlaybackSession | null = null;
   cid: number = 0;
   quality: number = 0;
   createdAt: number = 0;
@@ -37,6 +38,8 @@ class WarmSlot {
   /** 正在为该 cid 构建（0 = 空闲）。 */
   building: number = 0;
   timer: number = -1;
+  scene: string = 'home';
+  order: number = 0;
 }
 
 /**
@@ -46,7 +49,7 @@ class WarmSlot {
  * 进页时只做一次 surface 改绑 + play。IJK 的解码器是 buffer 输出（见 player_backend 的
  * bind 注释），换 surface 不需要重建解码器，所以这一步是安全的。
  *
- * 槽数：`--ps ijkWarmSlots 2` 可开到 2~3 个。每多一槽就多一个 IJK 实例
+ * 槽数：`--ps ijkWarmSlots 2` 可开到 2~5 个。每多一槽就多一个 IJK 实例
  * （解码器 + 15MiB 包队列上限 + 已缓冲数据），代价见 docs/… 实测。
  *
  * 默认开启。要求 IJK 内核、非计费网络且宿主 surface 就绪；--ps ijkWarm off 强制关闭。
@@ -58,6 +61,82 @@ export class IjkWarmPool {
   }
 
   private slots: WarmSlot[] = [];
+  private previewScenes: Map<string, number> = new Map();
+  private sceneOrders: Map<string, number> = new Map();
+  private sequence: number = 0;
+  private activeHomeScene: string = '';
+
+  activateHomeScene(scene: string): void {
+    if (this.activeHomeScene === scene) return;
+    this.activeHomeScene = scene;
+    const order = ++this.sequence;
+    this.sceneOrders.set(scene, order);
+    for (const slot of this.slots) {
+      if (slot.scene === scene) slot.order = order;
+      else if (slot.scene.startsWith('home:') && slot.pending !== null) this.dispose(slot);
+    }
+  }
+
+  retainHomeTargets(scene: string, targets: Set<number>): void {
+    for (const slot of this.slots) {
+      if (slot.scene !== scene) continue;
+      const cid = slot.building || slot.cid;
+      if (cid > 0 && !targets.has(cid)) this.dispose(slot);
+    }
+  }
+
+  private sceneOrder(scene: string): number {
+    let order = this.sceneOrders.get(scene);
+    if (order === undefined) {
+      order = ++this.sequence;
+      this.sceneOrders.set(scene, order);
+    }
+    return order;
+  }
+
+  private makeRoom(scene: string): boolean {
+    const order = this.sceneOrder(scene);
+    const occupied = this.slots.filter((slot: WarmSlot) => slot.session !== null || slot.pending !== null);
+    const needed = occupied.length + this.previewScenes.size - Math.max(2, this.capacity()) + 1;
+    if (needed <= 0) return true;
+    const older = occupied.filter((slot: WarmSlot) => slot.order < order)
+      .sort((a: WarmSlot, b: WarmSlot) => a.order - b.order || a.createdAt - b.createdAt);
+    if (older.length < needed) return false;
+    for (const slot of older.slice(0, needed)) this.dispose(slot);
+    return true;
+  }
+
+  reservePreview(scene: string): boolean {
+    if (this.previewScenes.has(scene)) return true;
+    if (!this.makeRoom(scene)) return false;
+    this.previewScenes.set(scene, this.sceneOrder(scene));
+    return true;
+  }
+
+  releasePreview(scene: string): void {
+    this.previewScenes.delete(scene);
+  }
+
+  releaseScene(scene: string): void {
+    this.releasePreview(scene);
+    for (const slot of this.slots) {
+      if (slot.scene === scene) this.dispose(slot);
+    }
+    this.sceneOrders.delete(scene);
+  }
+
+  takePreview(cid: number, quality: number, scene: string, surface: string): FeedPlaybackSession | null {
+    for (const slot of this.slots) {
+      if (slot.scene !== scene || slot.cid !== cid || slot.session === null ||
+        slot.quality !== quality || Date.now() - slot.createdAt > TTL_MS) continue;
+      const session = slot.session;
+      if (!session.rebindPaused(surface)) return null;
+      slot.session = null;
+      this.dispose(slot);
+      return session;
+    }
+    return null;
+  }
 
   private enabled(): boolean {
     // 默认开启（IJK 内核 + 宿主 surface + 非计费网络三个条件同时满足才真预热）；
@@ -68,9 +147,10 @@ export class IjkWarmPool {
     return !NetworkGate.isMetered();
   }
 
-  /** 允许同时预热的条数。默认 1，`--ps ijkWarmSlots n` 可在 1~3 之间调。 */
+  /** 允许同时预热的条数。默认 1，`--ps ijkWarmSlots n` 可在 1~5 之间调。 */
   capacity(): number {
-    const raw: number | undefined = AppStorage.get<number>('ijkWarmSlots');
+    const key = AppStorage.get<boolean>('networkMetered') === true ? 'ijkWarmSlotsCellular' : 'ijkWarmSlotsWifi';
+    const raw: number | undefined = AppStorage.get<number>('ijkWarmSlots') ?? AppStorage.get<number>(key);
     const n: number = raw === undefined ? 1 : Math.round(raw);
     return Math.max(1, Math.min(MAX_SLOTS, n));
   }
@@ -82,7 +162,8 @@ export class IjkWarmPool {
    * 因此不必再 seek（seek + 等 seekDone 实测要多花 ~900ms 才出首帧）。
    * 已在槽内或正在构建的 cid 会被忽略。
    */
-  async warm(cid: number, result: PlayUrlResult, resumeMs: number = 0): Promise<void> {
+  async warm(cid: number, result: PlayUrlResult, resumeMs: number = 0, scene: string = 'home',
+    videoId: string = String(cid)): Promise<void> {
     if (cid <= 0) {
       log('skip cid=0');
       return;
@@ -94,21 +175,24 @@ export class IjkWarmPool {
     for (const s of this.slots) {
       if (s.cid === cid || s.building === cid) return;
     }
-    const target: WarmSlot | null = this.pickSlot();
+    const target: WarmSlot | null = this.pickSlot(scene);
     if (target === null) {
       log('all slots fresh, skip ' + cid);
       return;
     }
-    this.dispose(target);
+    if (target.session !== null) this.dispose(target);
+    if (!this.makeRoom(scene)) return;
+    target.scene = scene;
+    target.order = this.sceneOrder(scene);
     target.building = cid;
-    const session = new FeedPlaybackSession(String(cid), WarmSurfaceHost.get(), result,
+    const session = new FeedPlaybackSession(videoId, WarmSurfaceHost.get(), result,
       Math.max(0, Math.round(resumeMs)));
+    target.pending = session;
     try {
       const ok: boolean = await session.prepare(media.VideoScaleType.VIDEO_SCALE_TYPE_FIT,
         AppStorage.get<string>('biliCookie') || '');
-      if (!ok || target.building !== cid) {
+      if (!ok || target.pending !== session) {
         session.release().catch(() => {});
-        if (target.building === cid) target.building = 0;
         return;
       }
       target.session = session;
@@ -117,12 +201,15 @@ export class IjkWarmPool {
       target.resumeMs = Math.max(0, Math.round(resumeMs));
       target.createdAt = Date.now();
       this.arm(target);
-      log(`ready cid=${cid} qn=${target.quality} resume=${target.resumeMs}ms slots=${this.readyCount()}/${this.slots.length}/${this.capacity()} host=${WarmSurfaceHost.get().slice(-6)}`);
+      log(`ready cid=${cid} qn=${target.quality} resume=${target.resumeMs}ms slots=${this.readyCount()}/${this.slots.length}/${this.capacity()} host=${WarmSurfaceHost.get().slice(-6)} scene=${scene}`);
     } catch (e) {
       session.release().catch(() => {});
       log('failed ' + (e as Error).message);
     } finally {
-      if (target.building === cid) target.building = 0;
+      if (target.pending === session) {
+        target.pending = null;
+        target.building = 0;
+      }
     }
   }
 
@@ -166,13 +253,13 @@ export class IjkWarmPool {
   async takeOrWait(cid: number, quality: number, budgetMs: number): Promise<IjkWarmTake | null> {
     const direct = this.take(cid, quality);
     if (direct !== null) return direct;
-    if (this.buildingCid() !== cid) return null;
+    if (!this.slots.some((s: WarmSlot) => s.building === cid)) return null;
     const deadline = Date.now() + budgetMs;
     while (Date.now() < deadline) {
       await new Promise<void>((resolve: () => void) => setTimeout(() => resolve(), 30));
       const got = this.take(cid, quality);
       if (got !== null) return got;
-      if (this.buildingCid() !== cid) return null;
+      if (!this.slots.some((s: WarmSlot) => s.building === cid)) return null;
     }
     log(`wait timeout cid=${cid}`);
     return null;
@@ -183,24 +270,39 @@ export class IjkWarmPool {
     for (const s of this.slots) this.dispose(s);
   }
 
+  cancelBuildingExcept(cid: number): void {
+    for (const s of this.slots) {
+      if (s.pending !== null && s.building !== cid) this.dispose(s);
+    }
+  }
+
   /** 已就绪的槽数（不含正在构建/空的）。 */
   readyCount(): number {
     return this.slots.filter((s: WarmSlot) => s.session !== null).length;
   }
 
   /** 选择要用的槽：空槽优先；满了淘汰最旧且不在构建中的；全部新鲜则返回 null。 */
-  private pickSlot(): WarmSlot | null {
-    for (const s of this.slots) {
-      if (s.session === null && s.building === 0) return s;
+  private pickSlot(scene: string): WarmSlot | null {
+    const limit = scene === 'home' || scene.startsWith('home:') ? this.capacity() : 1;
+    const occupied = this.slots.filter((s: WarmSlot) =>
+      s.scene === scene && (s.session !== null || s.pending !== null)).length;
+    if (occupied > limit) return null;
+    if (occupied < limit) {
+      const empty = this.slots.find((s: WarmSlot) => s.session === null && s.building === 0);
+      if (empty !== undefined) return empty;
     }
-    if (this.slots.length < this.capacity()) {
+    if (occupied < limit && this.slots.length < MAX_SLOTS) {
       const fresh = new WarmSlot();
       this.slots.push(fresh);
       return fresh;
     }
+    if (occupied < limit) {
+      if (!this.makeRoom(scene)) return null;
+      return this.slots.find((s: WarmSlot) => s.session === null && s.pending === null) ?? null;
+    }
     let oldest: WarmSlot | null = null;
     for (const s of this.slots) {
-      if (s.building !== 0) continue;
+      if (s.scene !== scene || s.building !== 0 || s.session === null) continue;
       if (oldest === null || s.createdAt < oldest.createdAt) oldest = s;
     }
     if (oldest === null) return null;
@@ -232,12 +334,15 @@ export class IjkWarmPool {
   private dispose(s: WarmSlot): void {
     this.clearTimer(s);
     const session = s.session;
+    const pending = s.pending;
     s.session = null;
+    s.pending = null;
     s.cid = 0;
     s.quality = 0;
     s.resumeMs = 0;
     s.createdAt = 0;
     s.building = 0;
     if (session !== null) session.release().catch(() => {});
+    if (pending !== null && pending !== session) pending.release().catch(() => {});
   }
 }

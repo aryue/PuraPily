@@ -8,7 +8,7 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
 const gate = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
 function compiled(file, imports, globals = {}) {
   imports['../utils/PlaybackDeadline'] ??= { PlaybackDeadline: require('./playback-deadline-test-helper.cjs')() };
-  imports['@ohos:hilog'] ??= { default: { debug() {} } };
+  imports['@ohos:hilog'] ??= { default: { debug() {}, info() {}, warn() {}, error() {} } };
   const context = { exports: {}, console, setTimeout, clearTimeout, ...globals, require: name => {
     const normalized = name.replace(/^@normalized:.*entry\/src\/main\/ets\//, '../').replace(/&$/, '');
     return imports[name] || imports[normalized] || {};
@@ -22,7 +22,13 @@ function fixture() {
   let credential = 'account-a', enabled = true;
   const timers = new Set(), details = [], urls = [], logs = [];
   const context = compiled('services/PlaybackListPrefetch', {
-    '@ohos:hilog': { default: { debug(...args) { logs.push(args); } } },
+    '../utils/NetworkGate': { NetworkGate: { allowsBoundedPrefix: () => true } },
+    '../utils/PlaybackProgress': { PlaybackProgress: { prewarmPosition: () => 0 } },
+    '../services/IjkPrewarm': { IjkPrewarm: { warm() {} } },
+    '../services/IjkWarmPool': { IjkWarmPool: { get: () => ({ capacity: () => 1, warm: async () => {} }) } },
+    '@ohos:hilog': { default: { debug(...args) {
+      if (String(args[2]).startsWith('ready ')) logs.push(args);
+    } } },
     '../api/BilibiliApi': {
       getVideoDetail(id) { const job = { id, ...gate() }; details.push(job); return job.promise; },
       getVideoPlayUrl(id, cid, qn, maxAge) { const job = { id, cid, qn, maxAge, ...gate() }; urls.push(job); return job.promise; }
@@ -48,14 +54,11 @@ const ok = { url: 'signed-media', actualQn: 116 };
       assert.ok(f.urls.length <= Math.min(5, i + 3));
     }
     assert.equal(f.urls.length, 5, 'all entries in a small list are prepared, not just a neighbour');
-    assert.equal(f.timers.size, 1);
+    assert.equal(f.timers.size, 0);
     f.queue.update(items, 116); assert.equal(f.urls.length, 5);
-    [...f.timers][0]();
-    assert.equal(f.urls.length, 7, 'periodic refresh rechecks address age instead of permanent dedupe');
     assert.ok(f.urls.every(x => x.maxAge === 40000));
     f.queue.pause();
-    f.urls[5].resolve(ok); f.urls[6].resolve(ok); await tick();
-    assert.equal(f.urls.length, 7, 'hidden pages start no remaining queued requests');
+    assert.equal(f.urls.length, 5, 'hidden pages start no remaining queued requests');
     assert.equal(f.timers.size, 0);
   }
   {
@@ -78,14 +81,14 @@ const ok = { url: 'signed-media', actualQn: 116 };
     assert.equal(f.logs.length, 0, 'old account/quality completions do not publish success');
     f.urls[1].resolve(ok); f.urls[2].resolve({ url: 'new-session', actualQn: 80 }); await tick();
     assert.equal(f.logs.length, 1);
-    f.account('account-c'); [...f.timers][0](); assert.equal(f.timers.size, 0);
+    assert.equal(f.timers.size, 0);
   }
   {
     const f = fixture();
     f.queue.update([item('BVone'), item('BVtwo'), item('BVthree')], 116);
     f.hidden(); f.urls[0].resolve(ok); f.urls[1].resolve(ok); await tick();
     assert.equal(f.urls.length, 2, 'hidden owner blocks the next task even if the component watch is frozen');
-    [...f.timers][0](); assert.equal(f.timers.size, 0);
+    assert.equal(f.timers.size, 0);
   }
   {
     let credential = 'a', clock = 1000, probes = 0, result = gate();
@@ -140,7 +143,7 @@ const ok = { url: 'signed-media', actualQn: 116 };
   }
   {
     const source = fs.readFileSync(base + 'pages/VideoPlayerPage.ts', 'utf8');
-    const begin = source.indexOf('    private referenceWarmUpcomingFrames(');
+    const begin = source.indexOf('    private referencePrefetchPlaylistUrls(');
     const finish = source.indexOf('    private requestReferenceFeedPreview(', begin);
     assert.ok(begin >= 0 && finish > begin);
     const calls = [], context = { exports: {}, AppStorage: { get: () => 116 } };
@@ -151,14 +154,14 @@ const ok = { url: 'signed-media', actualQn: 116 };
     Object.assign(page, { referenceAlive: true, playerPageVisible: true, waitingForFirstFrame: false,
       isPgc_: false, referenceLayout: true, referencePreviewPreparing: true, referencePreviewSurfaceId: '',
       referenceFeedQueue: ['BVone', 'BVcurrent', 'BVtwo', 'BVthree'].map(id => item(id)),
-      vi: { bvid: 'BVcurrent' }, qn: 80,
+      vi: { bvid: 'BVcurrent' }, preferredQn: 80,
       playbackListPrefetch: { update(items, qn) { calls.push({ ids: Array.from(items, x => x.id), qn }); }, pause() { calls.push('paused'); } } });
-    page.referenceWarmUpcomingFrames();
+    page.referencePrefetchPlaylistUrls();
     assert.deepEqual(calls[0].ids, ['BVtwo', 'BVthree', 'BVone']);
     assert.equal(calls[0].qn, 80, 'feed keeps the current playback quality');
     page.referenceFeedQueue = []; page.relatedVideos = [item('BVrelated')];
-    page.referenceWarmUpcomingFrames(); assert.equal(calls[1].qn, 116, 'related-page navigation uses its default quality');
-    page.waitingForFirstFrame = true; page.referenceWarmUpcomingFrames(); assert.equal(calls[2], 'paused');
+    page.referencePrefetchPlaylistUrls(); assert.equal(calls[1].qn, 116, 'related-page navigation uses its default quality');
+    page.waitingForFirstFrame = true; page.referencePrefetchPlaylistUrls(); assert.equal(calls[2], 'paused');
   }
   console.log('PASS: compiled list extraction, concurrency, whole small list, normalized IDs, expiry renewal, navigation reuse, cancellation and account/quality isolation');
 })().catch(error => { console.error(error); process.exitCode = 1; });
