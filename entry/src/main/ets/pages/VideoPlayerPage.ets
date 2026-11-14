@@ -8,6 +8,7 @@ import { PlaybackStallMonitor } from '../utils/PlaybackStallMonitor';
 import type { PlaybackPlayer } from '../services/PlaybackPlayer';
 import { AdjustmentMotion } from '../controlcenter/model/AdjustmentMotion';
 import { PlaybackAudioOutputMonitor } from '../utils/PlaybackAudioOutput';
+import { PlaybackAudioSession } from '../utils/PlaybackAudioSession';
 import { PlaybackMenuRow } from '../components/PlaybackMenuRow';
 import { PlaybackControlSurface } from '../components/PlaybackControlSurface';
 import { PlaybackGlassAction } from '../components/PlaybackGlassAction';
@@ -3864,7 +3865,6 @@ struct VideoPlayerPage {
       // ⭐ initW 已设置 isLs/cw/ch 并调用了 updateIsLandscapeVertical + updateVideoSize
       // 这里只确保系统栏状态正确
     });
-    this.activateAudioSession();
     this.resetCT();
     logInfo('[VPP] 即将调用 loadD');
     this.loadD();
@@ -4066,7 +4066,6 @@ struct VideoPlayerPage {
       if (this.mw) this.manageSB();
       // ⭐ initW 已设置 isLs/cw/ch 并调用了 updateIsLandscapeVertical + updateVideoSize
     });
-    this.activateAudioSession();
     this.resetCT();
     this.initP();
     this.loadDanmakuEnabledState();
@@ -4207,6 +4206,8 @@ struct VideoPlayerPage {
       return false;
     }
     if (player.state !== 'playing') {
+      await PlaybackAudioSession.activate();
+      if (this.av !== player || !this.pagePlaybackAllowed() || this.userPaused_ || this.playbackIsTerminal()) return false;
       this.markAutoPlay('startPagePlayback');
       await player.play();
     }
@@ -5960,17 +5961,6 @@ struct VideoPlayerPage {
     logInfo('[VPP] initW 函数体完成');
   }
 
-  private async activateAudioSession() {
-    try {
-      const audioManager = audio.getAudioManager();
-      const sessionManager = audioManager.getSessionManager();
-      const strategy: audio.AudioSessionStrategy = {
-        concurrencyMode: audio.AudioConcurrencyMode.CONCURRENCY_DEFAULT
-      };
-      await sessionManager.activateAudioSession(strategy);
-    } catch (e) { }
-  }
-
   /**
    * 释放播放器 — 如果 av/avAudio 已被转移到 PlayerService 则跳过
    */
@@ -6092,6 +6082,7 @@ struct VideoPlayerPage {
     // 点击时已在宿主 surface 上 prepare 好的实例：命中就完全跳过创建/取流/建站。
     let warm: WarmPlayback | null = null;
     try {
+      const audioSession = PlaybackAudioSession.activate();
       // 空播放器无需 Surface/CID；与详情、取流和首次布局同时准备。
       if (!this.offlineVideoPath_ && !ijkPlaybackRequested()) {
         const creation = PlaybackStartup.span('player-create', profile);
@@ -6103,6 +6094,7 @@ struct VideoPlayerPage {
       }
       profile?.mark('cid-wait-start');
       if (!this.vi.cid) await this.waitForPlaybackCid(deadline);
+      await audioSession;
       if (!this.referenceAlive || initGeneration !== this.referenceSwitchGeneration) return;
       profile?.mark('cid-ready');
       if (!this.vi.cid) throw new Error('获取视频CID失败');
@@ -7052,8 +7044,9 @@ struct VideoPlayerPage {
   }
 
   async togglePP() {
-    if (!this.av) return;
-    this.playbackProfile?.mark(this.play ? 'user-pause' : 'user-play', this.av.currentTime);
+    const player = this.av;
+    if (!player) return;
+    this.playbackProfile?.mark(this.play ? 'user-pause' : 'user-play', player.currentTime);
     if (this.referencePlaybackCompleted) {
       await this.referenceReplay();
       return;
@@ -7067,11 +7060,13 @@ struct VideoPlayerPage {
       this.play = !wantPause;
       try {
         if (wantPause) {
-          await this.av.pause();
+          await player.pause();
           await this.avAudio?.pause();
         } else {
+          await PlaybackAudioSession.activate();
+          if (this.av !== player || this.userPaused_) return;
           this.markAutoPlay('togglePP-seek-play');
-          await this.av.play();
+          await player.play();
           await this.avAudio?.play();
         }
       } catch (_e) { }
@@ -7083,13 +7078,15 @@ struct VideoPlayerPage {
     }
     if (this.play) {
       this.userPaused_ = true;    // 用户主动暂停
-      await this.av.pause();
+      await player.pause();
       await this.avAudio?.pause();
       this.play = false;
     } else {
       this.userPaused_ = false;   // 用户主动播放
+      await PlaybackAudioSession.activate();
+      if (this.av !== player || this.userPaused_) return;
       this.markAutoPlay('togglePP-play');
-      await this.av.play();
+      await player.play();
       await this.avAudio?.play();
       this.play = true;
     }
@@ -9343,6 +9340,9 @@ struct VideoPlayerPage {
     if (!this.referenceAlive || this.av !== player || generation !== this.referenceSwitchGeneration) return;
     try {
       this.userPaused_ = false;
+      await PlaybackAudioSession.activate();
+      if (!this.referenceAlive || this.av !== player || generation !== this.referenceSwitchGeneration ||
+        this.userPaused_) return;
       this.markAutoPlay('replay-button');
       await player.play();
       await this.avAudio?.play();
@@ -13640,6 +13640,7 @@ struct VideoPlayerPage {
     }
     let cancelWait: (() => void) | null = null;
     try {
+      await PlaybackAudioSession.activate();
       while (this.initPInProgress_ && this.referenceAlive && generation === this.referenceSwitchGeneration) {
         await new Promise<void>((resolve) => setTimeout(resolve, 16));
       }

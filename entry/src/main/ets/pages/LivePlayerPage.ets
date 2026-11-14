@@ -3,6 +3,7 @@ import { SPLIT_DEFAULT_RATIO, SPLIT_EXPAND_THRESHOLD, clampSplitWidth, splitPrim
   splitSecondaryWidth, splitSecondaryX } from '../utils/SplitPaneGeometry';
 import { AdjustmentMotion } from '../controlcenter/model/AdjustmentMotion';
 import { PlaybackAudioOutputMonitor } from '../utils/PlaybackAudioOutput';
+import { PlaybackAudioSession } from '../utils/PlaybackAudioSession';
 import { PlayerLevelBar } from '../components/PlayerLevelBar';
 import { ImmersiveLightWrapper } from '../components/ImmersiveLightWrapper';
 import { PlaybackMenuIcon } from '../components/PlaybackMenuIcon';
@@ -955,19 +956,24 @@ struct LivePlayerPage {
   }
 
   /** ⭐ 播放/暂停切换 */
-  private togglePlayPause(): void {
-    if (!this.av || this.switchingRoom || this.roomAnimating) return;
+  private async togglePlayPause(): Promise<void> {
+    const player = this.av;
+    if (!player || this.switchingRoom || this.roomAnimating) return;
     try {
-      if (this.av) {
-        if (this.av.state === 'playing') {
-          this.userPaused = true;
-          this.av.pause();
-        } else if (this.av.state === 'paused' || this.av.state === 'prepared') {
-          this.userPaused = false;
-          this.av.play();
-        }
+      if (player.state === 'playing') {
+        this.userPaused = true;
+        await player.pause();
+      } else if (player.state === 'paused' || player.state === 'prepared') {
+        this.userPaused = false;
+        await this.resumeLivePlayer(player);
       }
     } catch (_e) {}
+  }
+
+  private async resumeLivePlayer(player: media.AVPlayer): Promise<void> {
+    await PlaybackAudioSession.activate();
+    if (this.disposed || this.av !== player || this.userPaused || (this.pageHidden && !this.bgp)) return;
+    await player.play();
   }
 
   private registerContinuation(): void {
@@ -1175,9 +1181,7 @@ struct LivePlayerPage {
     if (this.liveFullscreenLocked) this.fullscreenDeviceOrientation.start();
     this.startLiveChat();
     this.registerContinuation();
-    try {
-      if (!this.userPaused && this.av && this.av.state === 'paused') { this.av.play(); }
-    } catch (_) {}
+    if (!this.userPaused && this.av?.state === 'paused') this.resumeLivePlayer(this.av).catch(() => {});
     // ⭐ 回到直播间：恢复屏幕常亮 + 重新隐藏系统栏（EntryAbility 回前台可能按
     //    全局状态把状态栏恢复了，这里与普通播放页 onPageShow → manageSB(true) 同口径补设）。
     //    "后台播放"模式下播放从未中断，不会有 stateChange('playing') 去触发 onVideoStart。
@@ -1450,6 +1454,8 @@ struct LivePlayerPage {
           player.surfaceId = surface;
           await player.prepare();
         } else if (state === 'prepared') {
+          await PlaybackAudioSession.activate();
+          if (!this.ownsPlayer(player)) return;
           // SHARE_MODE 允许同应用两个直播并播，待切房仅音量为零。
           player.audioInterruptMode = audio.InterruptMode.SHARE_MODE;
           player.setVolume(this.av === player && !this.isMuted ? 1 : 0);
@@ -1484,10 +1490,8 @@ struct LivePlayerPage {
     LiveViewHelper.setControlHandlers({
       play: () => {
         this.userPaused = false;
-        try {
-          const av = this.av;
-          if (av && av.state !== 'playing') { av.play(); }
-        } catch (_) {}
+        const av = this.av;
+        if (av && av.state !== 'playing') this.resumeLivePlayer(av).catch(() => {});
       },
       pause: () => {
         this.userPaused = true;

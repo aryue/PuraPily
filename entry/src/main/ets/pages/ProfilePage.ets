@@ -72,6 +72,7 @@ export struct ProfilePage {
   @StorageLink('themeMode') themeMode: string = 'system';
   @StorageLink('isDarkMode') isDarkMode: boolean = false;
   @StorageLink('bgp') referenceBackgroundPlay: boolean = false;
+  @StorageLink('mixAudioWithOtherApps') mixAudioWithOtherApps: boolean = false;
   @StorageLink('cellularPrefetch') cellularPrefetch: boolean = false;
   @StorageLink('ijkWarmSlotsWifi') ijkWarmSlotsWifi: number = 1;
   @StorageLink('ijkWarmSlotsCellular') ijkWarmSlotsCellular: number = 1;
@@ -604,10 +605,11 @@ export struct ProfilePage {
 
   private async referenceSaveBoolean(key: string, value: boolean): Promise<void> {
     AppStorage.setOrCreate(key, value);
-    if (!this.dataPreferences) return;
     try {
-      await this.dataPreferences.put(key, value);
-      await this.dataPreferences.flush();
+      const pref = this.dataPreferences ?? preferences.getPreferencesSync(
+        this.getUIContext().getHostContext() as common.UIAbilityContext, { name: 'my_app_settings' });
+      await pref.put(key, value);
+      await pref.flush();
     } catch (error) { logError('保存设置失败', error); }
   }
 
@@ -1126,6 +1128,14 @@ export struct ProfilePage {
               Toggle({ type: ToggleType.Switch, isOn: this.referenceBackgroundPlay }).selectedColor('#D34E7E')
               .onChange((value: boolean) => this.referenceSaveBoolean('bgp', value))
             }.width('100%').height(56).padding({ left: 16, right: 16 })
+            Row({ space: 12 }) {
+              Text('与其他应用同时播放').fontSize(15)
+                .fontColor(this.isDarkMode ? '#E7E9EB' : '#18191C').layoutWeight(1)
+              Toggle({ type: ToggleType.Switch, isOn: this.mixAudioWithOtherApps }).selectedColor('#D34E7E')
+                .id('setting-mix-audio-with-other-apps')
+                .onChange((value: boolean) => this.referenceSaveBoolean('mixAudioWithOtherApps', value))
+            }.width('100%').constraintSize({ minHeight: 56 })
+              .padding({ left: 16, right: 16, top: 12, bottom: 12 })
             // 画质偏好按链路分两档：Wi-Fi（含以太网/不计费）与移动网络（蜂窝、计费 Wi-Fi、手机热点）。
             // 热点走 Wi-Fi 承载却记在蜂窝套餐上，判定为计费后自动切到「移动网络」档。
             Row() {

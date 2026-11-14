@@ -144,6 +144,7 @@ export default class EntryAbility extends UIAbility {
     QualityPreferenceService.getInstance().initialize(this.context);
     try {
       const pref = preferences.getPreferencesSync(this.context, { name: 'my_app_settings' });
+      AppStorage.setOrCreate('mixAudioWithOtherApps', pref.getSync('mixAudioWithOtherApps', false) === true);
       AppStorage.setOrCreate('startupCdnRace', pref.getSync('startupCdnRace', false) === true);
       for (const key of ['ijkWarmSlotsWifi', 'ijkWarmSlotsCellular']) {
         const count = pref.getSync(key, 1);
@@ -151,7 +152,7 @@ export default class EntryAbility extends UIAbility {
           count >= 1 && count <= 5 ? count : 1);
       }
     } catch (error) {
-      hilog.warn(DOMAIN, TAG, 'CDN race preference restore failed: %{public}s', errMsg(error));
+      hilog.warn(DOMAIN, TAG, 'Playback preferences restore failed: %{public}s', errMsg(error));
     }
     // 字体大小设置页在运行中切回「跟随系统」后要靠系统配置回调继续跟，注册一次即可（API 24+）。
     AppScaleService.watchSystemFontScale(this.context);
