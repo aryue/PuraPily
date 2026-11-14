@@ -28,7 +28,14 @@ console.log('PASS: actual refill, absent supply, bounded wait, decoder freeze an
 const playerSource = process.argv.includes('--compiled')
   ? compiled.replace('utils/PlaybackStallMonitor.ts', 'services/IjkPlaybackPlayer.ts')
   : 'entry/src/main/ets/services/IjkPlaybackPlayer.ets';
-const playerContext = { exports: {}, require: () => ({}) };
+const cdnContext = { exports: {} };
+const cdnSource = process.argv.includes('--compiled')
+  ? compiled.replace('PlaybackStallMonitor.ts', 'PlaybackCdn.ts')
+  : 'entry/src/main/ets/utils/PlaybackCdn.ets';
+vm.runInNewContext(ts.transpileModule(fs.readFileSync(cdnSource, 'utf8'), {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 }
+}).outputText, cdnContext);
+const playerContext = { exports: {}, require: id => id.includes('PlaybackCdn') ? cdnContext.exports : {} };
 vm.runInNewContext(ts.transpileModule(fs.readFileSync(playerSource, 'utf8'), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 }
 }).outputText, playerContext);
@@ -38,3 +45,19 @@ assert.equal(backup(['https://base/file', 'https://base/file?other'], 'https://b
 assert.equal(backup(['https://base/file'], 'https://base/file'), '');
 assert.equal(backup(undefined, 'https://base/file'), '');
 console.log('PASS: alternate CDN is preferred over duplicate base URLs');
+
+const { playbackCdnCandidates, preferredPlaybackUrl } = cdnContext.exports;
+const mirror = 'https://upos-sz-mirrorali.bilivideo.com/video?token=unchanged';
+const ordinary = 'https://d1--cn-gotcha04.bilivideo.com/live.m3u8';
+const markedMirror = mirror + '&os=mcdn';
+const pcdn = 'https://xy.mcdn.bilivideo.cn:8082/video';
+const edge = 'https://edge.mountaintoys.cn:4483/video';
+const unknown = 'https://upos-sz-mirrorali.bilivideo.com.example.org/video';
+assert.deepEqual(Array.from(playbackCdnCandidates(pcdn, [unknown, markedMirror, mirror, ordinary, mirror, edge])),
+  [mirror, ordinary, unknown, pcdn, markedMirror, edge]);
+assert.equal(preferredPlaybackUrl([edge, markedMirror, ordinary]), ordinary);
+assert.equal(preferredPlaybackUrl([edge, pcdn]), edge);
+assert.equal(backup([pcdn, ordinary], mirror), ordinary);
+assert.equal(backup([pcdn, markedMirror], mirror), '');
+assert.equal(backup([edge], pcdn), edge);
+console.log('PASS: conventional CDN priority, intact signed URLs and IJK startup backup policy');

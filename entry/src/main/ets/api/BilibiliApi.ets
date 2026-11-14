@@ -6,6 +6,7 @@ import { http } from '@kit.NetworkKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { PlaybackStartup, PlaybackSpan } from '../utils/PlaybackStartup';
 import { selectDashVideo } from '../utils/DashQuality';
+import { playbackCdnCandidates, preferredPlaybackUrl } from '../utils/PlaybackCdn';
 import { fileIo } from '@kit.CoreFileKit';
 import { util } from '@kit.ArkTS';
 import { logInfo, logWarn, logError, errMsg } from '../utils/Logger';
@@ -223,6 +224,12 @@ interface VideoListResponse {
 
 interface DurlItem {
   url: string;
+  backup_url?: string[];
+  backupUrl?: string[];
+}
+
+function preferredDurl(item: DurlItem): string {
+  return preferredPlaybackUrl([item.url].concat(item.backupUrl || item.backup_url || []));
 }
 
 export interface DashVideoItem {
@@ -1121,10 +1128,11 @@ async function tryFetchPlayUrl(bvid: string, cid: number, qn: number, fnval: num
     // ⭐ 完整 DASH 元数据（MpdBuilder 需要全量字段）
     let dashInfo: DashFullInfo | null = null;
     const dashRaw = jsonData.data?.dash;
+    normalizeDashWireFields(dashRaw);
 
     // FLV 流（音视频合并）
     if (jsonData.data?.durl && jsonData.data.durl.length === 1) {
-      durlUrl = jsonData.data.durl[0].url || '';
+      durlUrl = preferredDurl(jsonData.data.durl[0]);
     }
 
     // DASH 流（视频+音频分离）
@@ -1717,8 +1725,9 @@ export async function getPgcPlayUrl(epId: number, cid: number, qn: number = 116,
     // FLV 合并流（音视频一体，AVPlayer 原生支持）
     if (info.durl && info.durl.length === 1) {
       logInfo(`[getPgcPlayUrl] FLV qn=${info.quality}`);
-      return { url: info.durl[0].url || '', actualQn: info.quality || 0, acceptQuality: acceptQn, acceptDescription: acceptDesc, lastPlayTimeMs: pgcProgressMs };
+      return { url: preferredDurl(info.durl[0]), actualQn: info.quality || 0, acceptQuality: acceptQn, acceptDescription: acceptDesc, lastPlayTimeMs: pgcProgressMs };
     }
+    normalizeDashWireFields(info.dash);
     // DASH 分离流（视频轨 + 音频轨）
     if (info.dash?.video && info.dash.video.length > 0) {
       const videoList = info.dash.video;
@@ -2899,15 +2908,17 @@ function emptyPlayUrlResult(): FetchPlayUrlResult {
 /** App JSON uses snake_case; the bridge consumes one normalized stream model. */
 function normalizeDashWireFields(dash?: DashData): void {
   dash?.video?.forEach((video: DashVideoItem) => {
-    video.baseUrl = video.baseUrl || video.base_url || '';
-    video.backupUrl = video.backupUrl || video.backup_url;
+    const candidates = playbackCdnCandidates(video.baseUrl || video.base_url || '', video.backupUrl || video.backup_url);
+    video.baseUrl = candidates[0] || '';
+    video.backupUrl = candidates.slice(1);
     video.frameRate = video.frameRate || video.frame_rate;
     video.startWithSap = video.startWithSap ?? video.start_with_sap;
     video.contentLength = video.contentLength ?? video.content_length;
   });
   dash?.audio?.forEach((audio: DashAudioItem) => {
-    audio.baseUrl = audio.baseUrl || audio.base_url || '';
-    audio.backupUrl = audio.backupUrl || audio.backup_url;
+    const candidates = playbackCdnCandidates(audio.baseUrl || audio.base_url || '', audio.backupUrl || audio.backup_url);
+    audio.baseUrl = candidates[0] || '';
+    audio.backupUrl = candidates.slice(1);
     audio.contentLength = audio.contentLength ?? audio.content_length;
   });
 }
@@ -2947,7 +2958,7 @@ async function fetchPlayUrlEndpoint(url: string, headers: Record<string, string>
 
       // FLV 流（音视频合并）
       if (jsonData.data?.durl && jsonData.data.durl.length === 1) {
-        durlUrl = jsonData.data.durl[0].url || '';
+        durlUrl = preferredDurl(jsonData.data.durl[0]);
       }
 
       // DASH 流（视频+音频分离）

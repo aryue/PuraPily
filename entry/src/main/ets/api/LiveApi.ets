@@ -7,6 +7,7 @@ import { http } from '@kit.NetworkKit';
 import { logInfo, logWarn, logError } from '../utils/Logger';
 import { HttpConstants } from './HttpConstants';
 import { AppSign } from '../utils/SignUtils';
+import { playbackCdnRank, preferredPlaybackUrl } from '../utils/PlaybackCdn';
 
 // ==================== 流地址缓存（避免CDN节点反复切换） ====================
 const STREAM_URL_CACHE_TTL: number = 30000; // 缓存有效期 30 秒
@@ -163,6 +164,7 @@ interface RoomInfoResponse extends ApiResponseBase {
 /** 流地址 data 字段 */
 interface DurlItem {
   url: string;
+  backup_url?: string[];
   length?: number;
   order?: number;
 }
@@ -592,8 +594,8 @@ async function tryFetchV2PlayUrl(roomId: number, qn: number): Promise<LiveStream
     const urlInfos = selectedCodec.url_info || [];
     if (urlInfos.length === 0) return null;
 
-    const cdnInfo: CdnUrlInfo = urlInfos[0];
-    const fullUrl: string = cdnInfo.host + selectedCodec.base_url + cdnInfo.extra;
+    const fullUrl = preferredPlaybackUrl(urlInfos.map((info: CdnUrlInfo) =>
+      info.host + selectedCodec.base_url + info.extra));
     const acceptQn: number[] = selectedCodec.accept_qn ?? [qn];
     const currentQn: number = selectedCodec.current_qn ?? qn;
 
@@ -732,9 +734,9 @@ async function tryFetchNewPlayUrlWithPlatform(roomId: number, qn: number, platfo
           for (const info of infos) {
             const fullUrl = info.host + codec.base_url + info.extra;
             if (fullUrl.includes('.m3u8') || isHlsProtocol) {
-              hlsUrl = fullUrl;
-            } else if (!flvUrl) {
-              flvUrl = fullUrl;
+              hlsUrl = preferredPlaybackUrl([fullUrl, hlsUrl]);
+            } else {
+              flvUrl = preferredPlaybackUrl([flvUrl, fullUrl]);
             }
           }
         }
@@ -823,6 +825,7 @@ async function tryFetchInfoByRoom(roomId: number, qn: number): Promise<LiveStrea
     if (playUrlInfo?.play_url) {
       const playUrlObj: Object = playUrlInfo.play_url;
       const entries: Array<[string, Object]> = Object.entries(playUrlObj);
+      let hlsUrl = '';
       for (let i = 0; i < entries.length; i++) {
         const val = entries[i][1];
         // 兼容：value 可能是纯字符串 URL，也可能是 {url: "...", ...} 对象
@@ -838,14 +841,12 @@ async function tryFetchInfoByRoom(roomId: number, qn: number): Promise<LiveStrea
           }
         }
         if (urlStr.includes('.m3u8') || urlStr.includes('m3u8')) {
-          logInfo(`[LiveApi] getInfoByRoom找到HLS: ${urlStr.substring(0, 80)}...`);
-          const result: LiveStreamUrlResult = {
-            url: urlStr,
-            acceptQuality: [qn],
-            currentQn: qn
-          };
-          return result;
+          hlsUrl = preferredPlaybackUrl([hlsUrl, urlStr]);
         }
+      }
+      if (hlsUrl) {
+        logInfo(`[LiveApi] getInfoByRoom找到HLS: ${hlsUrl.substring(0, 80)}...`);
+        return { url: hlsUrl, acceptQuality: [qn], currentQn: qn };
       }
     }
 
@@ -856,7 +857,7 @@ async function tryFetchInfoByRoom(roomId: number, qn: number): Promise<LiveStrea
       const m3u8Regex = /https?:\/\/[^"'\s]*?m3u8[^"'\s]*/g;
       const matches: RegExpMatchArray | null = raw.match(m3u8Regex);
       if (matches && matches.length > 0) {
-        const hlsUrl = matches[0];
+        const hlsUrl = preferredPlaybackUrl(matches);
         logInfo(`[LiveApi] getInfoByRoom原始搜索找到HLS: ${hlsUrl.substring(0, 80)}...`);
         return {
           url: hlsUrl,
@@ -913,12 +914,12 @@ async function tryFetchPlayUrl(roomId: number, query: string): Promise<LiveStrea
       for (const item of d.durl) {
         const url = item.url || '';
         logInfo(`[LiveApi]   流[order=${item.order}]: ${url.substring(0, 80)}...`);
-        if (url.includes('.m3u8') || url.includes('m3u8')) {
-          hlsUrl = url;
-          break;
-        }
-        if (!playUrl) {
-          playUrl = url;
+        for (const candidate of [url].concat(item.backup_url || [])) {
+          if (candidate.includes('m3u8')) {
+            hlsUrl = preferredPlaybackUrl([hlsUrl, candidate]);
+          } else {
+            playUrl = preferredPlaybackUrl([playUrl, candidate]);
+          }
         }
       }
     }
@@ -929,9 +930,8 @@ async function tryFetchPlayUrl(roomId: number, query: string): Promise<LiveStrea
       const m3u8Regex = /https?:\/\/[^"'\s]*?m3u8[^"'\s]*/gi;
       const matches = rawStr.match(m3u8Regex);
       if (matches && matches.length > 0) {
-        const foundUrl = matches[0];
-        // 只有当durl没找到HLS时，或找到的URL与现有playUrl不同时，才使用这个
-        if (!hlsUrl) {
+        const foundUrl = preferredPlaybackUrl(matches);
+        if (!hlsUrl || playbackCdnRank(foundUrl) < playbackCdnRank(hlsUrl)) {
           hlsUrl = foundUrl;
           logInfo(`[LiveApi] 响应全文搜索到HLS: ${hlsUrl.substring(0, 80)}...`);
         }

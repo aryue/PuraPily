@@ -7,6 +7,7 @@ import { PlaybackPlayer } from './PlaybackPlayer';
 import { PlaybackEventBus } from './PlaybackEventBus';
 import { PlayUrlResult } from '../api/BilibiliApi';
 import { selectDashVideo } from '../utils/DashQuality';
+import { playbackCdnRank } from '../utils/PlaybackCdn';
 import { PlayerService } from './PlayerService';
 import { HighRefreshService } from './HighRefreshService';
 import { logInfo, logWarn } from '../utils/Logger';
@@ -102,15 +103,21 @@ export class IjkPlaybackPlayer implements PlaybackPlayer {
     }
   }
 
-  /** 取第一个可用的备用源；B站 backup_url 通常是同文件的其它 CDN 域名。 */
+  /** 同等级优先换主机，已知 PCDN 不参加常规节点的起播竞速。 */
   private static firstBackup(urls: string[] | undefined, base: string): string {
     if (!urls) return '';
     const host = base.split('/')[2];
+    const baseRank = playbackCdnRank(base);
     let fallback = '';
+    let bestRank = 3;
     for (const url of urls) {
       if (!url || !url.startsWith('https://') || url === base) continue;
-      if (url.split('/')[2] !== host) return url;
-      if (!fallback) fallback = url;
+      const rank = playbackCdnRank(url);
+      if (rank === 2 && baseRank < rank) continue;
+      if (rank < bestRank || (rank === bestRank && fallback.split('/')[2] === host && url.split('/')[2] !== host)) {
+        fallback = url;
+        bestRank = rank;
+      }
     }
     return fallback;
   }

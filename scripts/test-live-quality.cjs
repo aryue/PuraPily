@@ -31,3 +31,39 @@ assert.equal(ctx.exports.select([{ protocol_name: 'http_hls', format: [{ format_
 assert.equal(ctx.exports.select([{ protocol_name: 'http_hls', format: [{ format_name: 'fmp4', codec: [{ ...avc, url_info: [] }] }] }]), undefined);
 assert.deepEqual(Array.from(ctx.exports.qualities({}, codec('avc', [], 250)), q => q.qn), [250]);
 console.log('Live quality codec selection, accepted qualities, unavailable streams and actual quality fallback passed');
+
+const cdn = { exports: {} };
+vm.runInNewContext(ts.transpileModule(fs.readFileSync('entry/src/main/ets/utils/PlaybackCdn.ets', 'utf8'), {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 }
+}).outputText, cdn);
+const pcdnHost = 'https://edge.mountaintoys.cn:4483';
+const regularHost = 'https://d1--cn-gotcha04.bilivideo.com';
+avc.url_info = [
+  { host: pcdnHost, extra: '?sign=pcdn' },
+  { host: regularHost, extra: '?sign=regular' }
+];
+Object.assign(ctx, cdn.exports, {
+  HttpConstants: { liveBaseUrl: 'https://api.live.bilibili.com' },
+  getBiliCookie: () => '',
+  logInfo() {}, logWarn() {}, logError() {},
+  http: { RequestMethod: { GET: 'GET' }, createHttp: () => ({
+    request: async () => ({ responseCode: 200, result: JSON.stringify({
+      code: 0, data: { playurl_info: { playurl: { stream: streams } } }
+    }) }),
+    destroy() {}
+  }) }
+});
+const fetchStart = source.indexOf('async function tryFetchV2PlayUrl(');
+const fetchEnd = source.indexOf('async function tryFetchNewPlayUrl(', fetchStart);
+assert.ok(fetchStart >= 0 && fetchEnd > fetchStart);
+vm.runInNewContext(ts.transpileModule(source.slice(fetchStart, fetchEnd) + '\nexports.fetch = tryFetchV2PlayUrl;', {
+  compilerOptions: { target: ts.ScriptTarget.ES2020 }
+}).outputText, ctx);
+(async () => {
+  const result = await ctx.exports.fetch(1, 250);
+  assert.equal(result.url, regularHost + '/stream.m3u8?sign=regular');
+  assert.equal(result.currentQn, 250);
+  avc.url_info.pop();
+  assert.equal((await ctx.exports.fetch(1, 250)).url, pcdnHost + '/stream.m3u8?sign=pcdn');
+  console.log('PASS: live V2 prefers a conventional CDN and accepts a PCDN-only response');
+})().catch(error => { console.error(error); process.exitCode = 1; });

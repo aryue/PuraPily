@@ -23,6 +23,11 @@ async function main() {
   await AppSign.signParams(params, 'android_hd');
   assert.equal(params.sign, 'test-signature', 'existing configured HD callers remain available');
   const api = fs.readFileSync(base + 'api/BilibiliApi.ts', 'utf8');
+  const cdn = { exports: {} };
+  run(fs.readFileSync(base + 'utils/PlaybackCdn.ts', 'utf8'), cdn);
+  const durlStart = api.indexOf('function preferredDurl(');
+  const durlEnd = api.indexOf('export interface DashVideoItem', durlStart);
+  assert.ok(durlStart >= 0 && durlEnd > durlStart);
   const begin = api.indexOf('function emptyPlayUrlResult(');
   const end = api.indexOf('function generateTraceId(', begin);
   assert.ok(begin >= 0 && end > begin);
@@ -32,7 +37,7 @@ async function main() {
   const sign = AppSign.signParams.bind(AppSign);
   AppSign.signParams = async (params, platform) => { signedPlatform = platform; await sign(params, platform); };
   const marks = [];
-  const mobile = { exports: {}, AppSign, PlaybackStartup: { span: () => ({
+  const mobile = { exports: {}, ...cdn.exports, AppSign, PlaybackStartup: { span: () => ({
     mark: name => marks.push(name), end: () => { ended++; }, network() {}
   }) }, AppStorage: { get: () => cookie }, getLoginAccessKey: async () => token,
     getVideoDetail: () => detailLookup, getCookieHeader: () => cookie,
@@ -40,7 +45,8 @@ async function main() {
     return { async request(url) { requests++; requestedUrl = url; return { responseCode: 200,
       result: JSON.stringify({ code: 0, data: responseData }) }; }, destroy() {} };
   } }, logInfo() {}, logWarn() {}, logError() {} };
-  run(api.slice(begin, end) + '\nexports.fetch = tryFetchPlayUrlMobile; exports.compat = tryFetchPlayUrlCompat; exports.web = tryFetchPlayUrlWebRoute;', mobile);
+  run(api.slice(durlStart, durlEnd) + api.slice(begin, end) +
+    '\nexports.fetch = tryFetchPlayUrlMobile; exports.compat = tryFetchPlayUrlCompat; exports.web = tryFetchPlayUrlWebRoute;', mobile);
   const result = await mobile.exports.fetch('BVtest', 1, 116, 3536);
   assert.equal(result.actualQn, 80); assert.equal(result.durlUrl, 'compatible-stream');
   assert.equal(requests, 1); assert.equal(ended, 1);
@@ -56,14 +62,18 @@ async function main() {
   assert.equal(url.searchParams.get('sign'), 'test-signature');
   assert.equal(signedPlatform, 'android_hd');
   assert.ok(marks.includes('account-token')); assert.equal(hashes, 2);
+  const pcdn = 'https://edge.mountaintoys.cn:4483/v';
+  const mirror = 'https://upos-sz-mirrorali.bilivideo.com/v?signature=keep';
+  responseData = { quality: 80, durl: [{ url: pcdn, backup_url: [mirror] }] };
+  assert.equal((await mobile.exports.fetch('BVtest', 1, 116, 3536)).durlUrl, mirror);
   responseData = { quality: 80, timelength: 75000, dash: {
-    video: [{ id: 80, codecid: 7, base_url: 'app-video', backup_url: ['app-video-backup'], frame_rate: '30', start_with_sap: 1 }],
+    video: [{ id: 80, codecid: 7, base_url: pcdn, backup_url: [mirror], frame_rate: '30', start_with_sap: 1 }],
     audio: [{ id: 30280, base_url: 'app-audio', backup_url: ['app-audio-backup'] }]
   } };
   const dash = await mobile.exports.fetch('BVtest', 1, 116, 3536);
   assert.equal(dash.route, 'app-hd');
-  assert.equal(dash.dashVideoUrl, 'app-video'); assert.equal(dash.dashAudioUrl, 'app-audio');
-  assert.equal(dash.dashInfo.videoStreams[0].backupUrl[0], 'app-video-backup');
+  assert.equal(dash.dashVideoUrl, mirror); assert.equal(dash.dashAudioUrl, 'app-audio');
+  assert.equal(dash.dashInfo.videoStreams[0].backupUrl[0], pcdn);
   assert.equal(dash.dashInfo.videoStreams[0].frameRate, '30');
   assert.equal(dash.dashInfo.audioStreams[0].backupUrl[0], 'app-audio-backup');
   token = '';
