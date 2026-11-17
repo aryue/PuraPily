@@ -47,12 +47,13 @@ export struct CommentThreadPanel {
     const request = ++this.requestVersion;
     const nextPage = reset ? 1 : this.page + 1;
     const root = this.comment.rpid;
-    const aid = this.videoDetail?.aid || this.comment.oid;
+    const aid = this.comment.oid || this.videoDetail?.aid || 0;
     this.loading = true;
     this.failed = false;
     const result = await getCommentDetail(aid, root, nextPage, 20);
-    if (!this.alive || request !== this.requestVersion || root !== this.comment.rpid) return;
+    if (!this.alive || request !== this.requestVersion) return;
     this.loading = false;
+    if (root !== this.comment.rpid || aid !== (this.comment.oid || this.videoDetail?.aid || 0)) return;
     if (!result) {
       this.failed = true;
       return;

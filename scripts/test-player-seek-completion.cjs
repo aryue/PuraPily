@@ -4,17 +4,24 @@ const source=fs.readFileSync('entry/build/default/cache/default/default@CompileA
 const begin=source.indexOf('    async seek('),end=source.indexOf('    applyFSResistance(',begin);
 assert.ok(begin>=0&&end>begin);
 const context={exports:{},media:{SeekMode:{SEEK_CLOSEST:1,SEEK_PREV_SYNC:0}},logInfo(){},setTimeout,clearTimeout};
-vm.runInNewContext(ts.transpileModule('export class Page {'+source.slice(begin,end)+'}',{
+vm.runInNewContext(ts.transpileModule(fs.readFileSync('entry/src/main/ets/utils/PlaybackTimeline.ets', 'utf8'), {
+  compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020}
+}).outputText, context);
+vm.runInNewContext(ts.transpileModule(fs.readFileSync('entry/src/main/ets/services/PlaybackSeek.ets', 'utf8'), {
+  compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020}
+}).outputText, {...context, require: () => ({ media: context.media })});
+Object.assign(context, context.exports);
+vm.runInNewContext(ts.transpileModule('export class Page { seekQueue_ = new PlaybackSeekQueue(); '+source.slice(begin,end)+'}',{
   compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020}
 }).outputText,context);
 async function exercise(completes){
   const page=new context.exports.Page(),saved=[];
-  Object.assign(page,{play:true,dur:75.007,sg_:false,cv:false,pendingSeekTarget_:-1,audioGain_:1,mute:true,
+  Object.assign(page,{play:true,dur:75.007,sg_:false,cv:false,playbackResources_: { audioGain: 1 },mute:true,
     cancelVideoSpeedSync(){},cancelDelayHide(){},saveWatchHistory(){saved.push(this.ct);},
     rampAudio_(){},markAutoPlay(){},delayMs_:()=>new Promise(()=>{})});
-  page.avAudio={async pause(){},async play(){assert.equal(completes,false);},
+  page.playbackResources_.audio={async pause(){},async play(){assert.equal(completes,false);},
     seek(position){page.audioSeekResolve_?.(position);}};
-  page.av={state:'playing',currentTime:72043,async pause(){this.state='paused';},
+  page.playbackResources_.video={state:'playing',currentTime:72043,async pause(){this.state='paused';},
     seek(){page.videoSeekPosition=72.043;page.videoSeekResolve_();},
     async play(){
       this.state=completes?'completed':'playing';
@@ -30,11 +37,11 @@ async function exercise(completes){
 async function exerciseMerged() {
   const page = new context.exports.Page(), requests = [];
   Object.assign(page, {
-    play: false, dur: 100, sg_: false, pendingSeekTarget_: -1, audioGain_: 1, avAudio: null,
+    play: false, dur: 100, sg_: false,  playbackResources_: { audioGain: 1, audio: null },
     rampAudio_() {}, cancelDelayHide() {}, cancelVideoSpeedSync() {}, saveWatchHistory() {},
     delayMs_: () => new Promise(() => {})
   });
-  page.av = { state: 'paused', seek(position, mode) { requests.push([position, mode]); } };
+  page.playbackResources_.video = { state: 'paused', seek(position, mode) { requests.push([position, mode]); } };
   const first = page.seek(10, false, false);
   await page.seek(20, false, true);
   await page.seek(35, false, true);

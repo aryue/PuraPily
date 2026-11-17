@@ -8,6 +8,7 @@ const Orientation = { AUTO_ROTATION: 0, PORTRAIT: 1, LANDSCAPE: 2, PORTRAIT_INVE
   LANDSCAPE_INVERTED: 4, AUTO_ROTATION_PORTRAIT: 6, AUTO_ROTATION_LANDSCAPE: 7, AUTO_ROTATION_RESTRICTED: 8 };
 const store = new Map();
 const barCalls = [];
+const windowControls = fs.readFileSync(path.join(base, 'services/PlaybackWindow.ets'), 'utf8').replace(/^import .*$/gm, '');
 function load(file, methods) {
   const source = fs.readFileSync(path.join(base, file), 'utf8');
   const bodies = methods.map(name => {
@@ -22,10 +23,12 @@ function load(file, methods) {
     AppStorage: { get: key => store.get(key), setOrCreate: (key, value) => store.set(key, value) },
     setTimeout: () => 0, logInfo() {}, logWarn() {}, logError() {}, errMsg: String,
     VibrateUtils: { vibratePreset() {} } };
-  vm.runInNewContext(ts.transpileModule(`export class Page { ${bodies} }`, {
+  vm.runInNewContext(ts.transpileModule(`${windowControls}\nexport class Page { ${bodies} }`, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 }
   }).outputText, context);
-  return new context.exports.Page();
+  const page = new context.exports.Page();
+  page.playbackWindow_ = new context.exports.PlaybackWindow();
+  return page;
 }
 (async () => {
   for (const file of ['pages/VideoPlayerPage.ets', 'pages/LivePlayerPage.ets']) {
@@ -98,12 +101,33 @@ function load(file, methods) {
   bars.isLightsOff = false; bars.playerPageVisible = false;
   const count = barCalls.length; bars.manageSB(true);
   assert.equal(barCalls.length, count, 'hidden page must not overwrite system bars');
-  const restore = load('pages/VideoPlayerPage.ets', ['async restoreS()']);
-  Object.assign(restore, { mw: { setPreferredOrientation: async () => {} },
-    getUIContext: () => ({ getHostContext: () => ({}) }) });
+  bars.playerPageVisible = true;
+  bars.manageSB(false);
+  const first = barCalls.length;
+  bars.manageSB(false);
+  assert.equal(barCalls.length, first, 'unchanged bars do not cause window relayout');
+  bars.manageSB(true);
+  assert.equal(barCalls.length, first + 1);
+  let restored;
+  const win = { getWindowProperties: () => ({ brightness: -1 }), setWindowBrightness(value) { restored = value; } };
+  assert.equal(bars.playbackWindow_.captureBrightness(win), -1);
+  bars.playbackWindow_.restoreBrightness(win);
+  assert.equal(restored, -1, 'restore preserves system-controlled brightness');
+  win.getWindowProperties = () => ({ brightness: 0.42 });
+  assert.equal(bars.playbackWindow_.captureBrightness(win), 0.42);
+  bars.playbackWindow_.restoreBrightness(win);
+  assert.equal(restored, 0.42, 'restore preserves an explicit window brightness');
+  const screenRequests = [];
+  win.setWindowKeepScreenOn = async value => { screenRequests.push(value); };
+  bars.playbackWindow_.keepScreenOn(win, true);
+  bars.playbackWindow_.keepScreenOn(win, false);
+  bars.playbackWindow_.keepScreenOn(null, true);
+  assert.deepEqual(screenRequests, [true, false]);
+  const restore = load('pages/VideoPlayerPage.ets', []).playbackWindow_;
+  const exitWindow = { setPreferredOrientation: async () => {} };
   for (const isLandscape of [false, true]) {
     store.set('isLandscape', isLandscape);
-    await restore.restoreS();
+    await restore.restoreAfterExit(exitWindow, () => ({}));
     assert.deepEqual(barCalls.at(-1), [true, true], 'leaving playback restores bars regardless of the old player viewport');
   }
   console.log('Rotation: system/default policy, explicit modes, lock/unlock and fullscreen restoration passed.');

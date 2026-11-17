@@ -45,6 +45,48 @@ const deferred = () => {
   assert.equal(thread.replies.length, 41);
   assert.equal(thread.hasMore, false);
 
+  const pendingOldVideo = deferred();
+  const changing = state(() => pendingOldVideo.promise);
+  const oldVideoLoad = changing.loadReplies(true);
+  changing.comment = { rpid: 1, oid: 999, rcount: 0 };
+  pendingOldVideo.resolve(rows(50, 2, 2));
+  await oldVideoLoad;
+  assert.equal(changing.loading, false);
+  assert.equal(changing.replies.length, 0, 'a late page must match both aid and root comment');
+
+  const inlinePending = deferred();
+  const inlineCalls = [];
+  const inlineModule = { exports: {}, require: name => name === '../api/BilibiliApi' ? {
+    async getCommentReplies(aid, root, page, size) {
+      inlineCalls.push([aid, root, page, size]);
+      if (page === 1) return rows(1, 20).replies;
+      if (page === 2) return rows(20, 20).replies;
+      return inlinePending.promise;
+    }
+  } : {} };
+  const service = fs.readFileSync(path.join(__dirname, '../entry/src/main/ets/services/PlaybackComments.ets'), 'utf8');
+  vm.runInNewContext(ts.transpileModule(service, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS }
+  }).outputText, inlineModule);
+  const comments = new inlineModule.exports.PlaybackComments();
+  const row = {
+    rpid: 6, rcount: 50, replies: [],
+    updateReplies(replies) { this.replies = Array.from(replies, reply => ({ rpid: reply.rpid, toCommentItem: () => reply })); }
+  };
+  assert.equal(await comments.loadInlineReplies(7, row, true, () => true), true);
+  assert.equal(await comments.loadInlineReplies(7, row, false, () => true), true);
+  assert.equal(row.replies.length, 39, 'overlapping pages do not duplicate a reply');
+  let current = true;
+  const inlineLoad = comments.loadInlineReplies(7, row, false, () => current);
+  assert.equal(await comments.loadInlineReplies(7, row, false, () => true), false, 'the same row cannot paginate twice');
+  current = false;
+  inlinePending.resolve(rows(40, 10).replies);
+  assert.equal(await inlineLoad, false);
+  assert.equal(row.replies.length, 39);
+  assert.equal(row.replyPage, 2);
+  assert.equal(row.loadingReplies, false);
+  assert.deepEqual(inlineCalls, [[7, 6, 1, 20], [7, 6, 2, 20], [7, 6, 3, 20]]);
+
   const retries = [null, rows(1, 2, 2)];
   const retry = state(async () => retries.shift());
   await retry.loadReplies(true);

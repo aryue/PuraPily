@@ -7,7 +7,9 @@ const ts = require(process.env.ARK_TYPESCRIPT || 'D:/Program Files/Huawei/DevEco
 const compiled = fs.readFileSync('entry/build/default/cache/default/default@CompileArkTS/esmodule/debug/entry/src/main/ets/pages/VideoPlayerPage.ts', 'utf8');
 const core = compiled.slice(compiled.indexOf('    commentListCore('), compiled.indexOf('    commentAreaCore('));
 assert.match(core, /inRefresh: boolean = false/, 'builder must retain refresh context and its default');
-const setup = core.slice(core.indexOf('List.create('), core.indexOf('}, List);'));
+assert.match(core, /commentScroller: this\.commentScroller, fullscreenScroller: this\.fsCommentScroller, useFsScroller: useFsScroller/);
+const list = fs.readFileSync('entry/build/default/cache/default/default@CompileArkTS/esmodule/debug/entry/src/main/ets/components/PlayerCommentList.ts', 'utf8');
+const setup = list.slice(list.indexOf('List.create('), list.indexOf('}, List);'));
 assert.ok(setup.startsWith('List.create('));
 assert.ok(!setup.includes('List.nestedScroll('), 'Refresh must configure its direct List child natively, as on DynamicsPage');
 const context = { Axis: { Vertical: 0 }, BarState: { Off: 0 }, EdgeEffect: { Spring: 0 },
@@ -15,17 +17,17 @@ const context = { Axis: { Vertical: 0 }, BarState: { Off: 0 }, EdgeEffect: { Spr
   ScrollState: { Idle: 0, Scroll: 1, Fling: 2 }, TouchType: { Down: 0, Move: 2, Up: 1, Cancel: 3 },
   HitTestMode: { Default: 0 },
   Visibility: { Visible: 0 }, exports: {} };
-vm.runInNewContext(ts.transpileModule(`export function setup(inRefresh: boolean, useFsScroller: boolean) {
-  const hideOnTransition = false;
+vm.runInNewContext(ts.transpileModule(`export function setup() {
   ${setup}
 }`, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText, context);
-const page = { commentScroller: {}, fsCommentScroller: {} };
+const page = { commentScroller: {}, fullscreenScroller: {} };
 for (const inRefresh of [true, false, true]) {
   for (const useFsScroller of [false, true]) {
     const calls = {};
     context.List = new Proxy({}, { get: (_, name) => (...args) => { calls[name] = args; } });
-    context.exports.setup.call(page, inRefresh, useFsScroller);
-    assert.equal(calls.create[0].scroller, useFsScroller ? page.fsCommentScroller : page.commentScroller);
+    const scroller = useFsScroller ? page.fullscreenScroller : page.commentScroller;
+    context.exports.setup.call({ ...page, useFsScroller, inRefresh });
+    assert.equal(calls.create[0].scroller, scroller);
     assert.equal(calls.edgeEffect[1].alwaysEnabled, inRefresh, 'short comments must still pass pulls to Refresh');
     assert.equal(calls.cachedCount[0], inRefresh ? 4 : 1, 'keep a bounded cache of heavy comment rows');
   }

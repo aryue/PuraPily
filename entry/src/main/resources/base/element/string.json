@@ -2,11 +2,11 @@
   "string": [
     {
       "name": "permission_reason_nearlink_lab",
-      "value": "用于实验页读取已配对星闪设备的名称和连接状态，与音频输出路由对照"
+      "value": "用于读取已配对星闪设备的名称和连接状态，与音频输出路由对照匹配音量条图标"
     },
     {
       "name": "permission_reason_audio_output_lab",
-      "value": "用于在音频输出实验页读取耳机名称等设备信息"
+      "value": "用于读取耳机名称等设备信息，与音频输出路由对照匹配音量条图标"
     },
     {
       "name": "module_desc",

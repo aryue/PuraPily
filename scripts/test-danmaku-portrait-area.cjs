@@ -31,6 +31,11 @@ function slice(startMark, endMark) {
 const plate = slice('  private portraitPlateByArea(', '  /** ⭐ 常驻层内视频实际尺寸');
 const danmaku = slice('  private ovDanmakuCW(', '  /** ⭐ 首次 build 前同步估算常驻层矩形');
 const context = { exports: {} };
+const viewport = { exports: {} };
+vm.runInNewContext(ts.transpileModule(fs.readFileSync('entry/src/main/ets/utils/PlaybackViewport.ets', 'utf8'), {
+  compilerOptions: { module: ts.ModuleKind.CommonJS }
+}).outputText, viewport);
+Object.assign(context, viewport.exports);
 vm.runInNewContext(ts.transpileModule(`export class Page { ${plate}\n${danmaku} }`, {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 }
 }).outputText, context);
@@ -76,8 +81,6 @@ assert.equal(page.ovRectY() + (page.ovRectH() - page.referenceMediaHeight()) / 2
 // 2) 弹幕画布 = 整个播放区域，1:1
 assert.equal(page.ovDanmakuCW(), 440, 'danmaku width = playback area width');
 assert.equal(page.ovDanmakuCH(), 386.9, 'danmaku height = playback area height');
-assert.equal(page.dmTransformChannel(), false, 'portrait danmaku must not ride the video surface transform');
-assert.equal(page.dmScaleFactor(), 1);
 assert.equal(page.dmPositionX(), 0);
 assert.equal(page.dmPositionY(), 0);
 // 静止态：可用高度 = 画布高（没被遮挡时两者一致，不该白扣行数）
@@ -135,14 +138,12 @@ assert.equal(page.ovDanmakuCW(), 833);
 assert.equal(page.ovDanmakuCH(), 519);
 assert.equal(page.dmTrackAreaHeight(), 0, 'landscape must not use the track-area channel');
 
-// 8) 源码口径：dmTransformChannel 恒 false；画布高静止、可用高度跟手
-const block = slice('  private dmTransformChannel()', '  /** ⭐ 首次 build 前同步估算常驻层矩形');
-assert.ok(/private dmTransformChannel\(\): boolean \{\s*return false/.test(block),
-  'dmTransformChannel must stay false: the surface scale squeezes the canvas back to the media box');
 assert.ok(/dmPortraitSurfaceHeight\(\)/.test(danmaku), 'portrait canvas height must use the static surface height');
 assert.ok(/dmTrackAreaHeight\(\)/.test(danmaku), 'portrait track layout must follow the visible area');
 // 页面必须把可用高度下发给弹幕组件（否则 controller 永远按整块画布排行）
 assert.ok(/trackAreaHeight:\s*this\.dmTrackAreaHeight\(\)/.test(source),
-  'DanmakuView mount must receive trackAreaHeight');
+  'PlaybackDanmakuLayer mount must receive trackAreaHeight');
+const layer = fs.readFileSync('entry/src/main/ets/components/PlaybackDanmakuLayer.ets', 'utf8');
+assert.match(layer, /trackAreaHeight:\s*this\.trackAreaHeight/);
 
 console.log('PASS: portrait danmaku canvas = whole playback area (video bars included), track area follows the visible area, video stays centered, lights-off/feed/landscape untouched');

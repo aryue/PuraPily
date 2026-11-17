@@ -71,6 +71,7 @@ assert.ok(/capsuleHeight: 40/.test(commentEntry) && /color_player_text_secondary
 for (const [rel, label] of [
   ['components/VideoControls', '横屏/全屏控制栏弹幕输入入口'],
   ['pages/VideoPlayerPage', '竖屏 Tab / 连刷浮层弹幕输入入口'],
+  ['components/FeedPreviewChrome', '连刷预览弹幕输入入口'],
 ]) {
   const text = compiled(rel);
   assert.ok(!/refractive:\s*false/.test(text), `${label} must not use the flat non-material shell`);
@@ -80,8 +81,10 @@ const controlsSrc = source('components/VideoControls');
 const playerSrc = source('pages/VideoPlayerPage');
 assert.equal((controlsSrc.match(/NativeGlassInput\(\{ inputHeight: (32|34) \}\)/g) || []).length, 2,
   'both VideoControls danmaku entries aligned');
-assert.equal((playerSrc.match(/NativeGlassInput\(\{ inputHeight: (28|34) \}\)/g) || []).length, 3,
-  'all three VideoPlayerPage danmaku entries aligned');
+assert.equal((playerSrc.match(/NativeGlassInput\(\{ inputHeight: (28|34) \}\)/g) || []).length, 2,
+  'both VideoPlayerPage danmaku entries aligned');
+assert.equal((source('components/FeedPreviewChrome').match(/NativeGlassInput\(\{ inputHeight: 34 \}\)/g) || []).length, 1,
+  'the feed preview also uses the shared material');
 assert.ok(playerSrc.includes(".fontColor($r('app.color.color_player_text_secondary'))"),
   'portrait tab entry uses the same secondary foreground');
 

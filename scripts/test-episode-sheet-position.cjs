@@ -63,4 +63,6 @@ for (const binding of [bindSeason, bindEpisode]) {
 }
 assert.ok(source.includes('initialIndex: this.episodeSheetInitialIndex'));
 assert.ok(source.includes('initialIndex: this.seasonSheetInitialIndex'));
+const sheet = fs.readFileSync('entry/src/main/ets/components/PlayerEpisodeSheet.ets', 'utf8');
+assert.ok(sheet.includes('List({ scroller: this.scroller, initialIndex: this.initialIndex })'));
 console.log('PASS: pre-open positions, segment-local indices, pending selection and exact cross-section collection matching');

@@ -43,13 +43,17 @@ export struct CommentConversationPanel {
     if (!reset && (this.loading || !this.hasMore)) return;
     const request = ++this.requestVersion;
     const dialog = this.selected.dialog;
+    const selected = this.selected.rpid;
+    const root = this.root.rpid;
+    const aid = this.root.oid || this.videoDetail?.aid || 0;
     const cursor = reset ? 0 : this.floor;
     this.loading = true;
     this.failed = false;
-    const result = await getCommentDialog(this.videoDetail?.aid || this.root.oid,
-      this.root.rpid, dialog, cursor, 20, this.root.type || 1);
-    if (!this.alive || request !== this.requestVersion || dialog !== this.selected.dialog) return;
+    const result = await getCommentDialog(aid, root, dialog, cursor, 20, this.root.type || 1);
+    if (!this.alive || request !== this.requestVersion) return;
     this.loading = false;
+    if (root !== this.root.rpid || aid !== (this.root.oid || this.videoDetail?.aid || 0) ||
+      dialog !== this.selected.dialog || selected !== this.selected.rpid) return;
     if (!result.ok) {
       this.failed = true;
       this.errorMessage = result.message;

@@ -104,15 +104,10 @@ async function main() {
   for (let i = 1; i <= 2100; i++) state.markVisited(String(i));
   assert.equal(state.excluded('2').size, 2001, 'visited storage is bounded; local history is also included');
 
-  // Exercise the real page fetcher: excluded batches must advance the cursor,
+  // Exercise the queue fetcher: excluded batches must advance the cursor,
   // remain excluded on later pages, and retain both queued and AV aliases.
-  const source = fs.readFileSync(path.join(root, 'pages/VideoPlayerPage' + extension), 'utf8');
-  const start = source.indexOf('private async referenceFetchRecommendations(');
-  const end = source.indexOf('private async referenceNextVideo(', start);
   const calls = [];
-  const context = { exports: {}, Set, Promise, logInfo() {},
-    ContinuousRecommendationState: state,
-    VideoCardFeedback: { isDismissed: (id, mid) => mid === 'blocked' || id === 'dismissed' },
+  const story = {
     async getStoryRecommendVideos(index) {
       calls.push(index);
       return calls.length === 1 ? [{ id: 'BV1hb411c7RQ', aid: 10 }] : [
@@ -123,16 +118,22 @@ async function main() {
     }
   };
   state.markVisited(raw.bvid, 10);
-  vm.runInNewContext(ts.transpileModule(`class Page { ${source.slice(start, end)} } exports.Page = Page;`, {
-    compilerOptions: { target: ts.ScriptTarget.ES2020 }
-  }).outputText, context);
-  const page = new context.exports.Page();
-  Object.assign(page, { referenceAlive: true, referenceFeedQueue: [{ id: 'queued', aid: 88 }] });
-  await page.referenceFetchRecommendations();
-  assert.deepEqual(Array.from(page.referenceFeedQueue, item => item.id), ['queued', 'new']);
+  const { FeedRecommendationQueue } = load('services/FeedRecommendationQueue', {
+    '../api/StoryRecommendApi': story,
+    '../utils/Logger': logger,
+    './ContinuousRecommendationState': { ContinuousRecommendationState: state },
+    './VideoCardFeedback': { VideoCardFeedback: { isDismissed: (id, mid) => mid === 'blocked' || id === 'dismissed' } }
+  });
+  const queue = new FeedRecommendationQueue();
+  queue.items = [{ id: 'queued', aid: 88 }];
+  assert.deepEqual(await Promise.all([queue.append(() => true), queue.append(() => true)]), [true, false]);
+  assert.deepEqual(Array.from(queue.items, item => item.id), ['queued', 'new']);
   assert.equal(calls.length, 3, 'all-excluded and sparse pages still advance within the request limit');
   assert.equal(calls[1], calls[0] + 1);
   assert.equal(calls[2], calls[1] + 1);
+  const closedQueue = new FeedRecommendationQueue();
+  assert.equal(await closedQueue.append(() => false), false);
+  assert.equal(closedQueue.items.length, 0, 'a closed page never receives a pending batch');
   console.log('PASS: Story login routing/signing, persistent account history/cursor, cloud/local history, AV/BV aliases, feedback, sparse paging and queue deduplication');
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

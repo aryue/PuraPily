@@ -1,18 +1,51 @@
 const fs = require('node:fs'), vm = require('node:vm'), assert = require('node:assert/strict');
 const ts = require('D:/Program Files/Huawei/DevEco Studio/sdk/default/openharmony/ets/build-tools/ets-loader/node_modules/typescript');
 const source = fs.readFileSync('entry/build/default/cache/default/default@CompileArkTS/esmodule/debug/entry/src/main/ets/pages/VideoPlayerPage.ts','utf8');
-const start = source.indexOf('    private async referenceSelectSubtitle(');
-assert.ok(start >= 0);
-let pos = source.indexOf('{',start), depth = 1, end = pos + 1;
-for (; depth; end++) { if (source[end] === '{') depth++; if (source[end] === '}') depth--; }
+const parsed = ts.createSourceFile('VideoPlayerPage.ts', source, ts.ScriptTarget.Latest, true);
+const page = parsed.statements.find(n => ts.isClassDeclaration(n) && n.name?.text === 'VideoPlayerPage');
+const names = ['referenceSelectSubtitle'];
+const methods = page.members.filter(n => names.includes(n.name?.getText(parsed)));
+assert.equal(methods.length, names.length);
 const pending = [];
-const ctx = { http: { RequestMethod: { GET: 'GET' }, createHttp: () => ({ request: () => new Promise(resolve => pending.push(resolve)), destroy() {} }) }, logWarn() {} };
-vm.runInNewContext(ts.transpileModule('class Subject {'+source.slice(start,end)+'} globalThis.s = new Subject();', { compilerOptions:{target:ts.ScriptTarget.ES2020}}).outputText,ctx);
+const requests = [];
+let destroyed = 0;
+const ctx = { http: { RequestMethod: { GET: 'GET' }, createHttp: () => ({
+  request: url => { requests.push(url); return new Promise(resolve => pending.push(resolve)); }, destroy() { destroyed++; }
+}) }, AppStorage: { get() {} }, AppSign: { generateWebParams: async params => new URLSearchParams(params).toString() },
+  logWarn() {}, logInfo() {} };
+const tracks = fs.readFileSync('entry/src/main/ets/services/SubtitleTrackService.ets', 'utf8');
+const trackClass = tracks.slice(tracks.indexOf('export class SubtitleTrackService')).replace('export class', 'class');
+vm.runInNewContext(ts.transpileModule(trackClass + '\nclass Subject {' + methods.map(n => n.getText(parsed)).join('\n') +
+  '} globalThis.s = new Subject(); globalThis.tracks = new SubtitleTrackService();', { compilerOptions: { target: ts.ScriptTarget.ES2020 } }).outputText, ctx);
+const timelineCues = [{ from: 1, to: 2, content: 'current' }];
+ctx.tracks.setCues(timelineCues, 'BV', 1);
+assert.equal(ctx.tracks.textAt('BV:1', 2), 'current');
+assert.equal(ctx.tracks.textAt('BV:1', 3), '');
+assert.equal(ctx.tracks.textAt('BV:2', 2), null);
+ctx.tracks.clearCues();
+assert.equal(ctx.tracks.textAt('BV:2', 2), '');
+assert.equal(ctx.tracks.subtitleCueFits(timelineCues, 0, 0), true);
+assert.equal(ctx.tracks.subtitleCueFits([{ to: 33 }], 0, 10), false);
 const s=ctx.s; let closed=0;
-Object.assign(s,{referenceSubtitleSelectionRequest:0, referenceSubtitleTrackUrls:['track-a','track-b'],vi:{bvid:'BV-test',cid:1},referenceAlive:true,
+Object.assign(s,{subtitleTracks_:ctx.tracks,vi:{bvid:'BV-test',cid:1},referenceAlive:true,
   closeLandscapeSubtitlePanel:()=>closed++,getUIContext:()=>({getPromptAction:()=>({showToast(){}})})});
+const menuTracks = [{ subtitle_url: 'track-a', lan_doc: 'A' }, { subtitle_url: 'track-b', lan_doc: '' }];
+assert.deepEqual(Array.from(ctx.tracks.setMenuTracks('BV-test:1', menuTracks)), ['A', '字幕']);
+const tokens = ['toggle', 'menu', 'selection'].map(kind => [kind, ctx.tracks.beginRequest(kind)]);
+ctx.tracks.setCues(timelineCues, 'BV', 1);
+ctx.tracks.resetPlayback();
+for (const [kind, token] of tokens) assert.equal(ctx.tracks.isCurrentRequest(kind, token), false);
+assert.equal(ctx.tracks.hasMenuTracksFor('BV-test:1'), false);
+assert.equal(ctx.tracks.menuTrackUrl(0), '');
+assert.equal(ctx.tracks.textAt('BV:1', 2), '');
+ctx.tracks.setMenuTracks('BV-test:1', menuTracks);
 const response = {responseCode:200,result:JSON.stringify({body:[{from:0,to:3,content:'subtitle'}]})};
 (async()=>{
+  const rejected = ctx.tracks.downloadTrack('//example.invalid/track');
+  assert.equal(requests.at(-1), 'https://example.invalid/track');
+  pending.shift()({ responseCode: 403, result: '' });
+  await assert.rejects(rejected, /403/);
+  assert.equal(destroyed, 1);
   const first=s.referenceSelectSubtitle(0,false); pending.shift()(response); await first;
   assert.equal(s.referenceSubtitleEnabled,true);assert.equal(s.referenceSelectedSubtitleIndex,0);assert.equal(closed,0,'portrait selection preserves its menu host');
   const older=s.referenceSelectSubtitle(1,false); await s.referenceSelectSubtitle(-1,false);
@@ -20,7 +53,24 @@ const response = {responseCode:200,result:JSON.stringify({body:[{from:0,to:3,con
   assert.equal(s.referenceSubtitleEnabled,false,'late response cannot re-enable closed subtitles');assert.equal(s.referenceSelectedSubtitleIndex,-1);
   const changed=s.referenceSelectSubtitle(0,false);s.vi.cid=2;pending.shift()(response);await changed;
   assert.equal(s.referenceSubtitleEnabled,false,'another part rejects old cues');
+  ctx.tracks.setMenuTracks('BV-test:2', menuTracks);
   const bottom=s.referenceSelectSubtitle(1);pending.shift()(response);await bottom;
   assert.equal(s.referenceSelectedSubtitleIndex,1);assert.equal(closed,1,'bottom retains its existing completion path');
   console.log('PASS: compiled shared subtitle selection, portrait host lifetime and stale/off/part isolation');
+  let resolveIdentity;
+  ctx.tracks.subtitleAuthoritativeIdentity = () => new Promise(resolve => { resolveIdentity = resolve; });
+  ctx.tracks.subtitleTrackOwned = () => true;
+  ctx.tracks.subtitleTrackPrefix = () => '';
+  const lookup = ctx.tracks.subtitleFetchTracks({ aid: 17, bvid: 'BV-old', cid: 31, pgc: false });
+  s.isPgc_ = true;
+  s.vi = { bvid: 'BV-new', cid: 32 };
+  resolveIdentity(null);
+  await new Promise(resolve => setImmediate(resolve));
+  const url = new URL(requests.at(-1));
+  assert.equal(url.searchParams.get('aid'), '17');
+  assert.equal(url.searchParams.get('bvid'), 'BV-old');
+  assert.equal(url.searchParams.get('cid'), '31');
+  pending.shift()({ result: JSON.stringify({ code: 0, data: { subtitle: { subtitles: [{ subtitle_url: 'track-a' }] } } }) });
+  await lookup;
+  console.log('PASS: in-flight subtitle lookup keeps its original aid, bvid, cid and PGC mode');
 })().catch(error=>{console.error(error);process.exitCode=1;});

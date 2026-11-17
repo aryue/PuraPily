@@ -14,7 +14,7 @@ assert.ok(ijkWarmAt > 0, 'IJK warm-adopt branch must stay');
 const ijkWarmBlock = source.slice(ijkWarmAt, source.indexOf("PlaybackStartup.setPath('ijk-warm')"));
 assert.match(ijkWarmBlock, /this\.adoptWarmAspect\(player, ijkWarm\.aspectRatio\)/,
   'IJK warm takeover must feed the pooled aspect ratio back into ar');
-const rebindAt = ijkWarmBlock.indexOf('player.surfaceId = warmSurface');
+const rebindAt = ijkWarmBlock.indexOf('rebindWarmSurface(player, warmSurface)');
 const feedAt = ijkWarmBlock.indexOf('this.adoptWarmAspect(');
 assert.ok(rebindAt > 0 && feedAt > rebindAt, 'aspect must be adopted after the surface handoff');
 
@@ -31,9 +31,9 @@ const preparedHead = source.slice(preparedAt, preparedAt + 420);
 assert.ok(preparedHead.indexOf('this.syncAspectFromPlayer(player)') > 0,
   'applyPreparedState must snapshot the prepared player size before first-frame bookkeeping');
 
-const sizeListenerAt = source.indexOf("this.av.on('videoSizeChange'");
+const sizeListenerAt = source.indexOf("this.playbackResources_.video.on('videoSizeChange'");
 const setupLAt = source.indexOf('private setupL()');
-const setupEnd = source.indexOf('private preparingPlayer_');
+const setupEnd = source.indexOf('private playbackPreparation_');
 assert.ok(sizeListenerAt > setupLAt && setupEnd > sizeListenerAt);
 const setupTail = source.slice(sizeListenerAt, setupEnd);
 assert.ok(setupTail.indexOf('this.syncAspectFromPlayer(player)') > 0,

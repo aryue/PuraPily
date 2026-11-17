@@ -35,7 +35,7 @@ async function main() {
   const branch = page.slice(start, end);
   const handle = vm.runInNewContext('(function(){switch("completed"){' + branch + '}})',
     {LiveViewHelper: helper, clearTimeout});
-  const p = { dur: 75, ct_: -1, referenceLayout: true, saveWatchHistory() {}, cancelDelayHide() {},
+  const p = { playbackResources_: {}, dur: 75, ct_: -1, referenceLayout: true, saveWatchHistory() {}, cancelDelayHide() {},
     referenceOnCompleted() { assert.equal(states.at(-1).state, 2); } };
   handle.call(p);
   assert.equal(p.play, false);

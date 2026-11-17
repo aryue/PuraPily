@@ -11,12 +11,16 @@ function methods(file, names) {
     return source.slice(start, end);
   }).join('\n');
 }
-function instance(body) {
+function instance(body, bindings = {}) {
   const code = ts.transpileModule('class Subject {' + body + '} globalThis.subject = new Subject();', {compilerOptions: {target: ts.ScriptTarget.ES2020}}).outputText;
-  const context = {}; vm.runInNewContext(code, context); return context.subject;
+  const context = { ...bindings }; vm.runInNewContext(code, context); return context.subject;
 }
-const player = instance(methods('pages/VideoPlayerPage.ts', ['applyAcceptQuality','getQlList','getQlLabel']));
-player.vi = {bvid:'BV-A',cid:1}; player.ql_ = [{qn:80,label:'1080P'},{qn:64,label:'720P'}]; player.aq = [];
+const catalog = { exports: {} };
+vm.runInNewContext(ts.transpileModule(fs.readFileSync(root + 'utils/QualityCatalog.ts', 'utf8'), {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 }
+}).outputText, catalog);
+const player = instance(methods('pages/VideoPlayerPage.ts', ['applyAcceptQuality','getQlList','getQlLabel']), catalog.exports);
+player.vi = {bvid:'BV-A',cid:1}; player.aq = [];
 assert.equal(player.getQlList().length,0, 'loading does not advertise fixed qualities');
 player.applyAcceptQuality({url:'stream',actualQn:80,acceptQuality:[80,64,80,0],acceptDescription:['高清']});
 assert.equal(JSON.stringify(player.getQlList()),JSON.stringify([{qn:80,label:'高清'},{qn:64,label:'720P'}]));
@@ -26,6 +30,7 @@ player.vi = {bvid:'BV-B',cid:1}; assert.equal(player.getQlList().length,2, 'same
 player.vi = {bvid:'BV-B',cid:2}; assert.equal(player.getQlList().length,0, 'video change hides previous options');
 player.applyAcceptQuality({url:'stream',actualQn:64}); assert.equal(player.getQlList().length,1);
 assert.equal(player.getQlList()[0].qn,64, 'missing metadata offers only the actual returned quality');
+assert.equal(player.getQlLabel(125), '125', 'unknown values keep their numeric fallback');
 player.applyAcceptQuality({url:'',actualQn:0}); assert.equal(player.getQlList().length,0, 'empty response clears old list');
 const menu = instance(methods('components/ReferencePortraitSettings.ts',['optionLabels','currentOption','selectOption','onOpenChanged','playbackModeLabels','playbackModeLabel']));
 menu.qualities = [{qn:64,label:'720P'}]; menu.quality = '720P'; menu.feedMode = false;

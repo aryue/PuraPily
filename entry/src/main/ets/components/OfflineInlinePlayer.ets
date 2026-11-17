@@ -3,7 +3,9 @@ import { StatusBarUtils } from '../utils/StatusBarUtils';
 // 点击已完成缓存条目后原位展开播放（DASH 双流：video.m4s + audio.m4s）
 // 独立的本地 AVPlayer 实例，与 PlayerService 全局播放器互不干扰
 import { media } from '@kit.MediaKit';
-import { fileIo as fs } from '@kit.CoreFileKit';
+import { PlaybackResources } from '../services/PlaybackResources';
+import { startOfflinePlayback } from '../services/PlaybackStartupSource';
+import { PlaybackDeadline } from '../utils/PlaybackDeadline';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { window, display } from '@kit.ArkUI';
 import { common } from '@kit.AbilityKit';
@@ -36,10 +38,9 @@ export struct OfflineInlinePlayer {
   private fsXc: XComponentController = new XComponentController()
   private mw: window.Window | null = null
 
-  private av: media.AVPlayer | null = null
-  private avAudio: media.AVPlayer | null = null
-  private vFd: fs.File | null = null
-  private aFd: fs.File | null = null
+  private playbackResources_: PlaybackResources = new PlaybackResources();
+  private startupDeadline_: PlaybackDeadline | null = null;
+  private active_: boolean = false;
   private xc: XComponentController = new XComponentController()
   private surfaceId_: string = ''
   private initStarted_: boolean = false
@@ -99,12 +100,14 @@ export struct OfflineInlinePlayer {
   private progressLoaded_: boolean = false
 
   aboutToAppear(): void {
+    this.active_ = true;
     // ⭐ 状态记忆：加载缩放模式/音量/静音（与完整播放器共享 Preferences 'VPS' 与 AppStorage）
     this.loadState();
     this.initPlayer();
   }
 
   aboutToDisappear(): void {
+    this.active_ = false;
     // ⭐ 退出前保存历史进度
     this.saveProgress();
     this.releaseAll();
@@ -144,7 +147,7 @@ export struct OfflineInlinePlayer {
    * 用 fdSrc 属性，兼容 API 24/26；createMediaSourceWithUrl/Fd 均不跨版本通用
    */
   private async initPlayer(): Promise<void> {
-    if (this.initStarted_ || !this.videoPath) return;
+    if (!this.active_ || this.initStarted_ || !this.videoPath) return;
     if (!this.surfaceId_) {
       const id = this.xc.getXComponentSurfaceId();
       if (!id) {
@@ -155,24 +158,17 @@ export struct OfflineInlinePlayer {
       this.surfaceId_ = id;
     }
     this.initStarted_ = true;
+    const deadline = new PlaybackDeadline();
+    this.startupDeadline_ = deadline;
+    const current = (): boolean => this.active_ && this.startupDeadline_ === deadline && !deadline.isCancelled();
     try {
-      logInfo(`[OfflineInlinePlayer] 初始化: ${this.videoPath}`);
-      this.av = await media.createAVPlayer();
-      if (!this.av) throw new Error('no player');
-      this.setupL();
-      this.vFd = fs.openSync(this.videoPath, fs.OpenMode.READ_ONLY);
-      const vFd: media.AVFileDescriptor = { fd: this.vFd.fd, offset: 0 };
-      this.av.fdSrc = vFd;
-      if (this.audioPath) {
-        this.avAudio = await media.createAVPlayer();
-        if (this.avAudio) {
-          this.setupAudioL();
-          this.aFd = fs.openSync(this.audioPath, fs.OpenMode.READ_ONLY);
-          const aFd: media.AVFileDescriptor = { fd: this.aFd.fd, offset: 0 };
-          this.avAudio.fdSrc = aFd;
-        }
-      }
+      await startOfflinePlayback(this.playbackResources_, deadline, {
+        videoPath: this.videoPath, audioPath: this.audioPath, current,
+        observeVideo: (): void => { this.setupL(); },
+        observeAudio: (): void => { this.setupAudioL(); }
+      });
     } catch (e) {
+      if (!current()) return;
       logError(`[OfflineInlinePlayer] 初始化失败: ${JSON.stringify(e)}`);
       this.err = '播放器初始化失败';
       this.loading = false;
@@ -182,43 +178,46 @@ export struct OfflineInlinePlayer {
 
   /** 视频播放器状态监听 */
   private setupL(): void {
-    if (!this.av) return;
-    const player = this.av;
-    this.av.on('stateChange', async (st: string) => {
+    if (!this.playbackResources_.video) return;
+    const player = this.playbackResources_.video;
+    player.on('stateChange', async (st: string) => {
+      if (this.playbackResources_.video !== player) return;
       switch (st) {
         case 'initialized':
           if (this.surfaceId_) {
-            this.av!.surfaceId = this.surfaceId_;
-            await this.av!.prepare();
+            this.playbackResources_.video!.surfaceId = this.surfaceId_;
+            await this.playbackResources_.video!.prepare();
           } else {
             logWarn('[OfflineInlinePlayer] initialized 但 surfaceId 未就绪，延迟重试');
             setTimeout(async () => {
               const retryId = this.xc.getXComponentSurfaceId();
-              if (retryId && this.av && this.av.state === 'initialized') {
+              if (retryId && this.playbackResources_.video === player && player.state === 'initialized') {
                 this.surfaceId_ = retryId;
-                this.av.surfaceId = retryId;
-                await this.av.prepare();
+                this.playbackResources_.video.surfaceId = retryId;
+                await this.playbackResources_.video.prepare();
               }
             }, 300);
           }
           break;
         case 'prepared':
           this.loading = false;
-          this.duration = (this.av?.duration || 0) / 1000;
-          try { this.av?.setVolume(1.0); } catch (e) { }
+          this.duration = (this.playbackResources_.video?.duration || 0) / 1000;
+          try { this.playbackResources_.video?.setVolume(1.0); } catch (e) { }
           // ⭐ 应用记忆的静音状态（与完整播放器一致：播放器增益 1.0，音量由系统控制）
           if (this.mute) this.setSystemVolume(0);
           // ⭐ 根据用户选择的缩放模式动态设置 videoScaleType（与完整播放器一致）
           try {
-            this.av!.videoScaleType = this.getVideoScaleType();
+            this.playbackResources_.video!.videoScaleType = this.getVideoScaleType();
           } catch (e) { }
           // ⭐ 恢复历史进度（离线播放记忆上次观看位置）
           this.applySavedProgress();
-          await this.av?.play();
+          await player.play();
+          if (this.playbackResources_.video !== player) return;
           // 音频已就绪则同步播放
-          if (this.avAudio && (this.avAudio.state === 'prepared' || this.avAudio.state === 'paused')) {
-            await this.avAudio.play();
+          if (this.playbackResources_.audio && (this.playbackResources_.audio.state === 'prepared' || this.playbackResources_.audio.state === 'paused')) {
+            await this.playbackResources_.audio.play();
           }
+          if (this.playbackResources_.video !== player) return;
           this.playing = true;
           // ⭐ 启动声画同步检测（DASH 双流差距检测与追赶）
           this.startSpeedSync();
@@ -232,8 +231,8 @@ export struct OfflineInlinePlayer {
           break;
       }
     });
-    this.av.on('timeUpdate', (t: number) => {
-      if (this.av !== player) return;
+    player.on('timeUpdate', (t: number) => {
+      if (this.playbackResources_.video !== player) return;
       // ⭐ 拖动进度条中 / seek 收敛期不回写 currentTime：
       //   Slider 的 value 就是 currentTime，手指拖到 A、播放器立刻写回 B、下一帧 Slider 再写回 A，
       //   滑块与手指互相争夺（表现为"拖不动 / 黏手 / 回弹"）。
@@ -246,13 +245,15 @@ export struct OfflineInlinePlayer {
       }
     });
     // ⭐ 注册 seekDone 回调，用于同步等待 seek 完成（双播放器对齐）
-    this.av.on('seekDone', (_pos: number) => {
+    player.on('seekDone', (_pos: number) => {
+      if (this.playbackResources_.video !== player) return;
       if (this.videoSeekResolve_) {
         this.videoSeekResolve_();
         this.videoSeekResolve_ = null;
       }
     });
-    this.av.on('videoSizeChange', (w: number, h: number) => {
+    player.on('videoSizeChange', (w: number, h: number) => {
+      if (this.playbackResources_.video !== player) return;
       logInfo(`[OfflineInlinePlayer] videoSizeChange: ${w}x${h}`);
       if (w > 0 && h > 0) {
         this.videoAspect = w / h;
@@ -265,7 +266,8 @@ export struct OfflineInlinePlayer {
         }
       }
     });
-    this.av.on('error', (e: BusinessError) => {
+    player.on('error', (e: BusinessError) => {
+      if (this.playbackResources_.video !== player) return;
       logWarn(`[OfflineInlinePlayer] 视频播放错误: code=${e.code}, message=${e.message}`);
       if (e.code !== 5400102) {
         this.err = `播放错误:${e.message}`;
@@ -276,23 +278,27 @@ export struct OfflineInlinePlayer {
 
   /** 音频播放器状态监听（不绑定 surface） */
   private setupAudioL(): void {
-    if (!this.avAudio) return;
-    this.avAudio.on('stateChange', async (st: string) => {
+    const player = this.playbackResources_.audio;
+    if (!player) return;
+    player.on('stateChange', async (st: string) => {
+      if (this.playbackResources_.audio !== player) return;
       if (st === 'initialized') {
-        await this.avAudio?.prepare();
+        await this.playbackResources_.audio?.prepare();
       } else if (st === 'prepared') {
-        try { this.avAudio?.setVolume(1.0); } catch (e) { }
+        try { this.playbackResources_.audio?.setVolume(1.0); } catch (e) { }
         // 视频已播放时音频立即跟上
-        if (this.playing && (this.avAudio?.state === 'prepared' || this.avAudio?.state === 'paused')) {
-          await this.avAudio.play();
+        if (this.playing && (this.playbackResources_.audio?.state === 'prepared' || this.playbackResources_.audio?.state === 'paused')) {
+          await this.playbackResources_.audio.play();
         }
       }
     });
-    this.avAudio.on('error', (e: BusinessError) => {
+    player.on('error', (e: BusinessError) => {
+      if (this.playbackResources_.audio !== player) return;
       logWarn(`[OfflineInlinePlayer] 音频播放错误: code=${e.code}, message=${e.message}`);
     });
     // ⭐ 注册 seekDone 回调，用于同步等待 seek 完成（双播放器对齐）
-    this.avAudio.on('seekDone', (_pos: number) => {
+    player.on('seekDone', (_pos: number) => {
+      if (this.playbackResources_.audio !== player) return;
       if (this.audioSeekResolve_) {
         this.audioSeekResolve_();
         this.audioSeekResolve_ = null;
@@ -307,25 +313,25 @@ export struct OfflineInlinePlayer {
 
   /** 暂停/继续（双播放器同步） */
   private togglePlay(): void {
-    if (!this.av) return;
+    if (!this.playbackResources_.video) return;
     try {
       if (this.playing) {
-        this.av.pause();
-        if (this.avAudio) this.avAudio.pause();
+        this.playbackResources_.video.pause();
+        if (this.playbackResources_.audio) this.playbackResources_.audio.pause();
         this.playing = false;
         // 暂停时停止声画同步检测
         this.cancelSpeedSync();
       } else {
         // 播放到结尾后重播：先归零
-        if (this.av.state === 'completed') {
-          this.av.seek(0);
-          if (this.avAudio) this.avAudio.seek(0);
+        if (this.playbackResources_.video.state === 'completed') {
+          this.playbackResources_.video.seek(0);
+          if (this.playbackResources_.audio) this.playbackResources_.audio.seek(0);
           this.currentTime = 0;
         }
-        this.av.play();
-        const aState: string = this.avAudio ? this.avAudio.state : '';
-        if (this.avAudio && (aState === 'prepared' || aState === 'paused' || aState === 'completed')) {
-          this.avAudio.play();
+        this.playbackResources_.video.play();
+        const aState: string = this.playbackResources_.audio ? this.playbackResources_.audio.state : '';
+        if (this.playbackResources_.audio && (aState === 'prepared' || aState === 'paused' || aState === 'completed')) {
+          this.playbackResources_.audio.play();
         }
         this.playing = true;
         // ⭐ 恢复播放后重新启动声画同步检测
@@ -353,7 +359,7 @@ export struct OfflineInlinePlayer {
    */
   private async seekTo(sec: number, interactive: boolean = false): Promise<void> {
     this.currentTime = sec;   // 立即回显，UI 不等待解码
-    if (!this.av) return;
+    if (!this.playbackResources_.video) return;
     // ⭐ last-wins：已在 seek 中则只记录最新目标，由 finally 补提交
     if (this.seekInFlight_) {
       this.pendingSeekSec_ = sec;
@@ -363,19 +369,19 @@ export struct OfflineInlinePlayer {
     try {
       // 创建等待 seekDone 的 Promise（参照 VideoPlayerPage 的 seek 同步等待模式）
       const videoSeekDone = new Promise<void>(resolve => { this.videoSeekResolve_ = resolve; });
-      const audioSeekDone = this.avAudio
+      const audioSeekDone = this.playbackResources_.audio
         ? new Promise<void>(resolve => { this.audioSeekResolve_ = resolve; })
         : Promise.resolve();
       // 执行 seek 操作：优先 SEEK_CLOSEST（精确落到目标帧），老接口不支持时回退默认模式
       try {
-        this.av.seek(sec * 1000, media.SeekMode.SEEK_CLOSEST);
-        if (this.avAudio) {
-          this.avAudio.seek(sec * 1000, media.SeekMode.SEEK_CLOSEST);
+        this.playbackResources_.video.seek(sec * 1000, media.SeekMode.SEEK_CLOSEST);
+        if (this.playbackResources_.audio) {
+          this.playbackResources_.audio.seek(sec * 1000, media.SeekMode.SEEK_CLOSEST);
         }
       } catch (e) {
-        this.av.seek(sec * 1000);
-        if (this.avAudio) {
-          this.avAudio.seek(sec * 1000);
+        this.playbackResources_.video.seek(sec * 1000);
+        if (this.playbackResources_.audio) {
+          this.playbackResources_.audio.seek(sec * 1000);
         }
       }
       // ⭐ 超时兜底：交互路径 900ms（离线本地文件首帧很快），恢复历史进度 2s
@@ -489,7 +495,7 @@ export struct OfflineInlinePlayer {
     const curIdx: number = modes.indexOf(this.sm);
     this.sm = modes[(curIdx + 1) % modes.length];
     try {
-      if (this.av) this.av.videoScaleType = this.getVideoScaleType();
+      if (this.playbackResources_.video) this.playbackResources_.video.videoScaleType = this.getVideoScaleType();
     } catch (e) { }
     // ⭐ 状态记忆：持久化到 Preferences 'VPS'（与 VideoPlayerPage.loadSM/saveSM 同键）
     try {
@@ -573,7 +579,7 @@ export struct OfflineInlinePlayer {
       this.syncTimer_ = -1;
     }
     if (this.isSpeed2x_) {
-      try { this.av?.setSpeed(this.rateToSpeedIdx(1.0)); } catch (e) { }
+      try { this.playbackResources_.video?.setSpeed(this.rateToSpeedIdx(1.0)); } catch (e) { }
       this.isSpeed2x_ = false;
       this.isSpeedFixIn2xPhase_ = false;
     }
@@ -584,16 +590,16 @@ export struct OfflineInlinePlayer {
    * diffMs = 音频位置 - 视频位置；正数=视频落后，负数=音频落后
    */
   private checkAndSyncSpeed(): void {
-    if (!this.av || !this.avAudio) return;
-    if (this.av.state === 'released' || this.avAudio.state === 'released') return;
+    if (!this.playbackResources_.video || !this.playbackResources_.audio) return;
+    if (this.playbackResources_.video.state === 'released' || this.playbackResources_.audio.state === 'released') return;
     if (!this.playing) {
       this.cancelSpeedSync();
       return;
     }
     let videoPos: number = 0;
     let audioPos: number = 0;
-    try { videoPos = this.av.currentTime; } catch (e) { }
-    try { audioPos = this.avAudio.currentTime; } catch (e) { }
+    try { videoPos = this.playbackResources_.video.currentTime; } catch (e) { }
+    try { audioPos = this.playbackResources_.audio.currentTime; } catch (e) { }
     if (videoPos <= 0 || audioPos <= 0) return;
 
     const diffMs: number = audioPos - videoPos;
@@ -601,7 +607,7 @@ export struct OfflineInlinePlayer {
     // ✅ 已同步（差距 < 300ms），恢复 1x
     if (Math.abs(diffMs) < 300) {
       if (this.isSpeed2x_) {
-        try { this.av.setSpeed(this.rateToSpeedIdx(1.0)); } catch (e) { }
+        try { this.playbackResources_.video.setSpeed(this.rateToSpeedIdx(1.0)); } catch (e) { }
         this.isSpeed2x_ = false;
         this.isSpeedFixIn2xPhase_ = false;
       }
@@ -611,7 +617,7 @@ export struct OfflineInlinePlayer {
     // 2x 追赶阶段：坚持 2x 直到追平，不中途切换为 seek
     if (this.isSpeedFixIn2xPhase_) {
       if (!this.isSpeed2x_) {
-        try { this.av.setSpeed(this.rateToSpeedIdx(2.0)); } catch (e) { }
+        try { this.playbackResources_.video.setSpeed(this.rateToSpeedIdx(2.0)); } catch (e) { }
         this.isSpeed2x_ = true;
       }
       return;
@@ -621,7 +627,7 @@ export struct OfflineInlinePlayer {
     if (diffMs < -3000 && (Date.now() - this.lastSyncSeekTime_) > this.syncSeekCooldownMs_) {
       const audioSeekTarget: number = Math.max(1000, videoPos - 500);
       try {
-        this.avAudio?.seek(audioSeekTarget, media.SeekMode.SEEK_PREV_SYNC);
+        this.playbackResources_.audio?.seek(audioSeekTarget, media.SeekMode.SEEK_PREV_SYNC);
         this.lastSyncSeekTime_ = Date.now();
       } catch (e) { }
       return;
@@ -631,7 +637,7 @@ export struct OfflineInlinePlayer {
     if (diffMs > 3000 && (Date.now() - this.lastSyncSeekTime_) > this.syncSeekCooldownMs_) {
       const seekTarget: number = Math.max(1000, audioPos - 500);
       try {
-        this.av.seek(seekTarget, media.SeekMode.SEEK_PREV_SYNC);
+        this.playbackResources_.video.seek(seekTarget, media.SeekMode.SEEK_PREV_SYNC);
         this.lastSyncSeekTime_ = Date.now();
       } catch (e) { }
       return;
@@ -639,7 +645,7 @@ export struct OfflineInlinePlayer {
 
     // 差距 > 1s 且不在 2x 阶段 → 启动 2x 追赶（仅视频落后音频时，音频 2x 会变调）
     if (diffMs > 1000 && !this.isSpeed2x_) {
-      try { this.av.setSpeed(this.rateToSpeedIdx(2.0)); } catch (e) { }
+      try { this.playbackResources_.video.setSpeed(this.rateToSpeedIdx(2.0)); } catch (e) { }
       this.isSpeed2x_ = true;
       this.isSpeedFixIn2xPhase_ = true;
     }
@@ -648,35 +654,9 @@ export struct OfflineInlinePlayer {
   /** 释放播放器与文件 fd（组件销毁时调用） */
   private releaseAll(): void {
     this.cancelSpeedSync();
-    try {
-      if (this.av) {
-        this.av.off('stateChange');
-        // release() retires progress reporting asynchronously. Explicitly
-        // disabling it first makes a synchronous media-service IPC on the UI thread.
-        this.av.off('seekDone');
-        this.av.off('error');
-        this.av.off('videoSizeChange');
-        this.av.release();
-        this.av = null;
-      }
-      if (this.avAudio) {
-        this.avAudio.off('stateChange');
-        this.avAudio.off('seekDone');
-        this.avAudio.off('error');
-        this.avAudio.release();
-        this.avAudio = null;
-      }
-    } catch (e) {
-      logWarn(`[OfflineInlinePlayer] 释放播放器异常: ${JSON.stringify(e)}`);
-    }
-    if (this.vFd) {
-      try { fs.closeSync(this.vFd); } catch (e) { }
-      this.vFd = null;
-    }
-    if (this.aFd) {
-      try { fs.closeSync(this.aFd); } catch (e) { }
-      this.aFd = null;
-    }
+    this.startupDeadline_?.cancel();
+    this.startupDeadline_ = null;
+    this.playbackResources_.release();
   }
 
   /**
@@ -767,9 +747,9 @@ export struct OfflineInlinePlayer {
   /** 全屏 XComponent surface 就绪：把 AVPlayer surfaceId 重绑到全屏 */
   private onFsXCLoad(): void {
     const fsId = this.fsXc.getXComponentSurfaceId();
-    if (!fsId || !this.av || this.av.state === 'released') return;
+    if (!fsId || !this.playbackResources_.video || this.playbackResources_.video.state === 'released') return;
     try {
-      this.av.surfaceId = fsId;
+      this.playbackResources_.video.surfaceId = fsId;
       logInfo(`[OfflineInlinePlayer] 全屏 surface 绑定: ${fsId}`);
     } catch (e) {
       logWarn(`[OfflineInlinePlayer] 全屏 surface 绑定失败: ${JSON.stringify(e)}`);
@@ -778,11 +758,11 @@ export struct OfflineInlinePlayer {
 
   /** 把 AVPlayer surfaceId 重绑回内嵌 XComponent（退出全屏后） */
   private rebindToInlineSurface(): void {
-    if (!this.av || this.av.state === 'released') return;
+    if (!this.playbackResources_.video || this.playbackResources_.video.state === 'released') return;
     const inlineId = this.xc.getXComponentSurfaceId();
     if (!inlineId) return;
     try {
-      this.av.surfaceId = inlineId;
+      this.playbackResources_.video.surfaceId = inlineId;
       logInfo(`[OfflineInlinePlayer] 恢复内嵌 surface 绑定: ${inlineId}`);
     } catch (e) {
       logWarn(`[OfflineInlinePlayer] 恢复内嵌 surface 失败: ${JSON.stringify(e)}`);

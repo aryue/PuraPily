@@ -9,6 +9,16 @@ import { DanmakuItem, DanmakuItemInit, DanmakuType, DanmakuSegment, DanmakuSegme
 import { DanmakuGrpcParser } from './DanmakuGrpcParser'
 import { AppSign } from '../utils/SignUtils'
 
+export function createSentDanmaku(dmid: number, content: string, time: number, mode: number,
+  color: number, fontSize: number): DanmakuItem {
+  const init: DanmakuItemInit = {
+    id: dmid || Date.now(), content, time, color, fontSize,
+    type: mode === 4 ? DanmakuType.BOTTOM : mode === 5 ? DanmakuType.TOP : DanmakuType.ROLL,
+    sendTime: Date.now(), pool: 0, weight: 10
+  };
+  return new DanmakuItem(init);
+}
+
 // B站弹幕API响应接口
 interface DanmakuApiResponse {
   code: number

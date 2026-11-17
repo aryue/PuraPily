@@ -10,8 +10,14 @@ function between(start, end) {
 }
 const context = { exports: {}, TouchType: { Down: 0, Move: 1, Up: 2, Cancel: 3 },
   HitTestMode: { Default: 0 }, ScrollState: { Fling: 2 }, Curve: { EaseOut: 0 } };
+const viewport = { exports: {} };
+vm.runInNewContext(ts.transpileModule(fs.readFileSync('entry/src/main/ets/utils/PlaybackViewport.ets', 'utf8'), {
+  compilerOptions: { module: ts.ModuleKind.CommonJS }
+}).outputText, viewport);
+Object.assign(context, viewport.exports);
 vm.runInNewContext(ts.transpileModule(`export class Page {
   ${between('  private referenceVideoLink():', '  private async referenceCopyLink()')}
+  ${between('  private referenceIntroCreatorCredit()', '  private referenceCurrentAvatarFace()')}
   ${between('  private referenceIntroScrollOffset(', '  private referenceFeedNeighbor(')}
 }`, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText, context);
 const p = new context.exports.Page();
@@ -19,6 +25,12 @@ Object.assign(p, { vi: { bvid: 'BV1example' }, epId_: 123, isPgc_: true });
 assert.equal(p.referenceVideoLink(), 'https://www.bilibili.com/bangumi/play/ep123');
 p.epId_ = 456;
 assert.equal(p.referenceVideoLink(), 'https://www.bilibili.com/bangumi/play/ep456', 'sharing follows episode switches');
+p.vd = { owner: { name: 'credit', mid: 0 }, desc: 'description' };
+assert.equal(p.referenceIntroCreatorCredit(), 'credit', 'PGC without an UP row retains its creator credit');
+p.vd.desc = 'already contains credit';
+assert.equal(p.referenceIntroCreatorCredit(), '', 'the credit is rendered only once');
+p.vd = { owner: { name: 'UP', mid: 12 }, desc: 'description' };
+assert.equal(p.referenceIntroCreatorCredit(), '', 'PGC with an UP row has no extra creator line');
 p.isPgc_ = false;
 assert.equal(p.referenceVideoLink(), 'https://www.bilibili.com/video/BV1example');
 // Both content types must shrink the player before consuming intro scrolling,
@@ -49,5 +61,7 @@ const panel = between('  ReferencePanel() {', '  ReferencePrimaryLayers() {');
 assert.ok(!panel.includes('this.bDetailCard()'), 'PGC must not fall back to the legacy intro');
 assert.ok(panel.includes('this.ReferenceIntro()'));
 const episodes = between('  episodeSheetContent() {', '  seasonSheetContent() {');
-assert.ok(episodes.includes('this.pagesForCurrentVideo().length > 0'), 'single-episode movies need a real episode row');
+const sheet = fs.readFileSync('entry/src/main/ets/components/PlayerEpisodeSheet.ets', 'utf8');
+assert.ok(episodes.includes('rows: this.episodeSheetRows()') && sheet.includes('this.rows.length > 0'),
+  'single-episode movies need a real episode row');
 console.log('PASS: unified PGC intro, episode links, and continuous list/panel scroll handoff');

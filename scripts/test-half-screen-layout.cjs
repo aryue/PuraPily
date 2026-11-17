@@ -25,6 +25,11 @@ const context = { exports: {}, clearTimeout, KeyboardAvoidMode: { NONE: 4 }, Tou
 } } };
 Object.assign(context, geometry.exports);
 context.Curve = { EaseOut: 'ease-out' };
+const viewport = { exports: {} };
+vm.runInNewContext(ts.transpileModule(fs.readFileSync('entry/src/main/ets/utils/PlaybackViewport.ets', 'utf8'), {
+  compilerOptions: { module: ts.ModuleKind.CommonJS }
+}).outputText, viewport);
+Object.assign(context, viewport.exports);
 vm.runInNewContext(ts.transpileModule(`export class Page {
   ${between('  private safeCM():', '  /** ⭐ 播放页竖屏评论区')}
   ${between('  private referenceHalfScreenControlsActive():', '  private referenceLandscapePlayerWidth():')}
@@ -475,7 +480,7 @@ if (fs.existsSync(compiledFile)) {
       assert.ok([120, 300].includes(policy.call({ referenceLayout: false, fullscreenRotationTransition: false }).duration));
     }
   }
-  const names = ['closePlaybackOptionPanel', 'onDanmakuComposerChanged', 'landscapeDanmakuComposerHeight', 'danmakuComposerBottomInset', 'referenceLandscapeAreaHeight', 'referenceLandscapePlayerX', 'referenceLandscapePanelX', 'onLandscapePlaybackSideChanged', 'referenceHalfScreenControlsActive', 'safeCM', 'referenceLandscapeViewportWidth', 'referenceLandscapePlayerWidth', 'referenceLandscapeMediaWidth', 'referenceLandscapeMediaHeight',
+  const names = ['closePlaybackOptionPanel', 'onDanmakuComposerChanged', 'landscapeDanmakuComposerHeight', 'danmakuComposerBottomInset', 'referenceLandscapeAreaHeight', 'referenceLandscapePlayerX', 'referenceLandscapeViewport', 'referenceLandscapePanelX', 'onLandscapePlaybackSideChanged', 'referenceHalfScreenControlsActive', 'safeCM', 'referenceLandscapeViewportWidth', 'referenceLandscapePlayerWidth', 'referenceLandscapeMediaWidth', 'referenceLandscapeMediaHeight',
     'referenceLandscapeResize', 'referenceLandscapePanelWidth', 'referenceLandscapeAreaTop',
     'referenceLandscapeBeginResize', 'referenceLandscapeFinishResize', 'referenceLandscapeRestoreRatio', 'onRelatedVideoClick',
     'referenceIntroScrollOffset', 'ovRectX', 'ovRectY', 'ovRectW', 'ovRectH', 'ovVideoW', 'ovVideoH'];
@@ -485,7 +490,7 @@ if (fs.existsSync(compiledFile)) {
     const end = compiled.indexOf('\n    }', start);
     return compiled.slice(start, end + 6);
   }).join('\n');
-  const runtime = { ...geometry.exports, exports: {}, clearTimeout, Curve: { EaseOut: 'ease-out' }, KeyboardAvoidMode: { NONE: 4 } };
+  const runtime = { ...geometry.exports, ...viewport.exports, exports: {}, clearTimeout, Curve: { EaseOut: 'ease-out' }, KeyboardAvoidMode: { NONE: 4 } };
   vm.runInNewContext(ts.transpileModule(`export class Page { ${bodies} }`, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 }
   }).outputText, runtime);

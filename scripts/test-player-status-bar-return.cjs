@@ -5,10 +5,11 @@ const assert = require('node:assert/strict');
 const ts = require('D:/Program Files/Huawei/DevEco Studio/sdk/default/openharmony/ets/build-tools/ets-loader/node_modules/typescript');
 const file = 'entry/build/default/cache/default/default@CompileArkTS/esmodule/debug/entry/src/main/ets/pages/VideoPlayerPage.ts';
 const source = fs.readFileSync(file, 'utf8');
-const start = source.indexOf('    private async restoreS(');
-const end = source.indexOf('    private async loadSM(', start);
+const windowSource = fs.readFileSync(file.replace('pages/VideoPlayerPage.ts', 'services/PlaybackWindow.ts'), 'utf8');
+const start = windowSource.indexOf('    async restoreAfterExit(');
+const end = windowSource.indexOf('    captureBrightness(', start);
 assert.ok(start >= 0 && end > start);
-const js = ts.transpileModule('export class Page {' + source.slice(start, end) + '}', {
+const js = ts.transpileModule('export class Page {' + windowSource.slice(start, end) + '}', {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 }
 }).outputText;
 
@@ -32,10 +33,9 @@ async function main() {
           vm.runInNewContext(js, context);
           const page = new context.exports.Page();
           // A cached player preference must not override the current global preference.
-          Object.assign(page, { mw, sh_: !hidden, getUIContext: () => ({ getHostContext: () => ({}) }) });
           const homeShow = () => bars.setSystemBars(mw, !hidden, true);
-          if (exitLast) { await homeShow(); await page.restoreS(); }
-          else { await page.restoreS(); await homeShow(); }
+          if (exitLast) { await homeShow(); await page.restoreAfterExit(mw, () => ({})); }
+          else { await page.restoreAfterExit(mw, () => ({})); await homeShow(); }
           assert.equal(status, !hidden, JSON.stringify({ landscape, hidden, lock, exitLast }));
           assert.equal(navigation, true);
           assert.equal(orientation, { '跟随系统': 1, '锁定竖屏': 2, '锁定横屏': 3 }[lock]);
@@ -59,10 +59,12 @@ async function main() {
     StatusBarUtils: { setSystemBars: (_win, status, navigation) => requests.push([status, navigation]) },
     setTimeout: callback => callback(), clearInterval() {}, Curve: { EaseOut: 0 }
   };
-  vm.runInNewContext(ts.transpileModule('export class Page {' + methods + '}', {
+  const windowControls = fs.readFileSync('entry/src/main/ets/services/PlaybackWindow.ets', 'utf8').replace(/^import .*$/gm, '');
+  vm.runInNewContext(ts.transpileModule(windowControls + '\nexport class Page {' + methods + '}', {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 }
   }).outputText, context);
   const page = new context.exports.Page();
+  page.playbackWindow_ = new context.exports.PlaybackWindow();
   Object.assign(page, { mw: {}, referenceAlive: true, playerPageVisible: true,
     referenceLayout: true, isLs: true, fs: false, sh_: false, isLightsOff: false,
     rotationInProgress: false, contentVisible: true, resetFullscreenVideo() {},
@@ -81,6 +83,27 @@ async function main() {
   page.fs = true;
   page.onTransitionFlip();
   assert.equal(requests.length, count, 'hidden player cannot override the returning page');
+  const timers = new Map();
+  let nextTimer = 0, refreshes = 0;
+  context.setTimeout = handler => { timers.set(++nextTimer, handler); return nextTimer; };
+  context.clearTimeout = id => timers.delete(id);
+  const refresh = () => refreshes++;
+  page.playbackWindow_.scheduleBarsRefresh(refresh);
+  page.playbackWindow_.scheduleBarsRefresh(refresh);
+  assert.equal(timers.size, 1, 'repeated show replaces the delayed window refresh');
+  page.playbackWindow_.cancelBarsRefresh();
+  assert.equal(timers.size, 0, 'hiding or exiting cancels the pending refresh');
+  page.playbackWindow_.scheduleBarsRefresh(refresh);
+  [...timers.values()][0]();
+  assert.equal(refreshes, 1);
+  timers.clear();
+  const previous = page.playbackWindow_.waitForTransition(50);
+  const next = page.playbackWindow_.waitForTransition(100);
+  assert.equal(await previous, false, 'a superseding transition must settle the old waiter');
+  assert.equal(timers.size, 1);
+  page.playbackWindow_.cancelTransitionWait();
+  assert.equal(await next, false, 'page destruction must settle the outstanding transition');
+  assert.equal(timers.size, 0);
   console.log(`PASS: ${cases} compiled player exit cases (orientation, preferences, lifecycle ordering).`);
   console.log('PASS: same-orientation half/full transitions, rotation callbacks, foreground flag and inactive player guard.');
 }

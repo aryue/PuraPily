@@ -1,11 +1,11 @@
 {
   "app": {
-    "bundleName": "com.pura.pili",
+    "bundleName": "com.pura.pily",
     "vendor": "example",
     "versionCode": 2001005,
     "versionName": "2.1.5",
     "buildVersion": "1",
-    "icon": "$media:app_icon_v5",
+    "icon": "$media:layered_image",
     "label": "$string:app_name",
     "configuration": "$profile:configuration",
     "multiAppMode": {

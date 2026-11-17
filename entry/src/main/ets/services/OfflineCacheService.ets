@@ -16,7 +16,7 @@ import {
   OfflineCacheItem, CacheStatus,
   CACHE_ROOT_DIR, ENTRY_FILE_NAME, VIDEO_FILE_NAME, AUDIO_FILE_NAME, cacheEntryDirName
 } from '../model/OfflineCacheItem';
-import { logInfo, logWarn, logError } from '../utils/Logger';
+import { errMsg, logInfo, logWarn, logError } from '../utils/Logger';
 
 /** B站流媒体下载所需请求头 */
 function biliStreamHeaders(referer: string): Record<string, string> {
@@ -31,6 +31,15 @@ function biliStreamHeaders(referer: string): Record<string, string> {
 interface ActiveTask {
   item: OfflineCacheItem;
   request: http.HttpRequest | null;
+}
+
+export interface OfflineCacheRequest {
+  bvid: string;
+  cid: number;
+  title: string;
+  cover: string;
+  quality: number;
+  qualityLabel: string;
 }
 
 export class OfflineCacheService {
@@ -61,6 +70,50 @@ export class OfflineCacheService {
 
   private entryDir(bvid: string, cid: number): string {
     return this.getCacheRoot() + '/' + cacheEntryDirName(bvid, cid);
+  }
+
+  async downloadVideo(context: common.Context, request: OfflineCacheRequest): Promise<CacheStatus> {
+    try {
+      this.init(context);
+    } catch (error) {
+      logWarn(`[OfflineCache] init 异常: ${errMsg(error)}`);
+    }
+    const quality = request.quality > 0 ? request.quality : 116;
+    const cached = this.getCachedItem(request.bvid, request.cid);
+    if (cached?.status === CacheStatus.COMPLETED && cached.quality === quality &&
+      this.completedFilesMatch(cached)) return CacheStatus.COMPLETED;
+    const now = Date.now();
+    const item: OfflineCacheItem = {
+      bvid: request.bvid,
+      cid: request.cid,
+      title: request.title || '未命名视频',
+      cover: request.cover || '',
+      quality: quality,
+      qualityLabel: request.qualityLabel,
+      status: CacheStatus.WAIT,
+      totalBytes: 0,
+      downloadedBytes: 0,
+      videoPath: '',
+      audioPath: '',
+      createTime: now,
+      updateTime: now
+    };
+    const ok = await this.download(item, (downloaded: number, total: number) => {
+      logInfo(`[缓存] ${item.title} ${downloaded}/${total}`);
+    });
+    if (ok) return CacheStatus.COMPLETED;
+    return this.getCachedItem(item.bvid, item.cid)?.status === CacheStatus.PAUSED
+      ? CacheStatus.PAUSED : CacheStatus.FAILED;
+  }
+
+  private completedFilesMatch(item: OfflineCacheItem): boolean {
+    try {
+      const videoBytes = fs.statSync(item.videoPath).size;
+      const audioBytes = item.audioPath ? fs.statSync(item.audioPath).size : 0;
+      return videoBytes > 0 && (!item.audioPath || audioBytes > 0) && videoBytes + audioBytes === item.totalBytes;
+    } catch (_) {
+      return false;
+    }
   }
 
   /**

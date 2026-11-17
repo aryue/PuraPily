@@ -259,3 +259,45 @@ assert.ok(/labelWidth: 76/.test(panelSrc), '面板要能给"10% · 1行"留出�
 assert.ok(/danmakuTrackHeight/.test(panelSrc), '面板按真实行高预览行数');
 
 console.log('PASS: danmaku display settings reflow on-screen items (rows = floor(H×area/trackHeight), 10% = 1 row on 291vp canvas)');
+
+async function verifySettingsSchedule() {
+  let finishRead, nextTimer = 0;
+  const writes = [], signals = [], timers = new Map();
+  const prefs = {
+    get: () => new Promise(resolve => { finishRead = resolve; }),
+    async put(_key, value) { writes.push(JSON.parse(value)); },
+    async flush() {}
+  };
+  const context = {
+    exports: {}, require: () => ({ preferences: { getPreferences: async () => prefs }, logInfo() {}, logWarn: assert.fail }),
+    AppStorage: { setOrCreate: (key, value) => signals.push([key, value]) },
+    setTimeout(callback, delay) { assert.equal(delay, 200); timers.set(++nextTimer, callback); return nextTimer; },
+    clearTimeout(id) { timers.delete(id); }
+  };
+  vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.join(etsRoot, 'services/DanmakuDisplaySettings.ets'), 'utf8'), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 }
+  }).outputText, context);
+  const settings = new context.exports.DanmakuDisplaySettings();
+  const config = { displayArea: 1, blockWeight: 0, showScroll: true, showTop: true, showBottom: true,
+    showAdvanced: false, blockColorful: false, blockCounted: false, hideDuplicates: false,
+    keywordFilterEnabled: false, blockKeywords: [], opacity: 1, fontSize: 28, fullScreenFontScale: 1,
+    lineHeight: 1.2, fontWeight: 400, borderWidth: 1, scrollDuration: 7000, staticDuration: 4000,
+    varyFontSize: false, massiveMode: false, static2Scroll: false, scrollFixedVelocity: false };
+  const loading = settings.load({}, config);
+  await new Promise(resolve => setImmediate(resolve));
+  config.displayArea = .25;
+  settings.changed({}, config);
+  config.displayArea = .5;
+  settings.changed({}, config);
+  assert.equal(timers.size, 1);
+  finishRead('{"displayArea":0.1}');
+  await loading;
+  assert.equal(config.displayArea, .5, 'late preferences cannot overwrite an edit');
+  assert.equal(signals.length, 0);
+  timers.get(nextTimer)();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(signals, [['danmakuSettingVersion', 1]]);
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].displayArea, .5);
+}
+verifySettingsSchedule().catch(error => { console.error(error); process.exitCode = 1; });

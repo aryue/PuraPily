@@ -11,6 +11,11 @@ function between(source, start, end) {
 }
 const context = { exports: {}, MIN_HEARTBEAT_PROGRESS_SEC: 15, logInfo() {}, logError() {}, errMsg: String,
   setTimeout: (fn) => { fn(); return 1; }, ScrollAlign: { START: 0, CENTER: 1, END: 2, AUTO: 3 } };
+const pgcApi = {};
+context.require = () => pgcApi;
+vm.runInNewContext(ts.transpileModule(fs.readFileSync('entry/src/main/ets/services/PgcPlaybackEpisodes.ets', 'utf8'), {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 }
+}).outputText, context);
 vm.runInNewContext(ts.transpileModule(`export class Page {
   ${between(page, '  private pagesForCurrentVideo(', '  // ⭐ 格式化时长')}
 }
@@ -21,8 +26,36 @@ export class Strip {
 async function main() {
   const portrait = between(page, '  ReferencePortrait() {', '  private referencePortraitFeedActive():');
   assert.ok(portrait.includes('this.waitingForFirstFrame && !this.vd'), 'buffering must not hide an existing introduction');
-  const pages = Array.from({ length: 4 }, (_, i) => ({ cid: i + 10, page: i + 1, part: `Part ${i}` }));
-  const vd = { aid: 50, cid: 10, title: 'Stable title', desc: 'Stable description', pages };
+  const pgcEpisodes_ = new context.exports.PgcPlaybackEpisodes();
+  const episodes = Array.from({ length: 4 }, (_, i) => ({
+    id: 100 + i, aid: 50 + i, bvid: `BVpart${i}`, cid: i + 10, title: `Part ${i}`, duration: 12345
+  }));
+  const season = { title: 'Stable title', desc: 'Stable description', upInfo: {}, stat: {}, episodes };
+  const { resolvePgcEpisodeEntry } = context.exports;
+  pgcApi.getPgcEpisodeInfo = () => new Promise(() => {});
+  pgcApi.getPgcSeasonInfoByEpId = async () => season;
+  const preferred = await Promise.race([
+    resolvePgcEpisodeEntry(103),
+    new Promise(resolve => setImmediate(() => resolve(null)))
+  ]);
+  assert.equal(preferred?.cid, 13, 'a usable season CID does not wait for the episode endpoint');
+  pgcApi.getPgcEpisodeInfo = async () => ({ cid: 99 });
+  pgcApi.getPgcSeasonInfoByEpId = async () => null;
+  assert.equal((await resolvePgcEpisodeEntry(103)).cid, 99);
+  let seasonRequests = 0;
+  pgcApi.getPgcSeasonInfoByEpId = async () => { seasonRequests++; return season; };
+  assert.deepEqual(await Promise.all([pgcEpisodes_.seasonForEpisode(103), pgcEpisodes_.seasonForEpisode(103)]),
+    [season, season]);
+  assert.equal(await pgcEpisodes_.seasonForEpisode(100), season);
+  assert.equal(seasonRequests, 1, 'all entry consumers and episodes of the same season reuse the lookup');
+  const vd = pgcEpisodes_.load(season, episodes[0], 10);
+  const pages = vd.pages;
+  assert.equal(pgcEpisodes_.bvidForCid(13), 'BVpart3');
+  assert.equal(pgcEpisodes_.aidAt(3), 53);
+  assert.equal(pgcEpisodes_.episodeAt(3), 103);
+  assert.equal(pgcEpisodes_.indexOf(103), 3);
+  assert.equal(pgcEpisodes_.bvidForCid(999), '');
+  assert.equal(pages[3].duration, 12);
   const related = [{ id: 'BVstable' }];
   const scroller = { savedOffset: 135 };
   const p = new context.exports.Page();
@@ -32,10 +65,14 @@ async function main() {
   Object.assign(p, { vd, vi: { cid: 10 }, relatedVideos: related, detailScroller: scroller, referenceDescriptionExpanded: true,
     referencePanelOffset: -120, at: 0, referenceAlive: true, isPgc_: true, currentPageIndex: 0,
     episodeSwitchJob_: null, pendingEpisodeIndex_: -1, referenceEpisodeSelection: -1,
-    epId_: 100, ct: 30, pgcEpIds_: [100, 101, 102, 103], pgcAids_: [50, 51, 52, 53],
+    epId_: 100, ct: 30, pgcEpisodes_,
+    playbackProgressReporter_: { resetHeartbeat() {} },
     resetFullscreenVideo() {}, reportPgcHeartbeat: async () => { heartbeat.push(p.epId_); },
     release: () => ++releases === 1 ? new Promise(r => { unlock = r; }) : Promise.resolve(),
-    setPlaybackCid: cid => { p.cid = cid; p.vi.cid = cid; }, commentDataSource: { clear() {} },
+    setPlaybackCid: (cid, bvid, aid, epId) => {
+      p.cid = cid; p.vi.cid = cid; p.vi.bvid = bvid; p.aidFromParams_ = aid;
+      if (epId !== undefined) p.epId_ = epId;
+    }, commentDataSource: { clear() {} },
     loadC: aid => comments.push(aid), initP: async () => { started.push(p.cid); } });
   const first = p.switchEpisode(1);
   await new Promise(setImmediate);

@@ -27,25 +27,27 @@ const CELL_LRU_MAX: number = 24;
  */
 export class VideoShotService {
   /** cid 级列表缓存（bvid_cid → 数据） */
-  private static dataCache: Map<string, VideoShotData> = new Map();
+  private dataCache: Map<string, VideoShotData> = new Map();
   /** 确认"该视频没有缩略图"的 key（负缓存） */
-  private static dataFailed: Set<string> = new Set();
+  private dataFailed: Set<string> = new Set();
   /** 在途的列表请求（去重） */
-  private static dataPending: Map<string, Promise<VideoShotData | undefined>> = new Map();
+  private dataPending: Map<string, Promise<VideoShotData | undefined>> = new Map();
   /** 精灵图原始字节（一张约 60~250KB；解码前用它反复切格） */
-  private static spriteBuf: Map<string, ArrayBuffer> = new Map();
+  private spriteBuf: Map<string, ArrayBuffer> = new Map();
   /** 在途的精灵图下载（去重） */
-  private static spritePending: Map<string, Promise<ArrayBuffer | undefined>> = new Map();
+  private spritePending: Map<string, Promise<ArrayBuffer | undefined>> = new Map();
   /** 单元格尺寸（url → [宽, 高]） */
-  private static cellSize: Map<string, number[]> = new Map();
+  private cellSize: Map<string, number[]> = new Map();
   /** 已解码的格子（url#cell → PixelMap） */
-  private static cellCache: Map<string, image.PixelMap> = new Map();
+  private cellCache: Map<string, image.PixelMap> = new Map();
   /** LRU 顺序（尾部最新） */
-  private static cellOrder: string[] = [];
+  private cellOrder: string[] = [];
   /** 当前所属视频，用于切集时整体释放 */
-  private static ownerKey: string = '';
+  private ownerKey: string = '';
+  private generation: number = 0;
+  private prefetchTimer: number = -1;
 
-  private static key(bvid: string, cid: number): string {
+  private key(bvid: string, cid: number): string {
     return `${bvid}_${cid}`;
   }
 
@@ -53,39 +55,45 @@ export class VideoShotService {
    * 标记当前视频。切集/换视频时**整体释放**上一集的位图（精灵图很小，重下比留着划算）。
    * 调用方应先清空自己的缩略图引用再调用，避免释放后仍被 UI 引用。
    */
-  static setOwner(bvid: string, cid: number): void {
-    const k: string = VideoShotService.key(bvid, cid);
-    if (k === VideoShotService.ownerKey) return;
-    VideoShotService.ownerKey = k;
-    VideoShotService.release();
+  setOwner(bvid: string, cid: number): void {
+    const k: string = this.key(bvid, cid);
+    if (k === this.ownerKey) return;
+    this.release();
+    this.ownerKey = k;
   }
 
   /** 释放所有位图与缓存（退出播放页 / 换视频时调用） */
-  static release(): void {
-    VideoShotService.cellCache.forEach((pm: image.PixelMap) => {
-      try {
-        pm.release();
-      } catch (_e) {
-      }
-    });
-    VideoShotService.cellCache.clear();
-    VideoShotService.cellOrder = [];
-    VideoShotService.spriteBuf.clear();
-    VideoShotService.dataCache.clear();
-    VideoShotService.dataFailed.clear();
-    VideoShotService.cellSize.clear();
-    VideoShotService.dataPending.clear();
-    VideoShotService.spritePending.clear();
+  release(): void {
+    this.generation++;
+    this.ownerKey = '';
+    clearTimeout(this.prefetchTimer);
+    this.prefetchTimer = -1;
+    this.cellCache.forEach((pm: image.PixelMap) => { this.releaseFrame(pm); });
+    this.cellCache.clear();
+    this.cellOrder = [];
+    this.spriteBuf.clear();
+    this.dataCache.clear();
+    this.dataFailed.clear();
+    this.cellSize.clear();
+    this.dataPending.clear();
+    this.spritePending.clear();
   }
 
   /** 预取缩略图列表（fire-and-forget；起播后延迟调用，避开起播竞争） */
-  static prefetch(bvid: string, cid: number): void {
-    if (!bvid || cid <= 0) return;
-    VideoShotService.ensureData(bvid, cid).then((d: VideoShotData | undefined) => {
-      if (!d) return;
-      logInfo(`[VideoShot] 预取完成 cid=${cid} 可用格数=${d.index.length}`);
-    }).catch(() => {
-    });
+  schedulePrefetch(bvid: string, cid: number): void {
+    if (this.ownerKey !== this.key(bvid, cid)) return;
+    const generation = this.generation;
+    clearTimeout(this.prefetchTimer);
+    const timer: number = setTimeout(() => {
+      if (this.prefetchTimer !== timer || generation !== this.generation) return;
+      this.prefetchTimer = -1;
+      this.ensureData(bvid, cid, generation).then((data: VideoShotData | undefined) => {
+        if (data && generation === this.generation) {
+          logInfo(`[VideoShot] 预取完成 cid=${cid} 可用格数=${data.index.length}`);
+        }
+      }).catch(() => {});
+    }, 1500);
+    this.prefetchTimer = timer;
   }
 
   /**
@@ -93,12 +101,13 @@ export class VideoShotService {
    * 返回 undefined 表示"暂时没有"（没数据 / 还在下载 / 该视频不支持），
    * 调用方应**沿用上一张**而不是清空，避免拖动时闪白。
    */
-  static async getFrame(bvid: string, cid: number, sec: number): Promise<SeekThumbFrame | undefined> {
-    if (!bvid || cid <= 0 || sec < 0) return undefined;
-    const data: VideoShotData | undefined = await VideoShotService.ensureData(bvid, cid);
-    if (!data) return undefined;
+  async getFrame(bvid: string, cid: number, sec: number): Promise<SeekThumbFrame | undefined> {
+    if (!bvid || cid <= 0 || sec < 0 || this.ownerKey !== this.key(bvid, cid)) return undefined;
+    const generation = this.generation;
+    const data = await this.ensureData(bvid, cid, generation);
+    if (!data || generation !== this.generation) return undefined;
 
-    const cell: number = VideoShotService.findCell(data.index, sec);
+    const cell: number = this.findCell(data.index, sec);
     const per: number = data.imgXLen * data.imgYLen;
     const page: number = Math.max(0, Math.min(data.image.length - 1, Math.floor(cell / per)));
     const align: number = cell % per;
@@ -107,23 +116,36 @@ export class VideoShotService {
     const url: string = data.image[page];
     const cacheKey: string = `${url}#${cell}`;
 
-    const hit: image.PixelMap | undefined = VideoShotService.cellCache.get(cacheKey);
+    const hit: image.PixelMap | undefined = this.cellCache.get(cacheKey);
     if (hit) {
-      const size: number[] = VideoShotService.cellSize.get(url) ?? [data.imgXSize, data.imgYSize];
-      return { pm: hit, aspect: VideoShotService.aspectOf(size) };
+      const size: number[] = this.cellSize.get(url) ?? [data.imgXSize, data.imgYSize];
+      return { pm: hit, aspect: this.aspectOf(size) };
     }
 
-    const buf: ArrayBuffer | undefined = await VideoShotService.ensureSprite(url);
-    if (!buf) return undefined;
-    const size: number[] = await VideoShotService.resolveCellSize(buf, url, data);
-    const pm: image.PixelMap | undefined =
-      await VideoShotService.decodeCell(buf, col, row, size[0], size[1]);
+    const buf = await this.ensureSprite(url, generation);
+    if (!buf || generation !== this.generation) return undefined;
+    const size = await this.resolveCellSize(buf, url, data, generation);
+    if (generation !== this.generation) return undefined;
+    const pm = await this.decodeCell(buf, col, row, size[0], size[1]);
     if (!pm) return undefined;
-    VideoShotService.putCell(cacheKey, pm);
-    return { pm, aspect: VideoShotService.aspectOf(size) };
+    if (generation !== this.generation) {
+      this.releaseFrame(pm);
+      return undefined;
+    }
+    const cached = this.cellCache.get(cacheKey);
+    if (cached) {
+      this.releaseFrame(pm);
+      return { pm: cached, aspect: this.aspectOf(size) };
+    }
+    this.putCell(cacheKey, pm);
+    return { pm, aspect: this.aspectOf(size) };
   }
 
-  private static aspectOf(size: number[]): number {
+  private releaseFrame(frame: image.PixelMap): void {
+    try { frame.release().catch(() => {}); } catch (_error) {}
+  }
+
+  private aspectOf(size: number[]): number {
     const cw: number = size[0];
     const ch: number = size[1];
     return (cw > 0 && ch > 0) ? cw / ch : 16 / 9;
@@ -135,7 +157,7 @@ export class VideoShotService {
    * （参考实现用 `count(index<=t) - 2`，在有重复 0 的列表上会稳定退到更早一帧，这里不采用）
    * 每次 Move 都会调用，所以用 O(log n) 而不是线性扫描。
    */
-  private static findCell(index: number[], sec: number): number {
+  private findCell(index: number[], sec: number): number {
     let lo: number = 0;
     let hi: number = index.length - 1;
     let ans: number = 0;
@@ -151,15 +173,15 @@ export class VideoShotService {
     return ans;
   }
 
-  private static async ensureData(bvid: string, cid: number): Promise<VideoShotData | undefined> {
-    const k: string = VideoShotService.key(bvid, cid);
-    const hit: VideoShotData | undefined = VideoShotService.dataCache.get(k);
+  private async ensureData(bvid: string, cid: number, generation: number): Promise<VideoShotData | undefined> {
+    const k: string = this.key(bvid, cid);
+    const hit: VideoShotData | undefined = this.dataCache.get(k);
     if (hit) return hit;
-    if (VideoShotService.dataFailed.has(k)) return undefined; // 负缓存：不再重复请求
-    let pending: Promise<VideoShotData | undefined> | undefined = VideoShotService.dataPending.get(k);
+    if (this.dataFailed.has(k)) return undefined; // 负缓存：不再重复请求
+    let pending: Promise<VideoShotData | undefined> | undefined = this.dataPending.get(k);
     if (!pending) {
       pending = fetchVideoShot(bvid, cid);
-      VideoShotService.dataPending.set(k, pending);
+      this.dataPending.set(k, pending);
     }
     let data: VideoShotData | undefined = undefined;
     try {
@@ -167,23 +189,24 @@ export class VideoShotService {
     } catch (_e) {
       data = undefined;
     } finally {
-      VideoShotService.dataPending.delete(k);
+      if (this.dataPending.get(k) === pending) this.dataPending.delete(k);
     }
+    if (generation !== this.generation) return undefined;
     if (data) {
-      VideoShotService.dataCache.set(k, data);
+      this.dataCache.set(k, data);
     } else {
-      VideoShotService.dataFailed.add(k);
+      this.dataFailed.add(k);
     }
     return data;
   }
 
-  private static async ensureSprite(url: string): Promise<ArrayBuffer | undefined> {
-    const hit: ArrayBuffer | undefined = VideoShotService.spriteBuf.get(url);
+  private async ensureSprite(url: string, generation: number): Promise<ArrayBuffer | undefined> {
+    const hit: ArrayBuffer | undefined = this.spriteBuf.get(url);
     if (hit) return hit;
-    let pending: Promise<ArrayBuffer | undefined> | undefined = VideoShotService.spritePending.get(url);
+    let pending: Promise<ArrayBuffer | undefined> | undefined = this.spritePending.get(url);
     if (!pending) {
-      pending = VideoShotService.downloadSprite(url);
-      VideoShotService.spritePending.set(url, pending);
+      pending = this.downloadSprite(url);
+      this.spritePending.set(url, pending);
     }
     let buf: ArrayBuffer | undefined = undefined;
     try {
@@ -191,9 +214,10 @@ export class VideoShotService {
     } catch (_e) {
       buf = undefined;
     } finally {
-      VideoShotService.spritePending.delete(url);
+      if (this.spritePending.get(url) === pending) this.spritePending.delete(url);
     }
-    if (buf) VideoShotService.spriteBuf.set(url, buf);
+    if (generation !== this.generation) return undefined;
+    if (buf) this.spriteBuf.set(url, buf);
     return buf;
   }
 
@@ -202,7 +226,7 @@ export class VideoShotService {
    * ⚠️ 与 `utils/ImageCache.ts` 的 `predecodeImage` 不同：**不在这里解码** ——
    *    精灵图要按格子切，整张解码是 5.8MB，切成 160×90 才是 57KB。
    */
-  private static async downloadSprite(url: string): Promise<ArrayBuffer | undefined> {
+  private async downloadSprite(url: string): Promise<ArrayBuffer | undefined> {
     const httpRequest: http.HttpRequest = http.createHttp();
     try {
       const resp: http.HttpResponse = await httpRequest.request(url, {
@@ -230,9 +254,9 @@ export class VideoShotService {
   }
 
   /** 单元格尺寸：优先用接口声明的；接口给 0 时按"整图 ÷ 网格数"推导（只探一次） */
-  private static async resolveCellSize(buf: ArrayBuffer, url: string,
-                                       data: VideoShotData): Promise<number[]> {
-    const cached: number[] | undefined = VideoShotService.cellSize.get(url);
+  private async resolveCellSize(buf: ArrayBuffer, url: string,
+                                       data: VideoShotData, generation: number): Promise<number[]> {
+    const cached: number[] | undefined = this.cellSize.get(url);
     if (cached) return cached;
     let cw: number = data.imgXSize;
     let ch: number = data.imgYSize;
@@ -255,7 +279,7 @@ export class VideoShotService {
       ch = 90;
     }
     const r: number[] = [cw, ch];
-    VideoShotService.cellSize.set(url, r);
+    if (generation === this.generation) this.cellSize.set(url, r);
     return r;
   }
 
@@ -263,7 +287,7 @@ export class VideoShotService {
    * **只解目标格**：`desiredRegion` 指定切哪一格，`CROP_FIRST` 保证"先裁后缩"的顺序确定。
    * 内存差别很大：单元格 160×90 RGBA ≈ 57KB，整张精灵图 1600×900 ≈ 5.8MB。
    */
-  private static async decodeCell(buf: ArrayBuffer, col: number, row: number,
+  private async decodeCell(buf: ArrayBuffer, col: number, row: number,
                                   cw: number, ch: number): Promise<image.PixelMap | undefined> {
     const src: image.ImageSource | undefined = image.createImageSource(buf);
     if (!src) return undefined;
@@ -282,21 +306,16 @@ export class VideoShotService {
     }
   }
 
-  private static putCell(key: string, pm: image.PixelMap): void {
-    VideoShotService.cellCache.set(key, pm);
-    VideoShotService.cellOrder.push(key);
-    while (VideoShotService.cellOrder.length > CELL_LRU_MAX) {
-      const old: string | undefined = VideoShotService.cellOrder.shift();
+  private putCell(key: string, pm: image.PixelMap): void {
+    this.cellCache.set(key, pm);
+    this.cellOrder.push(key);
+    while (this.cellOrder.length > CELL_LRU_MAX) {
+      const old: string | undefined = this.cellOrder.shift();
       // 保护"当前这一张"：它永远是最后 push 进来的
       if (!old || old === key) continue;
-      const oldPm: image.PixelMap | undefined = VideoShotService.cellCache.get(old);
-      if (oldPm) {
-        try {
-          oldPm.release();
-        } catch (_e) {
-        }
-      }
-      VideoShotService.cellCache.delete(old);
+      const oldPm: image.PixelMap | undefined = this.cellCache.get(old);
+      if (oldPm) this.releaseFrame(oldPm);
+      this.cellCache.delete(old);
     }
   }
 }

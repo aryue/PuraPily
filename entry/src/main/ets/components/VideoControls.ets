@@ -7,6 +7,7 @@ import { playbackHdrUiFilter } from '../utils/PlaybackHdrUi';
 import { HeaderGlassControl } from './HeaderGlassControl';
 import { HeaderBackButton } from './HeaderBackButton';
 import { NativeGlassInput } from './NativeGlassInput';
+import { PlayerBottomPlaybackMenu } from './PlayerBottomPlaybackMenu';
 // VideoControls.ets - 视频/直播播放控制组件
 // materialStyle: 0~4 对应 ImmersiveStyle (ULTRA_THIN=0, THIN=1, REGULAR=2, THICK=3, ULTRA_THICK=4)
 import { statistics } from '@kit.NetworkKit';
@@ -69,47 +70,28 @@ export struct VideoControls {
     return options;
   }
 
-  private bottomMenuCheck(selected: boolean): Resource | undefined {
-    return selected ? (this.bottomMenuDark ? $r('app.media.settings_menu_check_dark') :
-      $r('app.media.settings_menu_check_light')) : undefined;
-  }
-
   @Builder
   private BottomPlaybackOptions(kind: string) {
-    Menu() {
-      if (kind === 'rate') {
-        ForEach([0.5, 0.75, 1, 1.25, 1.5, 2], (rate: number) => {
-          MenuItem({ content: `${rate}x`, endIcon: this.bottomMenuCheck(Math.abs(this.playbackRate - rate) < 0.01) })
-            .height(52).id(`player-bottom-rate-${rate}`)
-            .onClick(() => { this.onBottomRate(rate); this.closeBottomMenu(); })
-        }, (rate: number) => `${rate}`)
-      } else if (kind === 'quality') {
-        ForEach(this.bottomQualities, (quality: PortraitQuality) => {
-          MenuItem({ content: quality.label, endIcon: this.bottomMenuCheck(this.bottomQuality === quality.qn) })
-            .height(52).id(`player-bottom-quality-${quality.qn}`)
-            .onClick(() => { this.onBottomQuality(quality.qn); this.closeBottomMenu(); })
-        }, (quality: PortraitQuality) => `${quality.qn}`)
-        if (this.bottomQualities.length === 0) { MenuItem({ content: '暂无可用画质' }).enabled(false) }
-      } else {
-        MenuItem({ content: '关闭字幕', endIcon: this.bottomMenuCheck(!this.isSubtitleEnabled) })
-          .height(52).id('player-bottom-subtitle-off')
-          .onClick(() => { this.onBottomSubtitle(-1); this.closeBottomMenu(); })
-        ForEach(this.bottomSubtitleTracks, (label: string, index: number) => {
-          MenuItem({ content: label, endIcon: this.bottomMenuCheck(this.isSubtitleEnabled && this.bottomSubtitleIndex === index) })
-            .height(52).id(`player-bottom-subtitle-${index}`)
-            .onClick(() => { this.onBottomSubtitle(index); this.closeBottomMenu(); })
-        }, (label: string, index: number) => `${index}:${label}`)
-        if (this.bottomSubtitleLoading) { MenuItem({ content: '正在加载字幕…' }).enabled(false) }
-        else if (this.bottomSubtitleFailed) {
-          MenuItem({ content: '加载失败，点击重试' }).onClick(() => this.onBottomSubtitlePrepare())
-        } else if (this.bottomSubtitleTracks.length === 0) { MenuItem({ content: '当前视频暂无可用字幕' }).enabled(false) }
-        MenuItem({ content: '字幕大字号', endIcon: this.bottomMenuCheck(this.bottomSubtitleLarge) })
-          .height(52).id('player-bottom-subtitle-large')
-          .onClick(() => { this.onBottomSubtitleLarge(!this.bottomSubtitleLarge); this.closeBottomMenu(); })
-      }
-    }.width(224).radius(24).font({ size: 16 })
-      .fontColor(this.bottomMenuDark ? '#EEEFF1' : '#18191C')
-      .foregroundFilter(playbackHdrUiFilter(this.hdrUiRatio))
+    PlayerBottomPlaybackMenu({
+      kind: kind,
+      dark: this.bottomMenuDark,
+      hdrUiRatio: this.hdrUiRatio,
+      playbackRate: this.playbackRate,
+      qualities: this.bottomQualities,
+      quality: this.bottomQuality,
+      isSubtitleEnabled: this.isSubtitleEnabled,
+      subtitleTracks: this.bottomSubtitleTracks,
+      subtitleIndex: this.bottomSubtitleIndex,
+      subtitleLarge: this.bottomSubtitleLarge,
+      subtitleLoading: this.bottomSubtitleLoading,
+      subtitleFailed: this.bottomSubtitleFailed,
+      onClose: () => this.closeBottomMenu(),
+      onRate: (rate: number) => this.onBottomRate(rate),
+      onQuality: (quality: number) => this.onBottomQuality(quality),
+      onSubtitle: (index: number) => this.onBottomSubtitle(index),
+      onSubtitlePrepare: () => this.onBottomSubtitlePrepare(),
+      onSubtitleLarge: (large: boolean) => this.onBottomSubtitleLarge(large)
+    })
   }
 
   @Prop hdrUiRatio: number = 1;
@@ -319,7 +301,6 @@ export struct VideoControls {
   showColorStyleOptions: () => void = () => {};
   showScaleOptions: () => void = () => {};
   showQualityOptions: () => void = () => {};
-  showSpeedOptions: () => void = () => {};
   // ⭐ 更多菜单回调（缓存等后续功能）
   onMorePress: () => void = () => {};
   // ⭐ 弹幕开关回调
@@ -2307,7 +2288,7 @@ export struct VideoControls {
         Stack() {
           Image(this.isPlaying ? $r('app.media.ref_pause') : $r('app.media.ref_play_triangle'))
             .width(24).height(24).fillColor('#FFFFFF')
-        }.width(40).height(44).onClick(() => this.togglePlayPause())
+        }.width(40).height(44).id('portrait-play-pause').onClick(() => this.togglePlayPause())
         Row() { this.ReferenceSeekBar(44, 9, '#D34E7E') }.layoutWeight(1)
         Text(`${this.formatTime(this.currentTime)}/${this.formatTime(this.duration)}`)
           .fontSize(12).fontColor('#FFFFFF').maxLines(1)

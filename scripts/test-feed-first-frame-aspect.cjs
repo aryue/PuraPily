@@ -4,10 +4,12 @@ const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const ts = require(process.env.ARK_TYPESCRIPT || 'D:/Program Files/Huawei/DevEco Studio/sdk/default/openharmony/ets/build-tools/ets-loader/node_modules/typescript');
 const source = fs.readFileSync(path.join(__dirname, '../entry/src/main/ets/pages/VideoPlayerPage.ets'), 'utf8');
-const start = source.indexOf('  private async cropStillToPicture(');
-const end = source.indexOf('  private async prepareReferenceFeedPreview(', start);
-assert.ok(start > 0 && end > start);
 const context = { exports: {}, logInfo() {}, logWarn(error) { throw new Error(error); } };
+const decoder = { exports: {}, require: () => context, setTimeout: callback => callback() };
+vm.runInNewContext(ts.transpileModule(fs.readFileSync('entry/src/main/ets/services/FeedPreviewDecoder.ets', 'utf8'), {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 }
+}).outputText, decoder);
+const { cropStillToPicture, prepareFeedPreviewDecoder } = decoder.exports;
 const geometryStart = source.indexOf('  private referenceWarmSurfaceWidth(');
 const geometryEnd = source.indexOf('  private activeVideoSurfaceId(', geometryStart);
 assert.ok(geometryStart > 0 && geometryEnd > geometryStart);
@@ -18,7 +20,7 @@ const displayStart = source.indexOf('  private displayAspect(');
 const displayEnd = source.indexOf('\n  }', displayStart) + '\n  }'.length;
 assert.ok(displayStart > 0 && displayEnd > displayStart);
 vm.runInNewContext(ts.transpileModule(`export class Page {
-  ${source.slice(start, end)} ${source.slice(geometryStart, geometryEnd)} ${source.slice(aspectStart, aspectEnd)}
+  ${source.slice(geometryStart, geometryEnd)} ${source.slice(aspectStart, aspectEnd)}
   ${source.slice(displayStart, displayEnd)}
 }`, {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 }
@@ -50,6 +52,8 @@ async function main() {
   const pinned = source.slice(source.indexOf('  ReferenceFeedPinnedPage()'), source.indexOf('  ReferenceFeedPreviewPage()'));
   assert.match(pinned, /referenceMediaHeight\(this\.referencePinnedAspectRatio\)/);
   assert.doesNotMatch(pinned, /this\.ar\b/, 'live decoder dimensions must not resize a pinned frame or cover');
+  assert.match(source, /if \(this\.referenceLayout && this\.referenceFeed\) \{\s*Stack\(\) \{\s*this\.ReferenceFeedPreviewPage\(\)/,
+    'ordinary entry leaves preview chrome unmounted while the feed retains it during transitions');
   const rotated = page.referenceFeedAspect({ cid: 2, dimension: { width: 1920, height: 1080, rotate: 90 } }, 2, 0);
   assert.equal(rotated, 9 / 16);
   assert.equal(page.referenceFeedAspect({ cid: 2, dimension: { width: 3840, height: 2160, rotate: 1 } }, 2, 0), rotated);
@@ -58,18 +62,41 @@ async function main() {
   assert.equal(page.referenceFeedAspect({ cid: 2, dimension: { width: 1920, height: 1080 } }, 3, 0), 0);
   for (const [width, height, aspect] of [[1920, 1080, 9 / 16], [720, 1280, 16 / 9], [1920, 1080, 3 / 4]]) {
     const ijk = bitmap(width, height);
-    assert.equal(await page.cropStillToPicture(ijk, aspect, true), ijk);
+    assert.equal(await cropStillToPicture(ijk, aspect, true), ijk);
     assert.equal(ijk.cropped, false, 'IJK contains real picture pixels at the buffer edges');
     assert.equal(ijk.scaled, true);
     assert.ok(Math.abs(ijk.width / ijk.height / aspect - 1) < 0.002);
     const av = bitmap(width, height);
-    await page.cropStillToPicture(av, aspect, false);
+    await cropStillToPicture(av, aspect, false);
     assert.equal(av.cropped, true, 'AVPlayer FIT output still removes letterbox bars');
     assert.equal(av.scaled, false);
   }
   const unchanged = bitmap(1920, 1080);
-  await page.cropStillToPicture(unchanged, 16 / 9, true);
+  await cropStillToPicture(unchanged, 16 / 9, true);
   assert.equal(unchanged.cropped || unchanged.scaled, false);
+  for (const cancelled of [false, true]) {
+    let releases = 0;
+    let current = true;
+    let captures = 0;
+    const sample = { ...bitmap(1920, 1080), async release() { releases++; } };
+    context.image = { PixelMapFormat: {}, async createPixelMapFromSurfaceWithTransformation() {
+      captures++;
+      return sample;
+    } };
+    sample.getImageInfoSync = () => ({ pixelFormat: 123 });
+    context.deviceInfo = { abiList: ['arm64-v8a'] };
+    context.media = { VideoScaleType: { VIDEO_SCALE_TYPE_SCALED_ASPECT: 0 } };
+    const session = { id: 'preview', aspectRatio: 16 / 9, async prepare(_scale, _cookie, capture) {
+      this.onSizeChanged(this.aspectRatio);
+      await capture();
+      current = !cancelled;
+      return true;
+    } };
+    const result = await prepareFeedPreviewDecoder(session, session.aspectRatio, '', () => current);
+    assert.equal(captures, 1);
+    assert.equal(result?.frame, cancelled ? undefined : sample, 'retain the first accepted frame across decoder pause');
+    assert.equal(releases, cancelled ? 1 : 0, 'a cancelled preview releases its accepted frame');
+  }
   console.log('PASS: landscape to portrait, portrait to landscape, 4:3, matching aspect, AVPlayer letterbox');
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

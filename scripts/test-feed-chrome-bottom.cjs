@@ -7,13 +7,13 @@ const source = fs.readFileSync(path.join(__dirname, '../entry/src/main/ets/pages
 
 // 1) 位置只由「屏幕底部」决定：不能再按画幅把信息层贴到「全屏播放」按钮下方
 //    （平板上的宽画幅视频会被压成中间一条，跟着画幅走就会飘到屏幕中间）。
-const chromeSrc = source.slice(source.indexOf('  private feedChromeTop('), source.indexOf('  private trimReferenceDetails('));
+const chromeSrc = source.slice(source.indexOf('  private feedChromeTop('), source.indexOf('  private referencePublishStill('));
 assert.ok(!/aspect/.test(chromeSrc), 'feedChromeTop must not take the video aspect any more');
 assert.ok(!/referenceFullscreenButtonTop|referenceMediaTop|referenceMediaHeight/.test(chromeSrc),
   'feedChromeTop must not follow the media rect');
 
 // 2) 底部留白与顶部控件同一套安全区口径，且不小于系统手势条。
-const methods = source.slice(source.indexOf('  private referenceChromeInset('), source.indexOf('  private trimReferenceDetails('));
+const methods = source.slice(source.indexOf('  private referenceChromeInset('), source.indexOf('  private referencePublishStill('));
 const context = { exports: {} };
 vm.runInNewContext(ts.transpileModule(`export class Page { ${methods} }`, {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 }
@@ -32,10 +32,13 @@ Object.assign(page, { referenceFeedDragY: 0 });
 assert.ok(page.feedChromeTop(true) < page.feedChromeTop(), 'incoming layer is lifted while the page is still offscreen');
 
 // 3) 两层容器同高、同内边距，横向 8vp 与顶栏（padding left/right 8）对齐。
-const blocks = [...source.matchAll(/\.height\(244 \+ this\.referenceChromeInset\(\)\)[^\n]*\n\s*\.padding\(\{ left: 8, right: 8, bottom: this\.referenceChromeInset\(\) \}\)/g)];
-assert.equal(blocks.length, 2, 'both feed info layers must use the same height and 8vp side insets');
-assert.equal([...source.matchAll(/\.height\(244 \+ this\.referenceChromeInset\(\)\)\.justifyContent\(FlexAlign\.End\)/g)].length, 2,
-  'content must hug the bottom inset instead of leaving the block slack underneath');
+const preview = fs.readFileSync(path.join(__dirname, '../entry/src/main/ets/components/FeedPreviewChrome.ets'), 'utf8');
+assert.match(source, /\.height\(244 \+ this\.referenceChromeInset\(\)\)\.justifyContent\(FlexAlign\.End\)[^\n]*\n\s*\.padding\(\{ left: 8, right: 8, bottom: this\.referenceChromeInset\(\) \}\)/,
+  'active feed info uses the common height and insets');
+assert.match(preview, /\.height\(244 \+ this\.bottomInset\)\.justifyContent\(FlexAlign\.End\)[^\n]*\n\s*\.padding\(\{ left: 8, right: 8, bottom: this\.bottomInset \}\)/,
+  'preview feed info uses the common height and insets');
+assert.match(source, /bottomInset: this\.referenceChromeInset\(\), top: this\.feedChromeTop\(true\)/,
+  'the preview consumes the page-computed inset and drag position');
 assert.ok(!source.includes("padding({ left: 12, right: 6 })"), 'old 12/6 action-row padding must be gone');
 assert.ok(!source.includes(".width('96%').height(20)"), 'progress bar must span the padded content width');
 

@@ -167,7 +167,7 @@ async function testCompiledPages() {
   const definitions = [
     ['VideoPlayerPage', '    async aboutToAppear()', {
       vi: { bvid: '170001', cid: 42, title: 'current video' }, aidFromParams_: 170001,
-      epId_: 0, seasonId_: 0, av: { currentTime: 65432 }, ct: 0, initialProgress_: 0,
+      epId_: 0, seasonId_: 0, playbackResources_: { video: { currentTime: 65432 } }, ct: 0, initialProgress_: 0,
       play: false, userPaused_: true, rt: 1.5, offlineVideoPath_: ''
     }],
     ['LivePlayerPage', '    aboutToAppear()', { roomId: 876, areaId: 1 }]
@@ -188,7 +188,7 @@ async function testCompiledPages() {
       assert.equal(state.destination.params.initialProgress, 65.432);
       assert.equal(state.destination.params.continuationPaused, true);
       page.vi.cid = 99;
-      page.av.currentTime = 3000;
+      page.playbackResources_.video.currentTime = 3000;
       assert.equal(continuation.snapshot('pages/' + name, {}).destination.params.cid, 99);
       page.offlineVideoPath_ = '/local/video';
       assert.equal(continuation.snapshot('pages/' + name, {}), null);
@@ -202,14 +202,14 @@ async function testCompiledPages() {
   const start = compiled.indexOf('const preparedProgress = PlaybackProgress.resume(this.initialProgress_, this.dur);');
   const end = compiled.indexOf('else if (preparedProgress > 0', start);
   assert.ok(start > 0 && end > start);
-  const code = `import { media, PlaybackProgress } from 'mock'; export class Probe { async prepared() { const player = this.av; ${compiled.slice(start, end)} } }`;
+  const code = `import { media, PlaybackProgress } from 'mock'; export class Probe { async prepared() { const player = this.playbackResources_.video; ${compiled.slice(start, end)} } }`;
   const { Probe } = compile(code, () => ({ media: { SeekMode: { SEEK_CLOSEST: 2 } },
     PlaybackProgress: { resume: progress => progress } }));
   const seeks = [];
   const page = Object.assign(new Probe(), { initialProgress_: 91.25, dur: 300,
     continuationRestore_: true, continuationPaused_: true, continuationRate_: 1.5,
     setRate: async rate => seeks.push(['rate', rate]),
-    av: { seek: pos => seeks.push(['video', pos]) }, avAudio: { seek: pos => seeks.push(['audio', pos]) }
+    playbackResources_: { video: { seek: pos => seeks.push(['video', pos]) }, audio: { seek: pos => seeks.push(['audio', pos]) } }
   });
   await page.prepared();
   assert.equal(page.play, false);

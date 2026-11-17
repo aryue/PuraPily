@@ -30,14 +30,16 @@ assert.equal(context.router.pushes.length, 1, 'undefined detail must not navigat
 
 // 2) 连刷信息层（compact）：入口行自身必须退出触摸测试（留白透传给页面级单击显隐），
 //    主页触点收窄为头像与昵称本身。
-const upRow = source.slice(builderAt, source.indexOf('  @Builder\n  ReferenceIntro('));
-assert.ok(/\.hitTestBehavior\(compact \? HitTestMode\.None : HitTestMode\.Default\)/.test(upRow),
+const wrapper = source.slice(builderAt, source.indexOf('  @Builder\n  ReferenceIntro('));
+assert.match(wrapper, /onOpenProfile: \(\) => this\.referenceOpenUpSpace\(\)/, 'the shared row uses the page navigation callback');
+const upRow = fs.readFileSync(path.join(__dirname, '../entry/src/main/ets/components/PlayerCreatorRow.ets'), 'utf8').replace(/\r\n/g, '\n');
+assert.ok(/\.hitTestBehavior\(this\.compact \? HitTestMode\.None : HitTestMode\.Default\)/.test(upRow),
   'entry row must opt out of hit testing in compact mode only');
-assert.ok(/FeedAvatarImage\(\{[\s\S]*?\}\)\s*\n\s*\.onClick\(\(\) => this\.referenceOpenUpSpace\(\)\)/.test(upRow),
+assert.ok(/FeedAvatarImage\(\{[\s\S]*?\}\)\s*\n\s*\.onClick\(\(\) => this\.onOpenProfile\(\)\)/.test(upRow),
   'compact avatar must be its own space entry');
 // 昵称触点必须挂在 Text 本身：昵称 Column 是 layoutWeight(1) 的拉伸框，命中框铺满留白，
 // 挂在 Column 上会让「点留白进空间还是透传」变成概率行为（真机踩过）。
-assert.ok(/\.textOverflow\(\{ overflow: TextOverflow\.Ellipsis \}\)\s*\n\s*\.onClick\(\(\) => this\.referenceOpenUpSpace\(\)\)/.test(upRow),
+assert.ok(/\.textOverflow\(\{ overflow: TextOverflow\.Ellipsis \}\)\s*\n\s*\.onClick\(\(\) => this\.onOpenProfile\(\)\)/.test(upRow),
   'nickname Text must be its own space entry');
 assert.ok(/\.layoutWeight\(1\)\.alignItems\(HorizontalAlign\.Start\)\s*\n\s*\}/.test(upRow),
   'name column must not carry an onClick (its frame covers the blank area)');
@@ -46,7 +48,7 @@ assert.ok(/\.layoutWeight\(1\)\.alignItems\(HorizontalAlign\.Start\)\s*\n\s*\}/.
 assert.ok(!upRow.includes('router.pushUrl'), 'ReferenceUpRow must not inline router.pushUrl');
 
 // 4) 详情页（非 compact）整行进空间的旧口径保持：入口行仍挂 onClick。
-assert.ok(/\.height\(compact \? 34 : 28\)\s*\n\s*\.onClick\(\(\) => this\.referenceOpenUpSpace\(\)\)/.test(upRow),
+assert.ok(/\.height\(this\.compact \? 34 : 28\)\s*\n\s*\.onClick\(\(\) => this\.onOpenProfile\(\)\)/.test(upRow),
   'non-compact keeps the whole-row space entry');
 
 console.log('PASS: feed up-row blank area no longer enters up space (falls through to info toggle); avatar/name stay clickable; detail page unchanged');

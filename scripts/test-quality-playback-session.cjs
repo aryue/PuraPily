@@ -5,6 +5,9 @@ const tick=()=>new Promise(r=>setImmediate(r));
 let now=0;const clock={now:()=>now};
 function advancing(reference){return setInterval(()=>{reference.currentTime+=100;now+=100;},1);}
 const Deadline=require('./playback-deadline-test-helper.cjs')({Date:clock});
+const resources={exports:{},setTimeout,require:()=>({logWarn(){}})};
+vm.runInNewContext(ts.transpileModule(fs.readFileSync('entry/src/main/ets/services/PlaybackResources.ets','utf8'),{
+ compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020}}).outputText,resources);
 function player(state='paused'){
  return {state,currentTime:10000,duration:100000,releases:0,plays:0,seeks:0,events:{},
   on(name,fn){this.events[name]=fn;},off(name){delete this.events[name];},setSpeed(){},
@@ -20,11 +23,12 @@ function fixture(){
   if(id==='@ohos:multimedia.media')return {default:{SeekMode:{SEEK_CLOSEST:1}}};
   if(id.includes('FeedPlaybackSession'))return {FeedPlaybackSession:Warm};
   if(id.includes('PlaybackStartup'))return {PlaybackStartup:{span:()=>null}};
+  if(id.includes('PlaybackResources'))return resources.exports;
   if(id.includes('PlaybackDeadline'))return {PlaybackDeadline:Deadline};return {};
  }};
  vm.runInNewContext(ts.transpileModule(fs.readFileSync(root+'services/QualityPlaybackSession.ts','utf8'),{
   compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020}}).outputText,context);
- return {session:new context.exports.QualityPlaybackSession('BVfixture','spare',{},10000),video,audio,bridge,retire:context.exports.retirePlayback};
+ return {session:new context.exports.QualityPlaybackSession('BVfixture','spare',{},10000),video,audio,bridge,retire:resources.exports.retirePlayback};
 }
 (async()=>{
  let f=fixture(),reference=player('playing');reference.currentTime=20000;

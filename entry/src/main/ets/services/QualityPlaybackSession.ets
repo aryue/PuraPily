@@ -4,29 +4,36 @@ import { PlayUrlResult } from '../api/BilibiliApi';
 import { FeedPlaybackSession, FeedPlaybackHandles } from './FeedPlaybackSession';
 import { PlaybackDeadline } from '../utils/PlaybackDeadline';
 import { PlaybackStartup } from '../utils/PlaybackStartup';
-import type { DashServerHandle } from './PlayerService';
+import { retirePlayback, RetiredPlayback } from './PlaybackResources';
 
-export interface RetiredPlayback {
-  video: PlaybackPlayer;
-  audioPlayer: PlaybackPlayer | null;
-  bridge: DashServerHandle | null;
+export interface QualityPreparation {
+  reference: PlaybackPlayer;
+  scale: media.VideoScaleType;
+  cookie: string;
+  current: () => boolean;
+  speed: () => media.PlaybackSpeed;
+  rate: () => number;
+  mark: (event: string, value: number) => void;
 }
 
-/** Retire only these captured resources; never touch the page's new owner. */
-export async function retirePlayback(handles: RetiredPlayback): Promise<void> {
-  const players: PlaybackPlayer[] = [handles.video];
-  if (handles.audioPlayer) players.push(handles.audioPlayer);
-  const tasks: Promise<void>[] = [];
-  players.forEach((player: PlaybackPlayer) => {
-    player.off('stateChange');
-    player.off('error');
-    player.off('startRenderFrame');
-    player.off('seekDone');
-    player.off('videoSizeChange');
-    tasks.push(player.release().catch(() => {}));
-  });
-  if (handles.bridge) tasks.push(handles.bridge.stop().catch(() => {}));
-  await Promise.all(tasks);
+export async function prepareQualityReplacement(candidate: QualityPlaybackSession, deadline: PlaybackDeadline,
+  request: QualityPreparation): Promise<FeedPlaybackHandles | null> {
+  const reference = request.reference;
+  if (!request.current() || deadline.isCancelled()) return null;
+  request.mark('background-prepare', reference.currentTime);
+  if (!await deadline.wait(candidate.prepare(request.scale, request.cookie), '准备目标画质')) {
+    throw new Error('目标画质准备失败');
+  }
+  if (!request.current()) return null;
+  request.mark('candidate-frame-ready', reference.currentTime);
+  if (!await deadline.wait(candidate.align(reference, request.speed(), request.rate()), '对齐目标画质')) {
+    throw new Error('目标画质进度尚未对齐');
+  }
+  if (!request.current() || deadline.isCancelled()) return null;
+  request.mark('candidate-aligned', Math.round(candidate.driftMs));
+  const handles = candidate.take();
+  if (!handles) throw new Error('目标画质交接失败');
+  return handles;
 }
 
 /** Decode and align a muted replacement while the original remains visible/audible. */

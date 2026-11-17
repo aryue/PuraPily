@@ -7,11 +7,32 @@ import { PlayUrlResult } from '../api/BilibiliApi';
 import { DashPlayerBridge } from './DashPlayerBridge';
 import { startupPlaybackStrategy } from './PlayerStartupPolicy';
 import { PlaybackDeadline } from '../utils/PlaybackDeadline';
+import { logWarn } from '../utils/Logger';
 
 export interface FeedPlaybackHandles {
   video: PlaybackPlayer;
   audioPlayer: PlaybackPlayer | null;
   bridge: DashPlayerBridge | null;
+}
+
+/** Give a reserved preview a bounded opportunity to become the active player. */
+export async function takeFeedPlayback(session: FeedPlaybackSession, cookie: string,
+  isCurrent: () => boolean): Promise<FeedPlaybackHandles | null> {
+  const ready = session.take();
+  if (ready) return ready;
+  let timer: number = -1;
+  try {
+    await Promise.race([
+      session.prepare(media.VideoScaleType.VIDEO_SCALE_TYPE_SCALED_ASPECT, cookie),
+      new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(false), 1500); })
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+  if (!isCurrent()) return null;
+  const handles = session.take();
+  if (!handles) await session.release();
+  return handles;
 }
 
 /** Owns the inactive slot until take() transfers all resources to the page. */
@@ -41,8 +62,8 @@ export class FeedPlaybackSession {
     this.startTimeMs = startTimeMs;
   }
 
-  prepare(scaleType: media.VideoScaleType, cookie: string): Promise<boolean> {
-    if (!this.job) this.job = this.prepareOwned(scaleType, cookie);
+  prepare(scaleType: media.VideoScaleType, cookie: string, waitForPicture?: () => Promise<void>): Promise<boolean> {
+    if (!this.job) this.job = this.prepareOwned(scaleType, cookie, waitForPicture);
     return this.job;
   }
 
@@ -62,7 +83,8 @@ export class FeedPlaybackSession {
     }
   }
 
-  private async prepareOwned(scaleType: media.VideoScaleType, cookie: string): Promise<boolean> {
+  private async prepareOwned(scaleType: media.VideoScaleType, cookie: string,
+    waitForPicture?: () => Promise<void>): Promise<boolean> {
     this.deadline = new PlaybackDeadline();
     const headers: Record<string, string> = {
       'User-Agent': this.source.mediaUserAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
@@ -145,6 +167,8 @@ export class FeedPlaybackSession {
       if (video instanceof IjkPlaybackPlayer) video.load(this.source);
       else await this.deadline.wait(video.setMediaSource(media.createMediaSourceWithUrl(url, headers), this.bridge ? startupPlaybackStrategy() : {}), '设置播放源');
       if (!await this.deadline.wait(readiness, '等待视频首帧') || this.cancelled || video.state !== 'playing') return false;
+      if (waitForPicture) await waitForPicture();
+      if (this.cancelled) return false;
       await this.deadline.wait(video.pause(), '暂停预加载播放器');
       const pauseDeadline = Date.now() + 1000;
       while (!this.isPaused() && !this.cancelled && Date.now() < pauseDeadline) {
@@ -213,15 +237,24 @@ export class FeedPlaybackSession {
 
   private dispose(): Promise<void> {
     if (this.cleanup) return this.cleanup;
-    this.detachListeners();
-    const pending: Promise<void>[] = [];
-    if (this.video) pending.push(this.video.release().catch(() => {}));
-    if (this.audioPlayer) pending.push(this.audioPlayer.release().catch(() => {}));
-    if (this.bridge) pending.push(this.bridge.stopIfRunning().catch(() => {}));
-    this.video = null;
-    this.audioPlayer = null;
-    this.bridge = null;
-    this.cleanup = Promise.all(pending).then(() => {});
+    this.cleanup = Promise.resolve().then(async () => {
+      const video = this.video;
+      const audio = this.audioPlayer;
+      const bridge = this.bridge;
+      try {
+        this.detachListeners();
+      } catch (error) {
+        logWarn('移除预览播放器监听失败', error);
+      }
+      this.video = null;
+      this.audioPlayer = null;
+      this.bridge = null;
+      const pending: Promise<void>[] = [];
+      if (video) pending.push(Promise.resolve().then(() => video.release()).catch(() => {}));
+      if (audio) pending.push(Promise.resolve().then(() => audio.release()).catch(() => {}));
+      if (bridge) pending.push(Promise.resolve().then(() => bridge.stopIfRunning()).catch(() => {}));
+      await Promise.all(pending);
+    });
     return this.cleanup;
   }
 }

@@ -24,7 +24,8 @@ const assert = require('node:assert/strict');
 
 const root = path.resolve(__dirname, '..');
 const read = (rel) => fs.readFileSync(path.join(root, rel), 'utf8').replace(/\r\n/g, '\n');
-const source = read('entry/src/main/ets/pages/VideoPlayerPage.ets');
+const source = read('entry/src/main/ets/pages/VideoPlayerPage.ets') + '\n' +
+  read('entry/src/main/ets/services/SubtitleTrackService.ets');
 
 function extract(name) {
   const start = source.indexOf(`${name}(`);
@@ -43,7 +44,7 @@ assert.ok(!source.includes('referenceSubtitleApiUrl'),
   '旧的 referenceSubtitleApiUrl 组装入口应已被 subtitleFetchTracks 取代');
 
 // 1) 文件名解析：去掉 query/auth_key，取最后 32 位 md5 之前的部分。
-const prefixFn = extract('private subtitleTrackPrefix');
+const prefixFn = extract('  subtitleTrackPrefix');
 assert.ok(prefixFn.includes("url.split('?')[0]"), 'AI 轨前缀解析必须先剥掉 auth_key');
 assert.ok(prefixFn.includes('name.length - 32'), 'AI 轨前缀 = 文件名去掉 32 位 md5');
 
@@ -65,7 +66,7 @@ assert.ok(source.includes('private subtitleIdentityCache_: Map<string, SubtitleI
   '缺少 subtitleIdentityCache_ 字段');
 
 // 4) 双通道取列表，两条都要过滤。
-const fetchFn = extract('subtitleFetchTracks');
+const fetchFn = extract('async subtitleFetchTracks');
 assert.ok(fetchFn.includes('/x/player/wbi/v2?'), '必须尝试网页播放器在用的 wbi 版接口');
 assert.ok(fetchFn.includes("await AppSign.generateWebParams(params)"), 'wbi 版要签名');
 assert.ok(fetchFn.includes('/x/player/v2?'), '必须保留老版接口兜底');
@@ -74,7 +75,7 @@ assert.ok(fetchFn.includes('raw.filter((track: ReferenceSubtitleTrack) => this.s
 assert.ok(fetchFn.includes('if (owned.length > 0) return owned'), '只返回归属通过的轨');
 
 // 4b) 请求口径 ≠ 校验口径：番剧带 aid 会返回空列表，但 AI 轨文件名的 aid 仍是这条视频的。
-assert.ok(fetchFn.includes('const requestAid = this.isPgc_ ? 0 :'), 'PGC 请求必须保持不带 aid');
+assert.ok(fetchFn.includes('const requestAid = playback.pgc ? 0 :'), 'PGC 请求必须保持不带 aid');
 assert.ok(fetchFn.includes('const expectAid = identity ? identity.aid : requestAid'),
   '校验口径要用权威 aid');
 assert.ok(fetchFn.includes('this.subtitleTrackOwned(track, expectAid, cid)'),
@@ -82,19 +83,19 @@ assert.ok(fetchFn.includes('this.subtitleTrackOwned(track, expectAid, cid)'),
 
 // 5) 两个入口（开关/面板）都走 subtitleFetchTracks，不再各自拼 URL。
 const toggleFn = extract('private async referenceSetSubtitles');
-assert.ok(toggleFn.includes('await this.subtitleFetchTracks(bvid, cid)'),
+assert.ok(toggleFn.includes('await this.subtitleTracks_.subtitleFetchTracks(playback)'),
   '开关字幕必须走统一取轨入口');
 const menuFn = extract('private async referenceOpenLandscapeSubtitles');
-assert.ok(menuFn.includes('await this.subtitleFetchTracks(bvid, cid)'),
+assert.ok(menuFn.includes('await this.subtitleTracks_.subtitleFetchTracks(playback)'),
   '字幕面板必须走统一取轨入口');
 
 // 6) cue 落地校验：覆盖时长不得明显超出视频时长。
-const fitsFn = extract('private subtitleCueFits');
-assert.ok(fitsFn.includes('this.dur') && fitsFn.includes('return true'), '时长未知时必须放行，避免误杀');
+const fitsFn = extract('  subtitleCueFits');
+assert.ok(fitsFn.includes('playerDuration') && fitsFn.includes('!(videoDuration > 0)'), '时长未知时必须放行，避免误杀');
 assert.ok(fitsFn.includes('* 1.2 + 15'), '时间轴容差要留够（1.2 倍 + 15s）');
-assert.ok(toggleFn.includes('if (!this.subtitleCueFits(cues))'), '开关路径要校验 cue 时间轴');
+assert.ok(toggleFn.includes('if (!this.subtitleTracks_.subtitleCueFits(cues, this.vi.duration, this.dur))'), '开关路径要校验 cue 时间轴');
 const selectFn = extract('private async referenceSelectSubtitle');
-assert.ok(selectFn.includes('if (!this.subtitleCueFits(cues))'), '选轨路径要校验 cue 时间轴');
+assert.ok(selectFn.includes('if (!this.subtitleTracks_.subtitleCueFits(cues, this.vi.duration, this.dur))'), '选轨路径要校验 cue 时间轴');
 
 // 7) 归属校验失败必须落到"暂无可用字幕"，不能静默显示。
 assert.ok(/当前视频暂无可用字幕/.test(toggleFn), '校验不过要提示暂无可用字幕');

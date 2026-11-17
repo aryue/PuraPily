@@ -153,13 +153,13 @@ const ok = { url: 'signed-media', actualQn: 116 };
     const page = new context.exports.Page();
     Object.assign(page, { referenceAlive: true, playerPageVisible: true, waitingForFirstFrame: false,
       isPgc_: false, referenceLayout: true, referencePreviewPreparing: true, referencePreviewSurfaceId: '',
-      referenceFeedQueue: ['BVone', 'BVcurrent', 'BVtwo', 'BVthree'].map(id => item(id)),
+      referenceRecommendations_: { items: ['BVone', 'BVcurrent', 'BVtwo', 'BVthree'].map(id => item(id)) },
       vi: { bvid: 'BVcurrent' }, preferredQn: 80,
       playbackListPrefetch: { update(items, qn) { calls.push({ ids: Array.from(items, x => x.id), qn }); }, pause() { calls.push('paused'); } } });
     page.referencePrefetchPlaylistUrls();
     assert.deepEqual(calls[0].ids, ['BVtwo', 'BVthree', 'BVone']);
     assert.equal(calls[0].qn, 80, 'feed keeps the current playback quality');
-    page.referenceFeedQueue = []; page.relatedVideos = [item('BVrelated')];
+    page.referenceRecommendations_ = { items: [] }; page.relatedVideos = [item('BVrelated')];
     page.referencePrefetchPlaylistUrls(); assert.equal(calls[1].qn, 116, 'related-page navigation uses its default quality');
     page.waitingForFirstFrame = true; page.referencePrefetchPlaylistUrls(); assert.equal(calls[2], 'paused');
   }

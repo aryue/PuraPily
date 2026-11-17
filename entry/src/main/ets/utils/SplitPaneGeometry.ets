@@ -18,6 +18,20 @@ export function splitPrimaryWidth(windowWidth: number, ratio: number, expand: nu
   return resting + (windowWidth - resting) * expand;
 }
 
+export interface SplitPrimaryViewport {
+  x: number;
+  width: number;
+}
+
+/** The playable span inside the primary pane, in window coordinates. */
+export function splitPrimaryViewport(windowWidth: number, primaryWidth: number, inset: number,
+  expand: number, swapped: boolean): SplitPrimaryViewport {
+  return {
+    x: (swapped ? windowWidth - primaryWidth : 0) + inset * (1 - expand),
+    width: Math.max(1, primaryWidth - 2 * inset * (1 - expand))
+  };
+}
+
 export function splitSecondaryWidth(windowWidth: number, ratio: number, inset: number,
   primaryMin: number = SPLIT_PRIMARY_MIN, secondaryMin: number = SPLIT_SECONDARY_MIN): number {
   return windowWidth - clampSplitWidth(windowWidth, windowWidth * ratio, primaryMin, secondaryMin) - 2 * inset;

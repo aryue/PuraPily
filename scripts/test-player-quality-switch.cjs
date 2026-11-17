@@ -32,8 +32,8 @@ selected=normalize(source(116,streams.filter(x=>x.id!==116)),116);assert.equal(s
 const traceContext={exports:{},hilog:{debug(_domain,_tag,_format,json){traceContext.last=JSON.parse(json);}}};
 vm.runInNewContext(transpile('export class Trace {'+extract('pages/VideoPlayerPage.ts','    private async traceQualityTrack(')+'}'),traceContext);
 async function verifyTrackUnits(){
- const trace=new traceContext.exports.Trace();trace.av={getTrackDescription:async()=>[{width:1440,height:1080,frame_rate:6000}]};
- await trace.traceQualityTrack(trace.av,116,116);assert.equal(traceContext.last.fps,60,'native frame rate units are frames per 100 seconds');
+ const trace=new traceContext.exports.Trace();trace.playbackResources_={video:{getTrackDescription:async()=>[{width:1440,height:1080,frame_rate:6000}]}};
+ await trace.traceQualityTrack(trace.playbackResources_.video,116,116);assert.equal(traceContext.last.fps,60,'native frame rate units are frames per 100 seconds');
  assert.deepEqual(Object.keys(traceContext.last).sort(),['actual','fps','height','requested','width'],'track trace contains no URLs or identifiers');
 }
 const switchCode=extract('pages/VideoPlayerPage.ts','    async switchQ(');
@@ -53,13 +53,29 @@ const ctx={exports:{},canDecodePlayUrl:()=>decoderSupported,getVideoPlayUrl:asyn
   take(){this.taken=true;this.target=player(this.reference.state);return {video:this.target,audioPlayer:null,bridge:null};}
   async release(){if(!this.taken)this.releases++;}
  },
- retirePlayback:async handles=>handles.video.release(),
+ retireAfterSurfaceSwap:handles=>new Promise(resolve=>retiring.push(async()=>{await handles.video.release();resolve();})),
  setTimeout:fn=>{retiring.push(fn);return 1;},clearTimeout(){},setInterval:()=>1,clearInterval(){},console,logInfo(){},logWarn(){},logError(){},errMsg:String};
-vm.runInNewContext(transpile('export class Subject {'+switchCode+'}'),ctx);
+const qualitySource=fs.readFileSync('entry/src/main/ets/services/QualityPlaybackSession.ets','utf8');
+const helper=qualitySource.slice(qualitySource.indexOf('export async function prepareQualityReplacement'),
+ qualitySource.indexOf('/** Decode and align'));
+vm.runInNewContext(transpile(helper),ctx);
+const resourceSource=fs.readFileSync('entry/src/main/ets/services/PlaybackResources.ets','utf8');
+const gate=resourceSource.slice(resourceSource.indexOf('export class PlaybackSurfaceRetirement'),
+ resourceSource.indexOf('/** Resources owned'));
+vm.runInNewContext(transpile(gate),ctx);
+Object.assign(ctx,ctx.exports);
+ctx.retirePlayback=async handles=>handles.video.release();
+const promote=extract('pages/VideoPlayerPage.ts','    private promoteSpareSurface(');
+vm.runInNewContext(transpile('export class Subject {'+switchCode+'\n'+promote+'}'),ctx);
 function page(state='playing'){
  const p=new ctx.exports.Subject();Object.assign(p,{qn:80,qs:false,ct:20,play:state==='playing',referenceAlive:true,
- referenceSwitchGeneration:1,vi:{bvid:'BVtest',cid:1},av:player(state),sId:'surface-a',referencePreviewSurfaceId:'surface-b',
- waitingForFirstFrame:false,ld:false,ar:16/9,rt:1,referenceSecondSurfaceActive:false,referencePreviewReleaseJob:Promise.resolve(),
+ referenceSwitchGeneration:1,vi:{bvid:'BVtest',cid:1},sId:'surface-a',referencePreviewSurfaceId:'surface-b',
+ waitingForFirstFrame:false,ld:false,ar:16/9,rt:1,referenceSecondSurfaceActive:false,surfaceRetirement_:new ctx.PlaybackSurfaceRetirement(),
+ playbackObservation_: { cancelFirstFrame() {} },
+ playbackResources_: { video: player(state), replaceForQuality(handles, previous) {
+   previous.setVolume(0); p.playbackResources_.video=handles.video; p.playbackResources_.audio=handles.audioPlayer;
+   return {video:previous};
+ } },
  playbackListPrefetch:{pause(){}},stopSyncTimer(){},getVideoScaleType:()=>0,rateToSpeedIdx:()=>1,
  referenceWarmUpcomingFrames(){},startVideoSpeedSync(){},
  getQlList:()=>[{qn:80},{qn:116}],getQlLabel:n=>n===116?'1080P60':'1080P',getUIContext:()=>({getPromptAction:()=>({showToast:o=>toast.push(o.message)})}),
@@ -90,29 +106,30 @@ async function verifyBridge() {
 }
 (async()=>{
  await verifyBridge(); await verifyTrackUnits();
- let p=page(),resolve;const original=p.av;response=new Promise(r=>resolve=r);const task=p.switchQ(116);
- await tick();assert.equal(p.qs,true);assert.equal(p.av,original);assert.equal(original.volume,1);
- resolve({url:'fallback',actualQn:80});await task;assert.equal(p.av,original);assert.equal(p.qn,80);assert.equal(p.qs,false);
+ let p=page(),resolve;const original=p.playbackResources_.video;response=new Promise(r=>resolve=r);const task=p.switchQ(116);
+ await tick();assert.equal(p.qs,true);assert.equal(p.playbackResources_.video,original);assert.equal(original.volume,1);
+ resolve({url:'fallback',actualQn:80});await task;assert.equal(p.playbackResources_.video,original);assert.equal(p.qn,80);assert.equal(p.qs,false);
  assert.match(toast.at(-1),/1080P60.*保留1080P/);assert.equal(saved,0);assert.equal(requestArgs[3],0);
- decoderSupported=false;response={url:'unsupported-hevc',actualQn:116};p=page();const unsupported=p.av;await p.switchQ(116);
- assert.equal(p.av,unsupported);assert.equal(saved,0);assert.equal(p.qn,80);decoderSupported=true;
- let prepared;preparation=new Promise(r=>prepared=r);response={url:'1080p60',actualQn:116};p=page();const outgoing=p.av;
- const warming=p.switchQ(116);await tick();assert.equal(p.av,outgoing);assert.equal(outgoing.volume,1);
+ decoderSupported=false;response={url:'unsupported-hevc',actualQn:116};p=page();const unsupported=p.playbackResources_.video;await p.switchQ(116);
+ assert.equal(p.playbackResources_.video,unsupported);assert.equal(saved,0);assert.equal(p.qn,80);decoderSupported=true;
+ let prepared;preparation=new Promise(r=>prepared=r);response={url:'1080p60',actualQn:116};p=page();const outgoing=p.playbackResources_.video;
+ const warming=p.switchQ(116);await tick();assert.equal(p.playbackResources_.video,outgoing);assert.equal(outgoing.volume,1);
  assert.equal(p.waitingForFirstFrame,false,'preparation never covers the playing source with a spinner');
  assert.equal(p.referenceSecondSurfaceActive,false);assert.equal(saved,0);
  prepared();await warming;preparation=null;
- assert.notEqual(p.av,outgoing);assert.equal(p.referenceSecondSurfaceActive,true);assert.equal(p.sId,'surface-b');
- assert.equal(p.referencePreviewSurfaceId,'surface-a');assert.equal(p.qn,116);assert.equal(saved,1);assert.equal(p.qs,false);
+ assert.notEqual(p.playbackResources_.video,outgoing);assert.equal(p.referenceSecondSurfaceActive,true);assert.equal(p.sId,'surface-b');
+ assert.equal(p.referencePreviewSurfaceId,'surface-a');
+ assert.equal(p.referencePreviewSurfaceId,'surface-a');assert.equal(p.qn,116);assert.equal(saved,0);assert.equal(p.preferredQn,116);assert.equal(p.qs,false);
  assert.equal(outgoing.releases,0,'retain old native buffer through the Surface role update');
- const current=p.av;for(const fn of retiring.splice(0))fn();await p.referencePreviewReleaseJob;
+ const current=p.playbackResources_.video;for(const fn of retiring.splice(0))fn();await p.surfaceRetirement_.wait();
  assert.equal(outgoing.releases,1);assert.equal(current.releases,0);
- response=Promise.reject(Error('network'));p=page();const networkOwner=p.av;await p.switchQ(116);assert.equal(p.av,networkOwner);
- response={url:'1080p60',actualQn:116};aligned=false;p=page();const failedOwner=p.av;await p.switchQ(116);
- assert.equal(p.av,failedOwner);assert.equal(p.qn,80);assert.equal(failedOwner.volume,1);assert.equal(p.waitingForFirstFrame,false);aligned=true;
- p=page('paused');await p.switchQ(116);assert.equal(p.play,false);assert.equal(p.av.state,'paused');assert.equal(p.waitingForFirstFrame,false);
- preparation=new Promise(r=>prepared=r);p=page();const staleOwner=p.av;const stale=p.switchQ(116);await tick();
- p.referenceSwitchGeneration++;prepared();await stale;preparation=null;assert.equal(p.av,staleOwner);assert.equal(staleOwner.volume,1);
- preparation=new Promise(r=>prepared=r);p=page();const cancelledOwner=p.av;const cancelled=p.switchQ(116);await tick();
- p.qualityDeadline_.cancel();await cancelled;assert.equal(p.av,cancelledOwner);assert.equal(p.qs,false);prepared();preparation=null;
+ response=Promise.reject(Error('network'));p=page();const networkOwner=p.playbackResources_.video;await p.switchQ(116);assert.equal(p.playbackResources_.video,networkOwner);
+ response={url:'1080p60',actualQn:116};aligned=false;p=page();const failedOwner=p.playbackResources_.video;await p.switchQ(116);
+ assert.equal(p.playbackResources_.video,failedOwner);assert.equal(p.qn,80);assert.equal(failedOwner.volume,1);assert.equal(p.waitingForFirstFrame,false);aligned=true;
+ p=page('paused');await p.switchQ(116);assert.equal(p.play,false);assert.equal(p.playbackResources_.video.state,'paused');assert.equal(p.waitingForFirstFrame,false);
+ preparation=new Promise(r=>prepared=r);p=page();const staleOwner=p.playbackResources_.video;const stale=p.switchQ(116);await tick();
+ p.referenceSwitchGeneration++;prepared();await stale;preparation=null;assert.equal(p.playbackResources_.video,staleOwner);assert.equal(staleOwner.volume,1);
+ preparation=new Promise(r=>prepared=r);p=page();const cancelledOwner=p.playbackResources_.video;const cancelled=p.switchQ(116);await tick();
+ p.qualityDeadline_.cancel();await cancelled;assert.equal(p.playbackResources_.video,cancelledOwner);assert.equal(p.qs,false);prepared();preparation=null;
  console.log('PASS: compiled rendition/catalogue correctness, background preparation, aligned Surface swap, retained old playback on failure/cancel, paused handoff and captured-resource retirement');
 })().catch(e=>{console.error(e);process.exitCode=1;});

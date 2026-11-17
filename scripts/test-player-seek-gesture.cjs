@@ -6,6 +6,7 @@ const file = 'entry/build/default/cache/default/default@CompileArkTS/esmodule/de
 const source = ts.createSourceFile(file, fs.readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true);
 const cls = source.statements.find(n => ts.isClassDeclaration(n) && n.name.text === 'VideoPlayerPage');
 const names = ['onTD', 'onTM', 'onTU', 'onTC', 'levelGestureCenterX',
+  'referenceLandscapeViewport', 'referenceLandscapePlayerWidth',
   'scheduleHoldSpeed', 'referenceHandleFeedPlayerTouch', 'referenceCancelFeedPlayerTouch',
   'referenceFeedPlayerTouchAvailable'];
 const methods = cls.members.filter(n => names.includes(n.name?.getText(source))).map(n => n.getText(source));
@@ -14,6 +15,18 @@ let timerId = 0;
 const timers = new Map();
 const ctx = { setTimeout: fn => { timers.set(++timerId, fn); return timerId; }, clearTimeout: id => timers.delete(id),
   AppStorage: { setOrCreate() {} }, TouchType: { Down: 0, Move: 1, Up: 2, Cancel: 3 } };
+const geometry = { exports: {} };
+vm.runInNewContext(ts.transpileModule(
+  fs.readFileSync('entry/src/main/ets/utils/SplitPaneGeometry.ets', 'utf8'), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS }
+  }).outputText, geometry);
+Object.assign(ctx, geometry.exports);
+const gesture = { exports: {} };
+vm.runInNewContext(ts.transpileModule(
+  fs.readFileSync('entry/src/main/ets/utils/PlaybackGesture.ets', 'utf8'), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS }
+  }).outputText, gesture);
+Object.assign(ctx, gesture.exports);
 vm.runInNewContext(ts.transpileModule('class Page {' + methods.join('\n') + '} globalThis.Page = Page;', {
   compilerOptions: { target: ts.ScriptTarget.ES2020 }
 }).outputText, ctx);
@@ -22,7 +35,7 @@ function page(start = true) {
   const p = new ctx.Page();
   Object.assign(p, { playerTouchId_: -1, dt_: -1, lt_: -1, gt_: -1, ct_: -1,
     ct: 120, dur: 600, cw: 400, screenH_: 800, vol: .5, bri: .5, rt: 1,
-    cv: true, sk_: false, gm_: '', av: { state: 'playing', setVolume() {} },
+    cv: true, sk_: false, gm_: '', playbackResources_: { video: { state: 'playing', setVolume() {} } },
     seeks: [], haptics: 0, hints: [], rates: [],
     triggerHaptic() { this.haptics++; }, fireHaptic() {},
     sGH(...args) { this.hints.push(args); }, formatDuration: String,
@@ -61,25 +74,31 @@ for (const [dx, expected] of [[-10, 'brightness'], [10, 'volume']]) {
   p.onTM(touch(100, 40)); assert.equal(p.gm_, expected, 'vertical direction remains locked');
   p.onTU(touch()); assert.equal(p.seeks.length, 0);
 }
-// 横屏分栏：分界线是播放视口中线，不是屏幕中线（播放区在左 0..300 时中线 = 150）
-function splitPage(playerX, viewW) {
+// 600vp 窗口：默认播放区宽 400，左右分栏中线分别为 200 和 400。
+function splitPage(swapped = false) {
   const p = page();
-  Object.assign(p, { cw: 400, isLs: true, referenceLayout: true, fs: false, isLandscapeVertical: false,
-    referenceLandscapePlayerX: () => playerX, referenceLandscapeViewportWidth: () => viewW });
+  Object.assign(p, { cw: 600, isLs: true, referenceLayout: true, fs: false, isLandscapeVertical: false,
+    isLayoutSwapped: swapped, safeCM: () => 12 });
   return p;
 }
-const splitLeft = splitPage(0, 300);
-splitLeft.onTM(touch(-20, 30)); // windowX 180：屏幕中线左侧，但在播放区右半
+const splitLeft = splitPage();
+splitLeft.onTM(touch(20, 30)); // windowX 220：在播放区右半，仍在窗口左半
 assert.equal(splitLeft.gm_, 'volume', 'split boundary follows playback viewport center');
-const splitLeftBright = splitPage(0, 300);
-splitLeftBright.onTM(touch(-90, 120)); // windowX 110
+const splitLeftBright = splitPage();
+splitLeftBright.onTM(touch(-20, 30)); // windowX 180
 assert.equal(splitLeftBright.gm_, 'brightness');
-const splitRight = splitPage(100, 300); // 播放区换到右侧：中线 250
-splitRight.onTM(touch(20, 30)); // windowX 220：屏幕中线右侧，但仍在播放区左半
+const splitRight = splitPage(true);
+splitRight.onTD(touch(150, 0, 8));
+splitRight.onTM(touch(150, 30, 8)); // windowX 350：在播放区左半，已在窗口右半
 assert.equal(splitRight.gm_, 'brightness', 'split boundary must not fall back to the screen center');
-const splitFull = splitPage(0, 300);
+const splitExpanded = splitPage();
+splitExpanded.referenceLandscapeExpandProgress = 0.5; // 播放区宽 500，中线 250
+splitExpanded.onTM(touch(20, 30));
+assert.equal(splitExpanded.gm_, 'brightness', 'boundary follows the expanded viewport');
+const splitFull = splitPage();
 splitFull.fs = true;
-splitFull.onTM(touch(20, 30)); // 全屏播放区占满窗口：中线回到 200
+splitFull.onTD(touch(150, 0, 8));
+splitFull.onTM(touch(150, 30, 8)); // windowX 350：全屏中线为 300
 assert.equal(splitFull.gm_, 'volume', 'fullscreen keeps the screen center');
 const unknown = page(); unknown.dur = 0; unknown.onTM(touch(100));
 assert.equal(unknown.gm_, ''); assert.equal(unknown.haptics, 0);
@@ -181,7 +200,7 @@ for (const [phase, dx, dy] of [['Up', 0, 0], ['Move', 16, 0], ['Move', 0, 16], [
   assert.equal(timers.has(timer), false);
   assert.deepEqual(p.rates, []);
 }
-const pausedFeed = feedPage({ av: { state: 'paused' } });
+const pausedFeed = feedPage({ playbackResources_: { video: { state: 'paused' } } });
 feedTouch(pausedFeed, 'Down');
 assert.equal(pausedFeed.lt_, -1);
 console.log('PASS: compiled player gestures — regular and feed seek, accidental motion, control exclusion, cancellation, volume/brightness, hold speed and double tap.');

@@ -8,17 +8,32 @@ function method(name) {
   for (; depth; end++) { if (source[end] === '{') depth++; if (source[end] === '}') depth--; }
   return source.slice(start, end);
 }
-const context = { Visibility: { Visible: 0, Hidden: 1 }, Curve: { EaseOut: 0 } };
+const context = {
+  Visibility: { Visible: 0, Hidden: 1 }, Curve: { EaseOut: 0 },
+  PlayerDrawerLayoutCallback: class {
+    constructor(onIdle) { this.onIdle = onIdle; }
+  }
+};
 vm.runInNewContext(ts.transpileModule('class Subject {' + method('referenceAnimateMenu') +
-  method('referenceMenuVisibility') + method('referenceRestoreProgressUi') +
+  method('referenceRunMenuAnimation') + method('referenceMenuVisibility') + method('referenceRestoreProgressUi') +
   '} globalThis.subject = new Subject();', {
   compilerOptions: { target: ts.ScriptTarget.ES2020 }
 }).outputText, context);
-const s = context.subject, finishes = [];
+const s = context.subject, finishes = [], frames = [];
+s.playbackResources_ = {};
 s.mp = false; s.ip = false; s.referencePortraitMotionToken = 0; s.referencePortraitSettingsAnimating = false;
-s.getUIContext = () => ({ animateTo: (options, update) => { update(); finishes.push(options.onFinish); } });
+s.referenceAlive = s.playerPageVisible = true;
+s.referencePortraitDrawerMounted = false;
+s.getUIContext = () => ({
+  postFrameCallback: frame => frames.push(frame),
+  animateTo: (options, update) => { update(); finishes.push(options.onFinish); }
+});
 assert.equal(s.referenceMenuVisibility(), 1, 'closed menu is hidden during layout/orientation changes');
 s.referenceAnimateMenu(true);
+assert.equal(s.referencePortraitDrawerMounted, true);
+assert.equal(s.referenceMenuVisibility(), 1, 'first open waits for the closed layout');
+assert.equal(finishes.length, 0);
+frames.shift().onIdle();
 assert.equal(s.referenceMenuVisibility(), 0); finishes.shift()();
 assert.equal(s.referenceMenuVisibility(), 0, 'open menu remains visible after entry');
 s.referenceAnimateMenu(false);
@@ -31,4 +46,10 @@ assert.equal(s.referencePortraitSettingsAnimating, true, 'old completion cannot 
 finishes.shift()(); assert.equal(s.referenceMenuVisibility(), 0);
 s.referenceAnimateMenu(false); finishes.shift()();
 assert.equal(s.referenceMenuVisibility(), 1);
-console.log('PASS: compiled menu visibility, exit lifetime and stale animation completion');
+s.referencePortraitDrawerMounted = false;
+s.referenceAnimateMenu(true);
+s.playerPageVisible = false;
+frames.shift().onIdle();
+assert.equal(s.referenceMenuVisibility(), 1, 'first layout callback cannot open a hidden page');
+assert.equal(finishes.length, 0);
+console.log('PASS: compiled menu lazy mount, exit lifetime and stale animation completion');

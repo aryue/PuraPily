@@ -1,3 +1,5 @@
+import type { PlayUrlResult } from '../api/BilibiliApi';
+
 /**
  * 画质档位表（qn ↔ 文案）。
  *
@@ -18,6 +20,25 @@ export const QUALITY_OPTIONS: QualityOption[] = [
   { qn: 116, label: '1080P60' },
   { qn: 120, label: '4K' }
 ];
+
+export function playbackQualityOptions(result: PlayUrlResult): QualityOption[] {
+  const qualities = result.acceptQuality || [];
+  const descriptions = result.acceptDescription || [];
+  const options: QualityOption[] = [];
+  for (let i = 0; i < qualities.length; i++) {
+    const qn = qualities[i];
+    if (qn <= 0 || options.some((item: QualityOption) => item.qn === qn)) continue;
+    const known = QUALITY_OPTIONS.find((item: QualityOption) => item.qn === qn);
+    options.push({ qn, label: descriptions[i] || known?.label || `${qn}` });
+  }
+  // Without an advertised catalogue, the returned stream is the only known option.
+  if (options.length === 0 && result.url && result.actualQn && result.actualQn > 0) {
+    const qn = result.actualQn;
+    const known = QUALITY_OPTIONS.find((item: QualityOption) => item.qn === qn);
+    options.push({ qn, label: known?.label || `${qn}` });
+  }
+  return options;
+}
 
 /** Wi-Fi 档默认 1080P60：与设置页历史上的默认值保持一致。 */
 export const DEFAULT_QUALITY_QN: number = 116;

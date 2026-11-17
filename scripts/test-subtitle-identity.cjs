@@ -11,7 +11,7 @@
  *  - 字幕请求直接用 vi.bvid + vi.cid，于是切集后拿到的是 bvid 那一集的字幕。
  *
  * 修复口径：
- *  1) PgcEpisode 解析 bvid；播放页建分集表时同步 pgcBvids_（三处），并按 cid 反查同步 vi.bvid；
+ *  1) PgcEpisode 解析 bvid；三个入口共用同一分集表，并按 cid 反查同步 vi.bvid；
  *  2) 字幕请求前必须 bvid/cid 同源就绪（空 bvid、纯数字 aid、cid=0 都不发）；
  *  3) 落地校验接口回显的 bvid；字幕 cues 记录归属身份（bvid:cid），身份不符一帧都不显示。
  */
@@ -41,28 +41,24 @@ const pgcEpisode = apiSource.slice(apiSource.indexOf('export interface PgcEpisod
 assert.ok(/bvid\?: string;/.test(pgcEpisode.slice(0, 400)),
   'PgcEpisode 必须解析 bvid（番剧每集是独立稿件，字幕接口按 bvid 定位）');
 
-// 2) 播放页维护与 pages 平行的 pgcBvids_，并在建表处填满。
-assert.ok(/private pgcBvids_: string\[\] = \[\]/.test(source), '缺少 pgcBvids_ 字段');
-const bvidPushes = source.match(/pgcBvids\.push\(ep\.bvid \|\| ''\)/g) || [];
-assert.equal(bvidPushes.length, 3, '三处 PGC 分集表都必须 push ep.bvid');
-const bvidAssigns = source.match(/this\.pgcBvids_ = pgcBvids;/g) || [];
-assert.equal(bvidAssigns.length, 3, '三处 PGC 分集表都必须落地 pgcBvids_');
-const syncCallsAfterTable = source.match(/this\.syncPgcBvidForCid\(this\.vi\.cid\);/g) || [];
-assert.ok(syncCallsAfterTable.length >= 3, '三处分集表建好后必须按 cid 补一次 bvid');
+// 2) 三个入口共用一次分集身份提交，建表后按 CID 补齐 BV。
+assert.equal((source.match(/this\.applyPgcSeasonDetail\((?:pgcInfo|season),/g) || []).length, 3);
+const applySeason = extract('private applyPgcSeasonDetail');
+assert.match(applySeason, /this\.pgcEpisodes_\.load[\s\S]*this\.syncPgcBvidForCid\(this\.vi\.cid\)/);
 
 // 3) setPlaybackCid 是唯一 cid 入口：PGC 下必须同步 bvid。
 const setCid = extract('private setPlaybackCid');
-assert.ok(setCid.includes('this.syncPgcBvidForCid(cid)'),
+assert.ok(setCid.includes('this.pgcBvidForCid(cid) || bvid'),
   'setPlaybackCid 必须在 PGC 下同步当前集的 bvid');
 
 // 4) 反查按 cid 对齐，且非 PGC 不碰 bvid。
 const pgcBvidForCid = extract('private pgcBvidForCid');
 assert.ok(pgcBvidForCid.includes('if (!this.isPgc_ || cid <= 0) return'),
   'pgcBvidForCid 必须限定 PGC 且 cid>0');
-assert.ok(pgcBvidForCid.includes('pages[i].cid === cid') && pgcBvidForCid.includes('this.pgcBvids_[i]'),
-  'pgcBvidForCid 必须按 pages[i].cid 对齐取 pgcBvids_[i]');
+assert.ok(pgcBvidForCid.includes('this.pgcEpisodes_.bvidForCid(cid)'),
+  'pgcBvidForCid 必须从分集表按 cid 取 bvid');
 const syncPgc = extract('private syncPgcBvidForCid');
-assert.ok(syncPgc.includes('pgcBvidForCid(cid)') && syncPgc.includes('this.vi.bvid = bvid'),
+assert.ok(syncPgc.includes('pgcBvidForCid(cid)') && syncPgc.includes('this.commitPlaybackIdentity(cid, bvid)'),
   'syncPgcBvidForCid 必须在查到 bvid 时写回 vi.bvid');
 
 // 5) 字幕请求前置身份校验：空 bvid / 纯数字 aid / cid=0 都不发请求。
@@ -70,12 +66,12 @@ const awaitIdentity = extract('private async referenceAwaitSubtitleIdentity');
 assert.ok(awaitIdentity.includes('this.vi.cid > 0'), '身份等待必须先等到 cid');
 assert.ok(/!\/\^\\d\+\$\/\.test\(bvid\)/.test(awaitIdentity),
   '身份等待必须拒绝纯数字 bvid（aid 尚未解析成 BV 时接口认不出稿件）');
-assert.ok(awaitIdentity.includes('this.syncPgcBvidForCid(this.vi.cid)'),
-  '身份等待必须给 PGC 补上当前集 bvid');
+assert.ok(!awaitIdentity.includes('this.syncPgcBvidForCid(this.vi.cid)'),
+  '读取字幕时不能反写当前媒体身份');
 assert.ok(/await new Promise<void>[\s\S]*setTimeout\(resolve, 100\)/.test(awaitIdentity),
   '身份等待要轮询而不是空转一次');
-assert.ok(/return false;\s*\}\s*$/.test(awaitIdentity.trimEnd()) || awaitIdentity.trimEnd().endsWith('return false;\n  }'),
-  '身份等待超时必须返回 false（不能拿空 bvid 去换字幕）');
+assert.ok(/return null;\s*\}\s*$/.test(awaitIdentity.trimEnd()) || awaitIdentity.trimEnd().endsWith('return null;\n  }'),
+  '身份等待超时必须返回 null（不能拿空 bvid 去换字幕）');
 
 for (const name of ['private async referenceSetSubtitles', 'private async referenceOpenLandscapeSubtitles']) {
   const fn = extract(name);
@@ -91,7 +87,7 @@ for (const name of ['private async referenceSetSubtitles', 'private async refere
 const setSubs = extract('private async referenceSetSubtitles');
 const menuSubs = extract('private async referenceOpenLandscapeSubtitles');
 for (const [name, fn] of [['referenceSetSubtitles', setSubs], ['referenceOpenLandscapeSubtitles', menuSubs]]) {
-  assert.ok(fn.includes('await this.subtitleFetchTracks(bvid, cid)'),
+  assert.ok(fn.includes('await this.subtitleTracks_.subtitleFetchTracks(playback)'),
     `${name} 必须走统一取轨入口`);
   assert.ok(!fn.includes('echoedBvid !== bvid'),
     `${name} 不该再只依赖接口回显（回显对、轨道错时拦不住）`);
@@ -99,28 +95,23 @@ for (const [name, fn] of [['referenceSetSubtitles', setSubs], ['referenceOpenLan
 
 // 7) cues 带归属身份：reset 清空、成功落地设置、显示前校验。
 const reset = extract('private referenceResetSubtitles');
-assert.ok(reset.includes("this.referenceSubtitleOwner = ''"), 'referenceResetSubtitles 必须清空字幕归属');
-assert.ok(/private referenceSubtitleOwner: string = ''/.test(source), '缺少 referenceSubtitleOwner 字段');
-assert.ok(setSubs.includes('this.referenceSubtitleOwner = `${bvid}:${cid}`'),
+assert.ok(reset.includes('this.subtitleTracks_.resetPlayback()'), 'referenceResetSubtitles 必须清空字幕归属');
+assert.ok(setSubs.includes('this.subtitleTracks_.setCues(cues, bvid, cid)'),
   'referenceSetSubtitles 落地时必须记录归属身份');
 const select = extract('private async referenceSelectSubtitle');
-assert.ok(select.includes('this.referenceSubtitleOwner = `${bvid}:${cid}`'),
+assert.ok(select.includes('this.subtitleTracks_.setCues(cues, bvid, cid)'),
   'referenceSelectSubtitle 落地时必须记录归属身份');
-assert.ok(select.includes("this.referenceSubtitleOwner = ''"),
+assert.ok(select.includes('this.subtitleTracks_.clearCues()'),
   'referenceSelectSubtitle 关闭字幕时必须清空归属');
 
 const key = extract('private referenceSubtitleKey');
 assert.ok(key.includes('this.vi.bvid') && key.includes('this.vi.cid'), '身份键必须由 bvid + cid 组成');
 
-// 8) 渲染兜底：身份不符直接关字幕，绝不显示别的视频的 cues。
-const timeUpdateIdx = source.indexOf("this.av.on('timeUpdate'");
-assert.ok(timeUpdateIdx > 0, '缺少 timeUpdate 订阅');
-const timeUpdate = source.slice(timeUpdateIdx, timeUpdateIdx + 1600);
-assert.ok(timeUpdate.includes('this.referenceSubtitleOwner !== this.referenceSubtitleKey()'),
-  'timeUpdate 必须在显示前核对字幕归属身份');
-assert.ok(/referenceSubtitleCues\.length > 0 && this\.referenceSubtitleOwner !== this\.referenceSubtitleKey\(\)/.test(timeUpdate),
-  '身份校验必须带 cues.length>0 守卫（请求中的空 cues 不能被误判成串数据）');
-assert.ok(timeUpdate.includes('this.referenceSubtitleEnabled = false;'),
-  '身份不符时必须关闭字幕，而不是继续显示旧 cues');
+// 8) Progress events use the ownership-aware subtitle lookup.
+const timeUpdate = source.slice(source.indexOf("this.playbackResources_.video.on('timeUpdate'"), source.indexOf("this.playbackResources_.video.on('error'", source.indexOf("this.playbackResources_.video.on('timeUpdate'")));
+assert.ok(timeUpdate.includes('this.updatePlaybackTimeline(player, t)'));
+const timeline = extract('private updatePlaybackTimeline');
+assert.ok(timeline.includes('this.subtitleTracks_.textAt(this.referenceSubtitleKey(), t / 1000)'));
+assert.ok(timeline.includes('if (text === null) this.referenceSubtitleEnabled = false'));
 
 console.log('test-subtitle-identity: all assertions passed');

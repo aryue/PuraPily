@@ -7,7 +7,12 @@ const ast = ts.createSourceFile(file, fs.readFileSync(file, 'utf8'), ts.ScriptTa
 const subject = ast.statements.find(n => ts.isClassDeclaration(n) && n.name.text === 'OfflineInlinePlayer');
 const methods = ['setupL', 'releaseAll'].map(name => subject.members.find(n =>
   ts.isMethodDeclaration(n) && n.name.getText(ast) === name).getText(ast)).join('\n');
-const context = { exports: {}, logWarn() {} };
+const context = { exports: {}, logWarn() {}, require: () => ({ logWarn() {} }) };
+const resourceSource = fs.readFileSync('entry/src/main/ets/services/PlaybackResources.ets', 'utf8');
+vm.runInNewContext(ts.transpileModule(resourceSource, {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 }
+}).outputText, context);
+const { PlaybackResources } = context.exports;
 vm.runInNewContext(ts.transpileModule(`export class Subject { ${methods} }`, {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 }
 }).outputText, context);
@@ -22,21 +27,23 @@ const video = {
   release() { videosReleased++; return Promise.resolve(); }
 };
 const page = new context.exports.Subject();
-Object.assign(page, { av: video, avAudio: { off() {}, release() { audioReleased++; return Promise.resolve(); } },
-  currentTime: 0, cancelSpeedSync() {}, vFd: null, aFd: null });
+const resources = new PlaybackResources();
+resources.video = video;
+resources.audio = { off() {}, release() { audioReleased++; return Promise.resolve(); } };
+Object.assign(page, { playbackResources_: resources, currentTime: 0, cancelSpeedSync() {} });
 page.setupL();
 const oldTime = events.get('timeUpdate');
 oldTime(7100);
 assert.equal(page.currentTime, 7.1, 'live progress still updates normally');
 page.releaseAll();
-assert.equal(page.av, null);
-assert.equal(page.avAudio, null);
+assert.equal(resources.video, null);
+assert.equal(resources.audio, null);
 oldTime(8100);
 assert.equal(page.currentTime, 7.1, 'queued progress from a retired player cannot update the component');
-page.av = {};
+resources.video = {};
 oldTime(9100);
 assert.equal(page.currentTime, 7.1, 'retired callbacks cannot write into a replacement session');
-page.av = null;
+resources.video = null;
 page.releaseAll();
 assert.equal(videosReleased, 1);
 assert.equal(audioReleased, 1);

@@ -9,6 +9,12 @@ export class CommentDataSource implements IDataSource {
   private comments: ObservableComment[] = [];
   private listeners: DataChangeListener[] = [];
 
+  private onCountChange: (count: number) => void;
+
+  constructor(onCountChange: (count: number) => void = () => {}) {
+    this.onCountChange = onCountChange;
+  }
+
   /**
    * 获取数据总数
    */
@@ -51,6 +57,7 @@ export class CommentDataSource implements IDataSource {
    * 通知数据重新加载
    */
   public notifyDataReload(): void {
+    this.onCountChange(this.comments.length);
     this.listeners.forEach(listener => {
       listener.onDataReloaded();
     });
@@ -60,6 +67,7 @@ export class CommentDataSource implements IDataSource {
    * 通知数据添加（在末尾添加）
    */
   public notifyDataAdd(count: number): void {
+    this.onCountChange(this.comments.length);
     this.listeners.forEach(listener => {
       listener.onDataAdded(this.comments.length - count);
     });
@@ -78,6 +86,7 @@ export class CommentDataSource implements IDataSource {
    * 通知数据删除
    */
   public notifyDataDelete(index: number): void {
+    this.onCountChange(this.comments.length);
     this.listeners.forEach(listener => {
       listener.onDataDeleted(index);
     });

@@ -22,7 +22,15 @@ const methods = [
 ].join('\n');
 const context = { exports: {}, window: { Orientation: { AUTO_ROTATION: 0, PORTRAIT: 1, AUTO_ROTATION_LANDSCAPE: 2, AUTO_ROTATION_PORTRAIT: 3 } },
   setTimeout, clearTimeout, logInfo() {}, logWarn() {}, Date, Math };
-vm.runInNewContext(ts.transpileModule(`export class Page { ${methods} }`, {
+const windowControls = fs.readFileSync(path.resolve(__dirname, '../entry/src/main/ets/services/PlaybackWindow.ets'), 'utf8')
+  .replace(/^import .*$/gm, '');
+const viewport = fs.readFileSync(path.resolve(__dirname, '../entry/src/main/ets/utils/PlaybackViewport.ets'), 'utf8');
+vm.runInNewContext(ts.transpileModule(`${windowControls}
+${viewport}
+export class Page {
+  playbackWindow_ = new PlaybackWindow();
+  ${methods}
+}`, {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 }
 }).outputText, context);
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -30,7 +38,7 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function test(feed) {
   const p = new context.exports.Page();
   const orientations = [];
-  Object.assign(p, { referenceLayout: true, referenceFeed: feed, referenceFeedProgress: feed ? 1 : 0,
+  Object.assign(p, { referenceAlive: true, referenceLayout: true, referenceFeed: feed, referenceFeedProgress: feed ? 1 : 0,
     referenceFeedComments: false, referenceInfoHidden: true, referencePanelOffset: -23,
     isLs: false, isLandscapeVertical: false, cw: 440, ch: 744, ar: 16 / 9,
     fs: false, fsEntering: false, isAnimatingToFS: true, rotationInProgress: false,
@@ -85,6 +93,16 @@ async function test(feed) {
   assert.deepEqual(orientations, [42], 'restore the original policy in one request');
 }
 (async () => {
+  const { fullscreenEntryProgress, fullscreenViewportExtent, fullscreenSurfaceExtent, fullscreenCornerRadius } = context.exports;
+  assert.equal(fullscreenEntryProgress(0.3, 0.5), 0);
+  assert.equal(fullscreenEntryProgress(0.75, 0.5), 0.5);
+  assert.equal(fullscreenEntryProgress(1, 1), 1);
+  assert.equal(fullscreenViewportExtent(744, 440, 500, 1, 0.75, 0.5), 622);
+  assert.equal(fullscreenViewportExtent(744, 440, 500, 2, 0.25, 0), 516);
+  assert.equal(fullscreenSurfaceExtent(440, 744, true, 2, 0.25, 0), 516);
+  assert.equal(fullscreenSurfaceExtent(0, 744, false, 0, 0, 0), 1);
+  assert.equal(fullscreenCornerRadius(0, 20, true, 1, 0.75, 0.5), 10);
+  assert.equal(fullscreenCornerRadius(0, 20, true, 2, 0.25, 0), 15);
   const directionPage = new context.exports.Page();
   const requested = [];
   Object.assign(directionPage, { referenceLayout: true, isPcDevice: false,
@@ -111,6 +129,7 @@ async function test(feed) {
     const compiledPage = new context.exports.CompiledPage();
     Object.assign(compiledPage, { referenceLayout: true, isPcDevice: false, isLs: true,
       ar: 9/16, fullscreenSource: { isLandscape: true }, mw: directionPage.mw,
+      playbackWindow_: directionPage.playbackWindow_,
       fullscreenDeviceOrientation: directionPage.fullscreenDeviceOrientation });
     await compiledPage.prepareFullscreenEnvironment();
     assert.equal(requested.at(-1), 2, 'compiled portrait video fullscreen must preserve landscape');
@@ -118,6 +137,10 @@ async function test(feed) {
   await test(false);
   await test(true);
   const p = new context.exports.Page();
+  let alive = true;
+  const settling = p.playbackWindow_.waitForStableViewport(() => true, () => alive);
+  alive = false;
+  assert.equal(await settling, false, 'an exiting page must stop waiting for a stable viewport');
   const applied = [];
   Object.assign(p, { referenceLayout: true, isPcDevice: false,
     isLs: true,

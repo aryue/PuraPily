@@ -143,7 +143,9 @@ for (const referenceFeed of [false, true]) {
   }
 }
 const topBar = playerClass.members.find(n => ts.isMethodDeclaration(n) && n.name.getText(playerAst) === 'ReferenceTopBar');
-assert.ok(!topBar.getText(playerAst).includes('new PageHeader'), 'player overlay buttons must stay transparent');
+const playerTopBar = fs.readFileSync(base + 'components/PlayerTopBar.ts', 'utf8');
+assert.ok(topBar.getText(playerAst).includes('new PlayerTopBar'));
+assert.ok(!playerTopBar.includes('new PageHeader'), 'player overlay buttons must stay transparent');
 const liveFile = base + 'pages/LivePlayerPage.ts';
 const liveAst = ts.createSourceFile(liveFile, fs.readFileSync(liveFile, 'utf8'), ts.ScriptTarget.Latest, true);
 const liveClass = liveAst.statements.find(n => ts.isClassDeclaration(n) && n.name.text === 'LivePlayerPage');

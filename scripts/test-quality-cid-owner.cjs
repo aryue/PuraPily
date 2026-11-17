@@ -16,10 +16,14 @@ function method(name) {
 // Execute the compiler's actual page methods, including the real catalogue creation.
 const code = 'class Page {' + method('applyAcceptQuality') + method('getQlList') + '} globalThis.Page=Page;';
 const context = {};
+const catalog = { exports: {} };
+vm.runInNewContext(ts.transpileModule(fs.readFileSync('entry/build/default/cache/default/default@CompileArkTS/esmodule/debug/entry/src/main/ets/utils/QualityCatalog.ts', 'utf8'), {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 }
+}).outputText, catalog);
+Object.assign(context, catalog.exports);
 vm.runInNewContext(ts.transpileModule(code, {compilerOptions: {target: ts.ScriptTarget.ES2020}}).outputText, context);
 const page = new context.Page();
 page.vi = {bvid: '117517586596030', cid: 123};
-page.ql_ = [];
 page.applyAcceptQuality({url: 'media', actualQn: 120, acceptQuality: [120, 80], acceptDescription: ['4K', '1080P']});
 assert.equal(page.getQlList().length, 2);
 page.vi.bvid = 'BVcanonical';

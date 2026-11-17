@@ -51,13 +51,14 @@ const onPageHideSlice = player.slice(onPageHideAt, onPageHideAt + 2200);
 assert.ok(/topOnHide !== 'pages\/VideoPlayerPage' && topOnHide !== 'pages\/LivePlayerPage'/.test(onPageHideSlice),
   'onPageHide must early-restore theme color only when the revealed page is NOT a player page');
 assert.ok(/restoreThemeStatusBarContent\(/.test(onPageHideSlice) &&
-  onPageHideSlice.indexOf('restoreThemeStatusBarContent(') < onPageHideSlice.indexOf('if (!this.av)'),
+  onPageHideSlice.indexOf('restoreThemeStatusBarContent(') < onPageHideSlice.indexOf('if (!this.playbackResources_.video)'),
   'early restore must run before the playback early-returns in onPageHide');
 
 // 4) VideoPlayerPage.restoreS：存活计数门控 —— 还有下层播放页活着就回写白字（最后写窗口的是白），
 //    归零才恢复主题口径；且先减计数再下发。
-const restoreSAt = player.indexOf('  private async restoreS() {');
-const restoreSSlice = player.slice(restoreSAt, restoreSAt + 1800);
+const playerWindow = fs.readFileSync('entry/src/main/ets/services/PlaybackWindow.ets', 'utf8');
+const restoreSAt = playerWindow.indexOf('  async restoreAfterExit(');
+const restoreSSlice = playerWindow.slice(restoreSAt, playerWindow.indexOf('  captureBrightness(', restoreSAt));
 assert.ok(/immersivePlayerAliveCount/.test(restoreSSlice), 'restoreS must consult the alive-player counter');
 const decAt = restoreSSlice.indexOf("AppStorage.setOrCreate('immersivePlayerAliveCount', remaining)");
 assert.ok(decAt > 0 &&

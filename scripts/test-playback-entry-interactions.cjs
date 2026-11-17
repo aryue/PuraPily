@@ -20,17 +20,24 @@ function interactions() {
   const follow = gate(), status = gate(), lookup = gate();
   const calls = [];
   let cookie = 'account-a';
-  const page = load('pages/VideoPlayerPage', '    private loadInitialVideoInteractions(', '    private scheduleFloatBtnFadeIn(', {
-    AppStorage: { get: () => cookie }, logInfo() {}, logWarn() {},
+  const api = {
     getVideoDetail: () => lookup.promise,
     getFollowStatus() { calls.push('follow'); return follow.promise; },
     getVideoUserStatus() { calls.push('status'); return status.promise; }
+  };
+  const introModule = { exports: {}, require: name => name.includes('BilibiliApi') ? api : { logWarn() {} } };
+  const introSource = fs.readFileSync(root + 'services/PlaybackIntro.ts', 'utf8');
+  vm.runInNewContext(ts.transpileModule(introSource, {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 }
+  }).outputText, introModule);
+  const page = load('pages/VideoPlayerPage', '    private loadInitialVideoInteractions(', '    private scheduleFloatBtnFadeIn(', {
+    AppStorage: { get: () => cookie }, logInfo() {}
   });
   Object.assign(page, { vi: { bvid: 'BVtest', cid: 1 }, referenceAlive: true, referenceSwitchGeneration: 1,
-    interactionRevision: 1, expandedCommentIds: new Set(), savedScrollOffsetMap: new Map(), replyPageMap: new Map(),
-    hasMoreRepliesMap: new Map(), loadingRepliesMap: new Map(), commentDataSource: { clear() {} },
+    playbackResources_: {}, playbackIntro_: new introModule.exports.PlaybackIntro(),
+    interactionRevision: 1, expandedCommentIds: new Set(), savedScrollOffsetMap: new Map(), commentDataSource: { clear() {} },
     commentsInitialized: true, predecodeKeyImages() {}, applyDetailDimension() {},
-    setPlaybackCid(cid) { this.vi.cid = cid; }, initP() { calls.push('init'); },
+    playbackStartupSlot_: { busy: false }, setPlaybackCid(cid) { this.vi.cid = cid; }, initP() { calls.push('init'); },
     loadC() { calls.push('comments'); }, fetchRelatedVideos() { calls.push('related'); } });
   const detail = { bvid: 'BVtest', aid: 2, owner: { mid: 3 }, stat: { like: 4, coin: 5, favorite: 6 }, pages: [] };
   return { page, detail, calls, follow, status, lookup, changeAccount() { cookie = 'account-b'; } };
@@ -55,6 +62,16 @@ async function main() {
     const f = interactions(); const job = f.page.loadD(); stale(f);
     f.lookup.resolve(f.detail); await job;
     assert.equal(f.page.vd, undefined); assert.deepEqual(f.calls, []);
+  }
+  {
+    const f = interactions();
+    const oldLookup = f.page.loadD();
+    await f.page.loadD(f.detail);
+    f.lookup.resolve({ ...f.detail, title: 'superseded detail', aid: 10 });
+    await oldLookup;
+    assert.equal(f.page.vd, f.detail, 'a late request for the same video cannot replace the newer preload');
+    assert.deepEqual(f.calls, ['follow', 'status', 'comments', 'related']);
+    assert.equal(f.page.ldd, false);
   }
   {
     const f = interactions(); f.page.vi.cid = 0; f.detail.cid = 77;

@@ -48,6 +48,6 @@ assert.ok((300 * 1024 * 1024) * 8 / 10 < 300 * 1024 * 1024,
 const pageFile = fs.readFileSync('entry/src/main/ets/pages/VideoPlayerPage.ets', 'utf8');
 assert.doesNotMatch(pageFile, /firstFramePollTimer_/,
   'no dedicated first-frame poll: it only moved the log/state, not a real frame');
-assert.match(pageFile, /\}, 1000\);/, 'diagnostic/stall poll stays at 1s');
+assert.match(fs.readFileSync('entry/src/main/ets/services/PlaybackObservation.ets', 'utf8'), /\}, 1000\);/, 'diagnostic/stall poll stays at 1s');
 
 console.log('Unwarmed startup guards passed');

@@ -10,10 +10,10 @@ const ctx={exports:{},logInfo(){},logWarn(){},logError(){},setTimeout:()=>1,
  FloatingVideoTransition:{active:()=>false,begin(){},finish(){finished++}},
  FloatingVideoSurface:{prepare(){},park(){}},FloatingPiP:{getInstance:()=>({open:async()=>{video.surfaceId='failed-pip';return false}})}};
 vm.runInNewContext(ts.transpileModule('exports.Page=class{'+source.slice(start,end)+'}',{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020}}).outputText,ctx);
-async function main(){const page=new ctx.exports.Page();Object.assign(page,{floatingMorph:false,play:true,av:video,avAudio:null,
+async function main(){const page=new ctx.exports.Page();Object.assign(page,{floatingMorph:false,play:true,playbackResources_:{video,audio:null},
  vi:{bvid:'BV-test',cid:1,title:'video',cover:''},ar:16/9,ct:10,dur:75,prepareFloatingGeometry(){},triggerHaptic(){},
  activeVideoSurfaceId:()=> 'main',getUIContext:()=>({getPromptAction:()=>({showToast(){toasts++}})})});
- await page.minimizeToFloating();assert.equal(page.av,video);assert.equal(video.surfaceId,'main');assert.equal(video.state,'playing');
+ await page.minimizeToFloating();assert.equal(page.playbackResources_.video,video);assert.equal(video.surfaceId,'main');assert.equal(video.state,'playing');
  assert.equal(player.videoPlayer,null);assert.equal(player.hasActivePlayer,false);assert.equal(storage.get('videoMinimized'),false);
  assert.equal(finished,1);assert.equal(toasts,1);console.log('PASS compiled PiP startup failure: decoder/page/Surface retained, no orphaned minimized state');}
 main().catch(error=>{console.error(error);process.exitCode=1});

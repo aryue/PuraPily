@@ -16,9 +16,40 @@ function extract(source, name) {
 const source = fs.readFileSync(root + 'pages/VideoPlayerPage.ts', 'utf8');
 const body = ['referenceOnCompleted', 'referencePlayNextEpisode', 'seasonNeighborEpisode', 'seasonFirstEpisode',
   'isCurrentSeasonEpisode', 'detailIsCurrentVideo'].map(name => extract(source, name)).join('\n');
-const transpiled = ts.transpileModule('class Subject {' + body + '}', { compilerOptions: { target: ts.ScriptTarget.ES2020 } }).outputText;
+const queue = fs.readFileSync('entry/src/main/ets/utils/PlaybackEpisodeQueue.ets', 'utf8');
+const policy = queue.replace(/^import .*$/gm, '').replace(/^export /gm, '');
+const transpiled = ts.transpileModule(policy + '\nclass Subject {' + body + '}', { compilerOptions: { target: ts.ScriptTarget.ES2020 } }).outputText;
 const context = { logInfo: () => {}, logWarn: () => {}, logError: () => {}, console };
 vm.runInNewContext(transpiled + '\nglobalThis.Subject = Subject;', context);
+
+const timers = new Map();
+let now = 0, nextTimer = 0, expirations = 0;
+const timerContext = {
+  exports: {}, Date: { now: () => now },
+  setInterval(callback, ms) { assert.equal(ms, 1000); timers.set(++nextTimer, callback); return nextTimer; },
+  clearInterval(id) { timers.delete(id); }
+};
+const timerSource = fs.readFileSync('entry/src/main/ets/services/PlaybackSleepTimer.ets', 'utf8');
+vm.runInNewContext(ts.transpileModule(timerSource, {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 }
+}).outputText, timerContext);
+const sleepTimer = new timerContext.exports.PlaybackSleepTimer();
+sleepTimer.start(2, () => { expirations++; });
+const obsoleteTick = timers.get(nextTimer);
+sleepTimer.start(1, () => { expirations++; });
+const activeTick = timers.get(nextTimer);
+assert.equal(timers.size, 1, 'replacing the timer leaves one interval');
+now = 59000;
+activeTick(); assert.equal(expirations, 0);
+now = 180000;
+obsoleteTick(); assert.equal(expirations, 0);
+sleepTimer.check(); activeTick(); assert.equal(expirations, 1, 'progress checks and interval ticks share one expiry');
+sleepTimer.start(1, () => { expirations++; });
+const cancelledTick = timers.get(nextTimer);
+sleepTimer.cancel();
+now += 61000;
+cancelledTick(); assert.equal(expirations, 1);
+assert.equal(timers.size, 0);
 
 function seasonOf(episodes) {
   return { ugc_season: { sections: [{ episodes }] } };
@@ -43,14 +74,15 @@ function makePage(overrides = {}) {
   page.referencePortraitFeedActive = () => page.feed;
   page.switchEpisode = async (index) => { page.effects.push('ep:' + index); };
   page.switchSeasonEpisode = async (ep) => { page.effects.push('season:' + ep.bvid); };
-  page.referenceFeedQueue = [];
-  page.ensureReferenceRecommendQueue = async () => page.queue || page.referenceFeedQueue;
+  page.referenceRecommendations_ = { items: [] };
+  page.ensureReferenceRecommendQueue = async () => page.queue || page.referenceRecommendations_.items;
   page.referenceNextVideo = async (step) => { page.effects.push('feed:' + step); };
   page.referencePause = () => { page.effects.push('pause'); };
   page.referenceSetSleep = (minutes) => { page.effects.push('sleep:' + minutes); };
   page.seek = async (time) => { page.effects.push('seek:' + time); };
-  page.av = { play: async () => { page.effects.push('play'); } };
-  page.avAudio = { play: async () => { page.effects.push('audio'); } };
+  page.playbackResources_ = {};
+  page.playbackResources_.video = { play: async () => { page.effects.push('play'); } };
+  page.playbackResources_.audio = { play: async () => { page.effects.push('audio'); } };
   page.markAutoPlay = () => {};
   Object.assign(page, overrides);
   return page;
@@ -109,6 +141,14 @@ const episodes = [{ bvid: 'BVEP1', cid: 11 }, { bvid: 'BVEP2', cid: 22 }, { bvid
   await page.referenceOnCompleted();
   assert.deepEqual(page.effects, ['season:BVEP1'], 'list loop wraps to the first season episode');
 
+  page = makePage({
+    referencePlaybackMode: 'continuous', vi: { bvid: 'BVEP1', cid: 11 }, pages: [{ cid: 11 }],
+    vd: { ugc_season: { sections: [{ episodes: [episodes[0]] }, { episodes: [] }, { episodes: [episodes[1]] }] } },
+    vdBvid_: 'BVEP1'
+  });
+  await page.referenceOnCompleted();
+  assert.deepEqual(page.effects, ['season:BVEP2'], 'autoplay skips empty season sections');
+
   // 分P 优先于合集：多P 稿件的第 2 个 P 播完先走第 3 个 P，而不是跳到下一集
   page = makePage({
     referencePlaybackMode: 'continuous', vi: { bvid: 'BVEP1', cid: 12 }, pages: [{ cid: 11 }, { cid: 12 }, { cid: 13 }],
@@ -125,17 +165,17 @@ const episodes = [{ bvid: 'BVEP1', cid: 11 }, { bvid: 'BVEP2', cid: 22 }, { bvid
   // 连刷：列表循环按自动连播处理（story 队列本身就是无限流），到队尾兜底回队首
   page = makePage({
     referencePlaybackMode: 'listLoop', feed: true,
-    referenceFeedQueue: [{ id: 'BVA' }, { id: 'BVMAIN' }]
+    referenceRecommendations_: { items: [{ id: 'BVA' }, { id: 'BVMAIN' }] }
   });
   await page.referenceOnCompleted();
   assert.deepEqual(page.effects, ['feed:1'], 'feed always advances the story queue');
-  assert.equal(page.referenceFeedQueue[0].id, 'BVMAIN', 'story queue wraps only at its real end');
+  assert.equal(page.referenceRecommendations_.items[0].id, 'BVMAIN', 'story queue wraps only at its real end');
 
   // 连刷 + 自动连播：非队尾时不重排队列
-  page = makePage({ referencePlaybackMode: 'continuous', feed: true, referenceFeedQueue: [{ id: 'BVMAIN' }, { id: 'BVB' }] });
+  page = makePage({ referencePlaybackMode: 'continuous', feed: true, referenceRecommendations_: { items: [{ id: 'BVMAIN' }, { id: 'BVB' }] } });
   await page.referenceOnCompleted();
   assert.deepEqual(page.effects, ['feed:1']);
-  assert.equal(page.referenceFeedQueue[0].id, 'BVMAIN', 'queue keeps its order mid-list');
+  assert.equal(page.referenceRecommendations_.items[0].id, 'BVMAIN', 'queue keeps its order mid-list');
 
   // 定时关闭的「播完当前视频」优先级最高：不再连播
   page = makePage({ referencePlaybackMode: 'continuous', referenceStopAtEnd: true, pages: [{ cid: 1 }, { cid: 2 }] });

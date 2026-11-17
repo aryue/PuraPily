@@ -3,6 +3,11 @@ const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const ts = require(process.env.ARK_TYPESCRIPT || 'D:/Program Files/Huawei/DevEco Studio/sdk/default/openharmony/ets/build-tools/ets-loader/node_modules/typescript');
 const page = fs.readFileSync('entry/src/main/ets/pages/VideoPlayerPage.ets', 'utf8').replace(/\r\n/g, '\n');
+const reporter = { exports: {}, require: () => ({ logInfo() {} }) };
+vm.runInNewContext(ts.transpileModule(fs.readFileSync('entry/src/main/ets/services/PlaybackProgressReporter.ets', 'utf8'), {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 }
+}).outputText, reporter);
+const { PlaybackProgressReporter } = reporter.exports;
 function between(source, start, end) {
   const a = source.indexOf(start), b = source.indexOf(end, a + start.length);
   assert.ok(a >= 0 && b > a, `missing slice: ${start}`);
@@ -41,8 +46,10 @@ const newEp = oldVd.ugc_season.sections[1].episodes[0];
 function makePage() {
   const p = new context.exports.Page();
   const started = [], comments = [], related = [];
+  const progressReporter = new PlaybackProgressReporter();
+  assert.equal(progressReporter.acceptHeartbeat(99), true);
   Object.assign(p, {
-    referenceAlive: true,
+    referenceAlive: true, playbackStartupSlot_: { busy: false, waitForIdle: async current => current() },
     vi: { bvid: 'BVold', cid: 10, title: 'Old title', cover: 'old.jpg', duration: 60 },
     vd: oldVd,
     vdBvid_: 'BVold',
@@ -55,12 +62,15 @@ function makePage() {
     seasonSwitchSeq_: 0,
     seasonSectionIndex: 0,
     ct: 42,
-    lastHeartbeatTime: 99,
+    playbackProgressReporter_: progressReporter,
     initialProgress_: 42,
     commentCursor: 3,
     commentDataSource: { cleared: 0, clear() { this.cleared++; } },
     likeCount: 1, coinCount: 1, favoriteCount: 1,
-    setPlaybackCid: cid => { p.vi.cid = cid; },
+    setPlaybackCid: (cid, bvid = p.vi.bvid, aid) => {
+      p.vi.cid = cid; p.vi.bvid = bvid;
+      if (aid !== undefined) p.aidFromParams_ = aid;
+    },
     release: async () => {},
     initP: async () => { started.push(p.vi.cid); },
     loadC: aid => comments.push(aid),
@@ -89,7 +99,8 @@ async function main() {
   assert.equal(p.pendingEpisodeIndex_, -1);
   assert.equal(p.seasonSectionIndex, 1, 'section follows the target episode');
   assert.equal(p.ct, 0);
-  assert.equal(p.lastHeartbeatTime, 0);
+  assert.equal(p.playbackProgressReporter_.acceptHeartbeat(4), false);
+  assert.equal(p.playbackProgressReporter_.acceptHeartbeat(5), true);
   assert.equal(p.initialProgress_, 0);
   assert.equal(p.commentDataSource.cleared, 1);
   assert.deepEqual(p.started, [20], 'playback starts from the new episode cid');

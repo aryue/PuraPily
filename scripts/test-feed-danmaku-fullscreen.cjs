@@ -5,12 +5,17 @@ const assert = require('node:assert/strict');
 const ts = require(process.env.ARK_TYPESCRIPT || 'D:/Program Files/Huawei/DevEco Studio/sdk/default/openharmony/ets/build-tools/ets-loader/node_modules/typescript');
 const source = fs.readFileSync(path.join(__dirname, '../entry/src/main/ets/pages/VideoPlayerPage.ets'), 'utf8');
 
-// 提取弹幕几何相关方法（ovDanmakuCW → dmScaleFactor），转译后在桩对象上做数值断言。
+// 提取弹幕几何相关方法（ovDanmakuCW → dmPositionY），转译后在桩对象上做数值断言。
 const start = source.indexOf('  private ovDanmakuCW(');
 const end = source.indexOf('  /** ⭐ 首次 build 前同步估算常驻层矩形');
 assert.ok(start > 0 && end > start, 'danmaku geometry methods must stay in place');
 const methods = source.slice(start, end);
 const context = { exports: {} };
+const viewport = { exports: {} };
+vm.runInNewContext(ts.transpileModule(fs.readFileSync('entry/src/main/ets/utils/PlaybackViewport.ets', 'utf8'), {
+  compilerOptions: { module: ts.ModuleKind.CommonJS }
+}).outputText, viewport);
+Object.assign(context, viewport.exports);
 vm.runInNewContext(ts.transpileModule(`export class Page { ${methods} }`, {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 }
 }).outputText, context);
@@ -55,8 +60,6 @@ assert.equal(page.dmPositionY(), 40 - 174, 'full-screen danmaku starts at the sa
 assert.equal(page.dmPositionY() + page.ovRectY() + page.ovDanmakuCH(), 744);
 
 // 3) 连刷弹幕画布不再借用视频 surface 的基准+scale 通道（否则整屏口径被 scale 压回画幅）。
-assert.equal(page.dmTransformChannel(), false, 'feed danmaku must not ride the portrait surface transform channel');
-assert.equal(page.dmScaleFactor(), 1, 'feed danmaku canvas must render at 1:1');
 
 // 4) 评论展开（amount=1）：弹幕收回视频区，不盖评论列表 —— 保持旧行为。
 feedPage({ mediaW: 418.5, mediaH: 744, rectX: 10.75, rectY: 0, amount: 1 });
@@ -86,8 +89,6 @@ Object.assign(page, {
 });
 assert.equal(page.ovDanmakuCW(), 440, 'non-feed portrait: danmaku covers the whole playback area width, not the media strip');
 assert.equal(page.ovDanmakuCH(), 386.9, 'non-feed portrait: danmaku covers the whole playback area height');
-assert.equal(page.dmTransformChannel(), false, 'portrait danmaku must not ride the video surface scale channel (it would squeeze the canvas back to the media box)');
-assert.equal(page.dmScaleFactor(), 1, 'portrait danmaku renders 1:1');
 assert.equal(page.dmPositionX(), 0, 'portrait danmaku starts at the screen left edge');
 assert.equal(page.dmPositionY(), 0, 'portrait danmaku starts at the playback area top (below the safe area)');
 
@@ -118,9 +119,10 @@ assert.equal(page.ovDanmakuCH(), 519, 'landscape fullscreen branch untouched');
 
 // 7) 源码口径：弹幕层定位/缩放必须用 dm 专用通道；视频 surface 的 portraitBase+scale 保持原样。
 assert.ok(/dmPositionX\(\)/.test(source) && /dmPositionY\(\)/.test(source), 'danmaku stack must use the dm position helpers');
-assert.ok(/\.scale\(\{ x: this\.dmScaleFactor\(\), y: this\.dmScaleFactor\(\) \}\)/.test(source), 'danmaku stack must use the dm scale factor');
-const danmakuBlock = source.slice(source.indexOf('DanmakuView({'), source.indexOf('VideoControls({'));
-assert.ok(!danmakuBlock.includes('this.portraitScaleByTransform()'), 'danmaku block must not consult the global portrait transform flag directly');
+const layer = fs.readFileSync('entry/src/main/ets/components/PlaybackDanmakuLayer.ets', 'utf8');
+assert.doesNotMatch(layer, /\.scale\(|portraitBase|portraitScale/);
+assert.match(layer, /visibility\(this.visible \? Visibility.Visible : Visibility.Hidden\)/);
+assert.match(layer, /ForEach\(\[this.cid\]/);
 assert.ok(source.split('this.portraitScaleByTransform()').length > 5, 'video surface keeps using the portrait transform channel');
 
 console.log('PASS: feed danmaku canvas spans the full screen (minus top safe area) regardless of video aspect; comments expansion still shrinks it back');

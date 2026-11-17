@@ -22,7 +22,8 @@ function fixture() {
     async play() { this.plays++; this.state = 'playing'; },
     async pause() { this.pauses++; this.state = 'paused'; } });
   Object.assign(p, { referenceAlive: true, playerPageVisible: true, bgp: false, appInBackground: false,
-    userPaused_: false, play: false, av: track(), avAudio: track(),
+    playbackWindow_: { keepScreenOn() {}, cancelBarsRefresh() {} },
+    userPaused_: false, play: false, playbackResources_: { video: track(), audio: track() },
     playbackListPrefetch: { pause() {} }, releaseReferenceFeedPreview() {} });
   return p;
 }
@@ -30,35 +31,35 @@ async function main() {
   for (const bgp of [false, true]) {
     const p = fixture(); p.bgp = bgp;
     p.onPageHide();
-    assert.equal(await p.startPagePlayback(p.av), false, 'late prepare after navigation must not start');
-    assert.equal(p.av.plays + p.avAudio.plays, 0);
-    assert.equal(p.av.pauses, 0, 'preparing/prepared player cannot be paused');
+    assert.equal(await p.startPagePlayback(p.playbackResources_.video), false, 'late prepare after navigation must not start');
+    assert.equal(p.playbackResources_.video.plays + p.playbackResources_.audio.plays, 0);
+    assert.equal(p.playbackResources_.video.pauses, 0, 'preparing/prepared player cannot be paused');
     p.playerPageVisible = true;
-    assert.equal(await p.startPagePlayback(p.av), true, 'return resumes a prepared player');
-    assert.equal(p.avAudio.plays, 1);
+    assert.equal(await p.startPagePlayback(p.playbackResources_.video), true, 'return resumes a prepared player');
+    assert.equal(p.playbackResources_.audio.plays, 1);
     p.play = true; p.onPageHide();
-    assert.equal(p.av.state, 'paused'); assert.equal(p.avAudio.state, 'paused');
+    assert.equal(p.playbackResources_.video.state, 'paused'); assert.equal(p.playbackResources_.audio.state, 'paused');
   }
   for (const duringAudio of [false, true]) {
-    const p = fixture(), pending = gate(), track = duringAudio ? p.avAudio : p.av;
+    const p = fixture(), pending = gate(), track = duringAudio ? p.playbackResources_.audio : p.playbackResources_.video;
     track.play = async function () { this.plays++; await pending.promise; this.state = 'playing'; };
-    const starting = p.startPagePlayback(p.av);
+    const starting = p.startPagePlayback(p.playbackResources_.video);
     await Promise.resolve();
     p.onPageHide(); pending.resolve();
     assert.equal(await starting, false, 'native play completion after hide must be stopped');
-    assert.notEqual(p.av.state, 'playing'); assert.notEqual(p.avAudio.state, 'playing');
-    if (!duringAudio) assert.equal(p.avAudio.plays, 0);
+    assert.notEqual(p.playbackResources_.video.state, 'playing'); assert.notEqual(p.playbackResources_.audio.state, 'playing');
+    if (!duringAudio) assert.equal(p.playbackResources_.audio.plays, 0);
   }
   const seek = fixture(), waiting = gate();
-  const resume = (async () => { await waiting.promise; return seek.startPagePlayback(seek.av); })();
+  const resume = (async () => { await waiting.promise; return seek.startPagePlayback(seek.playbackResources_.video); })();
   seek.onPageHide(); waiting.resolve();
   assert.equal(await resume, false, 'late resume seek must not start');
   const paused = fixture(); paused.userPaused_ = true;
-  assert.equal(await paused.startPagePlayback(paused.av), false);
+  assert.equal(await paused.startPagePlayback(paused.playbackResources_.video), false);
   const background = fixture(); background.bgp = true; background.appInBackground = true;
   background.onPageHide();
-  assert.equal(await background.startPagePlayback(background.av), true, 'confirmed background playback remains allowed');
-  const retired = fixture(), old = retired.av; retired.av = {};
+  assert.equal(await background.startPagePlayback(background.playbackResources_.video), true, 'confirmed background playback remains allowed');
+  const retired = fixture(), old = retired.playbackResources_.video; retired.playbackResources_.video = {};
   assert.equal(await retired.startPagePlayback(old), false);
   // Verify actual compiled startup callbacks route every audible start through the guard.
   const prepared = method("        case 'prepared':", "        case 'completed':");

@@ -6,14 +6,21 @@ const root = 'entry/build/default/cache/default/default@CompileArkTS/esmodule/de
 const source = fs.readFileSync(root + 'utils/PlaybackHdrUi.ts', 'utf8')
   .replace(/^import .*;\s*$/gm, '').replace(/export /g, '');
 let deny = false, calls = [];
+let brightnessListener, subscriptions = 0, removals = 0;
 const context = {
-  deviceInfo: { sdkApiVersion: 24 },
+  deviceInfo: { sdkApiVersion: 24, apiAvailable(version) { return this.sdkApiVersion >= version; } },
+  display: {
+    getDefaultDisplaySync: () => ({ id: 7 }),
+    getBrightnessInfo: () => ({ currentHeadroom: 2.23, sdrNits: 100 }),
+    on(event, callback) { assert.equal(event, 'brightnessInfoChange'); brightnessListener = callback; subscriptions++; },
+    off(event, callback) { assert.equal(event, 'brightnessInfoChange'); assert.equal(callback, brightnessListener); removals++; }
+  },
   uiEffect: { createFilter: () => ({ hdrBrightnessRatio: ratio => {
     if (deny) throw new Error('permission denied');
     calls.push(ratio); return { ratio };
   } }) }, console: { warn() {} }
 };
-vm.runInNewContext(ts.transpileModule(source, {compilerOptions: {target: ts.ScriptTarget.ES2020}}).outputText, context);
+vm.runInNewContext(ts.transpileModule(source + '\nglobalThis.Headroom = PlaybackHdrHeadroom;', {compilerOptions: {target: ts.ScriptTarget.ES2020}}).outputText, context);
 const ratio = context.playbackHdrUiRatio, filter = context.playbackHdrUiFilter;
 for (const q of [16, 32, 64, 80, 112, 116, 120, 127]) assert.equal(ratio(q, 8), 1, 'SDR never enables HDR UI');
 for (const q of [125, 126]) {
@@ -32,6 +39,17 @@ assert.equal(calls.length, 1);
 assert.equal(filter(3).ratio, 3, 'reacts to display brightness change');
 deny = true; assert.equal(filter(4), undefined, 'permission failure leaves usable SDR controls');
 assert.equal(filter(1), undefined, 'leaving HDR removes the effect');
+const headroom = new context.Headroom(), brightness = [];
+headroom.start((value, nits) => brightness.push([value, nits]));
+headroom.start(() => assert.fail('duplicate subscription'));
+brightnessListener(8, { currentHeadroom: 3, sdrNits: 90 });
+brightnessListener(7, { currentHeadroom: 2.24, sdrNits: 110 });
+brightnessListener(7, { currentHeadroom: 2.27, sdrNits: 120 });
+brightnessListener(7, { currentHeadroom: 8, sdrNits: 130 });
+headroom.stop(); headroom.stop();
+brightnessListener(7, { currentHeadroom: 1, sdrNits: 140 });
+assert.deepEqual(brightness, [[2, 100], [2.25, 120], [4, 130]]);
+assert.equal(subscriptions, 1); assert.equal(removals, 1);
 const player = fs.readFileSync(root + 'pages/VideoPlayerPage.ts', 'utf8');
 const group = player.match(/Stack\.renderGroup\((this\.qn !== 125[\s\S]*?)\);/);
 assert.ok(group, 'compiled player contains HDR-aware group-cache policy');

@@ -1,7 +1,8 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const assert = require('node:assert/strict');
-const source = fs.readFileSync(path.join(__dirname, '../entry/src/main/ets/pages/VideoPlayerPage.ets'), 'utf8');
+const source = ['pages/VideoPlayerPage.ets', 'components/FeedPreviewChrome.ets']
+  .map(file => fs.readFileSync(path.join(__dirname, '../entry/src/main/ets', file), 'utf8')).join('\n');
 
 // 连刷底部操作行：四个按钮（点赞/投币/收藏/评论）原来各带 layoutWeight(1)，
 // 与弹幕输入框按 2:1:1:1:1 的权重分屏宽 → 平板上单个按钮被拉到 200vp+，图标间距随屏宽无限变大。
@@ -34,7 +35,8 @@ for (const [i, block] of blocks.entries()) {
 }
 
 // 组件本身仍用权重均分——均分的是那个固定宽度的组，而不是整行。
-const action = source.slice(source.indexOf('struct ReferencePlayerAction {'));
+const controls = fs.readFileSync(path.join(__dirname, '../entry/src/main/ets/components/PlayerEngagementControls.ets'), 'utf8');
+const action = controls.slice(controls.indexOf('struct ReferencePlayerAction {'));
 const actionBody = action.slice(0, action.indexOf('\n}\n'));
 assert.match(actionBody, /\.layoutWeight\(1\)/, 'ReferencePlayerAction still splits the fixed group evenly');
 
