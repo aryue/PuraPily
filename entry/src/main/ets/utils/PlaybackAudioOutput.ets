@@ -1,6 +1,5 @@
 import type { PlaybackPlayer } from '../services/PlaybackPlayer';
 import { audio } from '@kit.AudioKit';
-import { media } from '@kit.MediaKit';
 import { manager, remoteDevice, constant } from '@kit.NearLinkKit';
 import { a2dp, connection } from '@kit.ConnectivityKit';
 import { abilityAccessCtrl, common, Permissions } from '@kit.AbilityKit';
@@ -9,6 +8,9 @@ import { headphoneIconName } from './HeadphoneIcons';
 
 // Ask only when a selected wireless route needs metadata, at most once per process.
 const metadataPermissionsAttempted: Set<string> = new Set<string>();
+const DEFAULT_HEADPHONE_ICON: string = 'headphones_fill';
+const EARLY_METADATA_RETRY_DELAYS: number[] = [200, 450, 850];
+const MAX_BLUETOOTH_METADATA_RETRIES: number = 12;
 
 interface NearLinkHeadphone {
   address: string;
@@ -59,21 +61,43 @@ function uniqueA2dpPeerName(): string {
   } catch (_) { return ''; }
 }
 
-export function outputHeadphoneIcon(devices: audio.AudioDeviceDescriptors): string {
+function selectedHeadphone(devices: audio.AudioDeviceDescriptors): audio.AudioDeviceDescriptor | undefined {
   const selected = devices.filter((device: audio.AudioDeviceDescriptor) => isHeadphoneOutput([device]));
-  if (selected.length !== 1) return 'headphones_fill';
-  const route = selected[0];
+  return selected.length === 1 ? selected[0] : undefined;
+}
+
+function isBluetoothHeadphone(route: audio.AudioDeviceDescriptor): boolean {
+  return route.deviceType === audio.DeviceType.BLUETOOTH_A2DP ||
+    route.deviceType === audio.DeviceType.BLUETOOTH_SCO;
+}
+
+function headphoneName(route: audio.AudioDeviceDescriptor, preferredName?: () => string): string {
   // NearLink audio descriptors may contain the phone's displayName, not the peer's name.
-  if (route.deviceType === audio.DeviceType.NEARLINK) return headphoneIconName(selectedNearLinkName(route));
-  let name = descriptorBluetoothName(route);
-  if (!name && (route.deviceType === audio.DeviceType.BLUETOOTH_A2DP ||
-    route.deviceType === audio.DeviceType.BLUETOOTH_SCO)) {
-    if (route.address) {
-      try { name = connection.getRemoteDeviceName(route.address); } catch (_) {}
-    }
-    if (!name) name = uniqueA2dpPeerName();
+  if (route.deviceType === audio.DeviceType.NEARLINK) return selectedNearLinkName(route).trim();
+  const name = descriptorBluetoothName(route).trim();
+  if (name || !isBluetoothHeadphone(route)) return name;
+  const preferred = preferredName?.();
+  if (preferred) return preferred;
+  if (route.address) {
+    try { return connection.getRemoteDeviceName(route.address).trim(); } catch (_) { return ''; }
   }
-  return headphoneIconName(name);
+  return uniqueA2dpPeerName().trim();
+}
+
+export function outputHeadphoneIcon(devices: audio.AudioDeviceDescriptors): string {
+  const route = selectedHeadphone(devices);
+  return route ? headphoneIconName(headphoneName(route)) : DEFAULT_HEADPHONE_ICON;
+}
+
+function routesConflict(previous: audio.AudioDeviceDescriptor, current: audio.AudioDeviceDescriptor): boolean {
+  if (previous.deviceType !== current.deviceType) return true;
+  if (previous.address && current.address) return previous.address.toUpperCase() !== current.address.toUpperCase();
+  return previous.id > 0 && current.id > 0 && previous.id !== current.id;
+}
+
+function sameRoute(previous: audio.AudioDeviceDescriptor, current: audio.AudioDeviceDescriptor): boolean {
+  if (routesConflict(previous, current)) return false;
+  return (previous.id > 0 && previous.id === current.id) || (!!previous.address && !!current.address);
 }
 
 /** Only the selected playback route counts; a connected but unused headset does not. */
@@ -93,8 +117,10 @@ export class PlaybackAudioOutputMonitor {
   private onChange: (headphones: boolean, icon: string) => void;
   private context: (() => common.UIAbilityContext | undefined) | undefined;
   private devices: audio.AudioDeviceDescriptors = [];
+  private iconRoute: audio.AudioDeviceDescriptor | undefined;
+  private icon: string = DEFAULT_HEADPHONE_ICON;
+  private rendererInfo: audio.AudioRendererInfo | undefined;
   private metadataTimer: number = -1;
-  private metadataUnlimited: boolean = false;
   private metadataAttempts: number = 0;
   private generation: number = 0;
   private hasActualRoute: boolean = false;
@@ -105,8 +131,53 @@ export class PlaybackAudioOutputMonitor {
     this.context = context;
   }
 
-  private publish(): void {
-    this.onChange(isHeadphoneOutput(this.devices), outputHeadphoneIcon(this.devices));
+  private preferredDevices(): audio.AudioDeviceDescriptors {
+    if (!this.rendererInfo) return [];
+    try {
+      return audio.getAudioManager().getRoutingManager()
+        .getPreferredOutputDeviceForRendererInfoSync(this.rendererInfo);
+    } catch (_) { return []; }
+  }
+
+  private preferredName(route: audio.AudioDeviceDescriptor): string {
+    if (!this.hasActualRoute) return '';
+    // The preferred descriptor can expose a name hidden by the stream descriptor.
+    const preferred = selectedHeadphone(this.preferredDevices());
+    return preferred && sameRoute(route, preferred) ? descriptorBluetoothName(preferred).trim() : '';
+  }
+
+  private refreshIcon(): void {
+    const route = selectedHeadphone(this.devices);
+    const nearlink = route?.deviceType === audio.DeviceType.NEARLINK;
+    const bluetooth = !!route && isBluetoothHeadphone(route);
+    const name = route ? headphoneName(route, () => this.preferredName(route)) : '';
+    if (route && name) {
+      this.icon = headphoneIconName(name);
+      // Keep any identity fields from a richer descriptor when the stream omits them.
+      const previous = this.iconRoute;
+      this.iconRoute = previous && sameRoute(previous, route) && previous.address && !route.address ? previous : route;
+      this.metadataAttempts = 0;
+    } else if (!route || (!nearlink && !bluetooth) ||
+      (this.metadataAttempts >= EARLY_METADATA_RETRY_DELAYS.length &&
+        (!this.iconRoute || !sameRoute(this.iconRoute, route)))) {
+      this.clearIcon();
+    }
+    this.onChange(isHeadphoneOutput(this.devices), this.icon);
+    if (nearlink || (bluetooth && !name && this.metadataAttempts < MAX_BLUETOOTH_METADATA_RETRIES)) {
+      this.scheduleMetadataPoll(nearlink && !!name);
+    } else {
+      this.stopMetadataPoll();
+    }
+    if (nearlink) {
+      this.requestMetadata('ohos.permission.ACCESS_NEARLINK');
+    } else if (bluetooth && !name) {
+      this.requestMetadata('ohos.permission.ACCESS_BLUETOOTH');
+    }
+  }
+
+  private clearIcon(): void {
+    this.icon = DEFAULT_HEADPHONE_ICON;
+    this.iconRoute = undefined;
   }
 
   private async requestMetadata(permission: Permissions): Promise<void> {
@@ -117,99 +188,91 @@ export class PlaybackAudioOutputMonitor {
     const generation = this.generation;
     try {
       await abilityAccessCtrl.createAtManager().requestPermissionsFromUser(context, [permission]);
-      if (this.player && generation === this.generation) this.publish();
+      if (this.player && generation === this.generation) this.refreshIcon();
     } catch (_) {}
   }
 
-  private update(devices: audio.AudioDeviceDescriptors): void {
-    this.devices = devices;
-    // 联调诊断：verboseLog on 时打印 descriptor 原始字段与解析结果，定位蓝牙名字来源。
-    logInfo('AudioOutput update devices=', JSON.stringify(devices),
-      '→ icon=', outputHeadphoneIcon(devices));
-    this.publish();
-    const nearlink = devices.some((device: audio.AudioDeviceDescriptor) => device.deviceType === audio.DeviceType.NEARLINK);
-    if (nearlink) {
-      this.requestMetadata('ohos.permission.ACCESS_NEARLINK');
-      this.startMetadataPoll(true);
-    } else {
-      // dmDeviceInfo 已带名字的不算无名字（免权限申请与轮询）；name/address/dmDeviceInfo 全空才需要兜底解析。
-      const namelessBluetooth = devices.some((device: audio.AudioDeviceDescriptor) =>
-        (device.deviceType === audio.DeviceType.BLUETOOTH_A2DP ||
-          device.deviceType === audio.DeviceType.BLUETOOTH_SCO) && !descriptorBluetoothName(device));
-      if (namelessBluetooth) {
-        this.requestMetadata('ohos.permission.ACCESS_BLUETOOTH');
-      }
-      // 冷启动蓝牙栈常晚于首次 publish 才就绪，getRemoteDeviceName 那一刻拿不到名字；
-      // 只要耳机路由还没解析出具体设备图标就周期重试，解析成功或到上限后停止。
-      if (namelessBluetooth && isHeadphoneOutput(devices) &&
-        outputHeadphoneIcon(devices) === 'headphones_fill') {
-        this.startMetadataPoll(false);
-      } else {
-        this.stopMetadataPoll();
-      }
+  private update(devices: audio.AudioDeviceDescriptors, deviceChanged: boolean = false): void {
+    const route = selectedHeadphone(devices);
+    const previous = selectedHeadphone(this.devices);
+    if (!route || (previous && routesConflict(previous, route)) ||
+      (this.iconRoute && routesConflict(this.iconRoute, route)) ||
+      (deviceChanged && (!this.iconRoute || !sameRoute(this.iconRoute, route)))) {
+      this.clearIcon();
+      this.stopMetadataPoll();
+      this.metadataAttempts = 0;
     }
+    this.devices = devices;
+    this.refreshIcon();
+    logInfo('AudioOutput update devices=', JSON.stringify(devices), '→ icon=', this.icon);
   }
 
-  /** NearLink 沿用无限轮询；蓝牙名字晚到只有限重试（12 次 ≈ 30s），解析成功即停。 */
-  private startMetadataPoll(unlimited: boolean): void {
-    this.metadataUnlimited = this.metadataUnlimited || unlimited;
+  /** 起播先密集补读三次；蓝牙最多重试 12 次，星闪继续低频刷新。 */
+  private scheduleMetadataPoll(slow: boolean): void {
     if (this.metadataTimer >= 0) return;
-    this.metadataAttempts = 0;
-    this.metadataTimer = setInterval(() => {
+    const delay = !slow && this.metadataAttempts < EARLY_METADATA_RETRY_DELAYS.length ?
+      EARLY_METADATA_RETRY_DELAYS[this.metadataAttempts] : 2500;
+    this.metadataTimer = setTimeout(() => {
+      this.metadataTimer = -1;
       this.metadataAttempts++;
-      this.publish();
-      if (!this.metadataUnlimited &&
-        (outputHeadphoneIcon(this.devices) !== 'headphones_fill' || this.metadataAttempts >= 12)) {
-        this.stopMetadataPoll();
-      }
-    }, 2500);
+      this.refreshIcon();
+    }, delay);
   }
 
   private stopMetadataPoll(): void {
-    this.metadataUnlimited = false;
-    this.metadataAttempts = 0;
     if (this.metadataTimer >= 0) {
-      clearInterval(this.metadataTimer);
+      clearTimeout(this.metadataTimer);
       this.metadataTimer = -1;
     }
   }
 
   bind(player: PlaybackPlayer, fallbackUsage: audio.StreamUsage): void {
+    const rendererInfo: audio.AudioRendererInfo = player.audioRendererInfo ?? { usage: fallbackUsage, rendererFlags: 0 };
     if (this.player !== player) {
-      this.dispose();
+      this.unbind();
       try {
         audio.getAudioManager().getRoutingManager().declareDeviceTypesCompatibility([audio.DeviceType.NEARLINK]);
       } catch (_) {}
       this.player = player;
+      this.rendererInfo = rendererInfo;
       const listener = (info: audio.AudioStreamDeviceChangeInfo): void => {
         if (this.player === player && this.listener === listener) {
+          const reason = info.changeReason;
+          const deviceChanged = this.hasActualRoute &&
+            (reason === audio.AudioStreamDeviceChangeReason.REASON_NEW_DEVICE_AVAILABLE ||
+              reason === audio.AudioStreamDeviceChangeReason.REASON_OLD_DEVICE_UNAVAILABLE ||
+              reason === audio.AudioStreamDeviceChangeReason.REASON_OVERRODE);
           this.hasActualRoute = true;
-          this.update(info.devices);
+          this.update(info.devices, deviceChanged);
         }
       };
       this.listener = listener;
       try { player.on('audioOutputDeviceChangeWithInfo', listener); } catch (_) {}
+    } else {
+      this.rendererInfo = rendererInfo;
     }
     // Seed before the first AVPlayer event; later binds cannot overwrite its actual route.
     if (this.hasActualRoute) return;
-    try {
-      const rendererInfo: audio.AudioRendererInfo = player.audioRendererInfo ?? { usage: fallbackUsage, rendererFlags: 0 };
-      logInfo('AudioOutput bind seed usage=', String(rendererInfo.usage), ' hasActualRoute=', String(this.hasActualRoute));
-      const devices: audio.AudioDeviceDescriptors = audio.getAudioManager().getRoutingManager()
-        .getPreferredOutputDeviceForRendererInfoSync(rendererInfo);
-      if (this.player === player && !this.hasActualRoute) this.update(devices);
-    } catch (_) {}
+    const devices = this.preferredDevices();
+    if (this.player === player && !this.hasActualRoute && devices.length > 0) this.update(devices);
   }
 
   dispose(): void {
+    this.unbind();
+    this.clearIcon();
+  }
+
+  private unbind(): void {
     const player = this.player;
     const listener = this.listener;
     this.player = null;
     this.listener = null;
     this.generation++;
     this.devices = [];
+    this.rendererInfo = undefined;
     this.hasActualRoute = false;
     this.stopMetadataPoll();
+    this.metadataAttempts = 0;
     if (player && listener) {
       try { player.off('audioOutputDeviceChangeWithInfo', listener); } catch (_) {}
     }

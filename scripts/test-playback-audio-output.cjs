@@ -6,7 +6,8 @@ const root = 'entry/build/default/cache/default/default@CompileArkTS/esmodule/de
 const DeviceType = { SPEAKER: 2, WIRED_HEADSET: 3, WIRED_HEADPHONES: 4, BLUETOOTH_SCO: 7, BLUETOOTH_A2DP: 8, USB_HEADSET: 22, NEARLINK: 31 };
 const devices = type => [{ deviceType: type }];
 let route = devices(DeviceType.SPEAKER), queriedUsage;
-const audio = { DeviceType, getAudioManager: () => ({ getRoutingManager: () => ({
+const audio = { DeviceType, AudioStreamDeviceChangeReason: { REASON_NEW_DEVICE_AVAILABLE: 1,
+  REASON_OLD_DEVICE_UNAVAILABLE: 2, REASON_OVERRODE: 3 }, getAudioManager: () => ({ getRoutingManager: () => ({
   getPreferredOutputDeviceForRendererInfoSync(info) { queriedUsage = info.usage; return route; }
 }) }) };
 const iconContext = { exports: {}, $r: value => value };
@@ -41,6 +42,7 @@ const remoteDevice = { createRemoteDevice: address => {
     getDeviceClass: () => peer.category };
 } };
 const timers = new Map(); let timerId = 0;
+const timerDelays = [];
 let resolvePermission, permissionRequests = 0;
 let remoteName = 'FreeBuds Studio', remoteNameFailure = false;
 let a2dpConnectedDevices = [], a2dpFailure = false;
@@ -48,8 +50,12 @@ const a2dpProfile = { getConnectedDevices: () => {
   if (a2dpFailure) throw Error('a2dp query failed');
   return a2dpConnectedDevices;
 }, getPlayingState: () => 0 };
-const context = { exports: {}, setInterval: fn => { timers.set(++timerId, fn); return timerId; },
-  clearInterval: id => timers.delete(id), require: name => {
+const context = { exports: {}, setTimeout: (fn, delay) => {
+  const id = ++timerId;
+  timerDelays.push(delay);
+  timers.set(id, () => { timers.delete(id); fn(); });
+  return id;
+}, clearTimeout: id => timers.delete(id), require: name => {
     if (name.includes('HeadphoneIcons')) return iconContext.exports;
     if (name.includes('Logger')) return {
       logInfo: () => {}, logWarn: () => {}, logError: () => {}, setVerboseLog: () => {} };
@@ -105,7 +111,12 @@ assert.equal(outputHeadphoneIcon([{ deviceType: 8, name: '', address: '' }]), 'h
 a2dpFailure = true; a2dpConnectedDevices = [peer.address];
 assert.equal(outputHeadphoneIcon([{ deviceType: 8, name: '', address: '' }]), 'headphones_fill',
   'a2dp query failure keeps the generic icon');
-a2dpFailure = false; a2dpConnectedDevices = [];
+a2dpFailure = false;
+remoteNameFailure = true;
+assert.equal(outputHeadphoneIcon([{ deviceType: 8, address: 'AA:BB:CC:DD:EE:02' }]), 'headphones_fill',
+  'lookup failure for a selected address cannot borrow the icon of a different connected peer');
+remoteNameFailure = false;
+a2dpConnectedDevices = [];
 assert.equal(isHeadphoneOutput([]), false);
 assert.equal(isHeadphoneOutput(devices(DeviceType.SPEAKER)), false);
 for (const type of [3,4,7,8,22,31]) assert.equal(isHeadphoneOutput(devices(type)), true);
@@ -148,7 +159,7 @@ iconMonitor.bind(starPlayer, 4);
 assert.equal(icons.at(-1)[1], 'earphone_16643');
 assert.equal(timers.size, 1);
 peers = [{ ...peer, name: 'FreeClip 2' }];
-for (const tick of timers.values()) tick();
+for (const tick of [...timers.values()]) tick();
 assert.equal(icons.at(-1)[1], 'earphone_16659', 'peer metadata refreshes without volume changes');
 starPlayer.listener({ devices: devices(2) });
 assert.equal(icons.at(-1)[0], false);
@@ -157,6 +168,50 @@ iconMonitor.bind(starPlayer, 4);
 assert.equal(icons.at(-1)[0], false, 'preferred route cannot overwrite AVPlayer actual route');
 iconMonitor.dispose();
 assert.equal(timers.size, 0);
+
+const bluetoothRoute = { deviceType: DeviceType.BLUETOOTH_A2DP, id: 18, name: '', address: '' };
+const preferredNamed = { ...bluetoothRoute, dmDeviceInfo: 'FreeBuds Pro 5' };
+const routeIcons = [];
+const stableMonitor = new PlaybackAudioOutputMonitor((headphones, icon) => routeIcons.push([headphones, icon]));
+const stablePlayer = player(4);
+route = [preferredNamed];
+stableMonitor.bind(stablePlayer, 4);
+route = [bluetoothRoute];
+stablePlayer.listener({ devices: route });
+assert.equal(routeIcons.at(-1)[1], 'earphone_16643', 'stream metadata loss preserves the same route icon');
+for (let i = 0; i < 12; i++) for (const tick of [...timers.values()]) tick();
+assert.equal(timers.size, 0, 'retries stop even when the icon stays matched');
+assert.equal(routeIcons.at(-1)[1], 'earphone_16643', 'confirmed route keeps its icon after retries');
+const handoffPlayer = player(1);
+stableMonitor.bind(handoffPlayer, 1);
+assert.equal(routeIcons.at(-1)[1], 'earphone_16643', 'DASH handoff keeps the icon for the same route');
+handoffPlayer.listener({ devices: [{ ...bluetoothRoute, id: 19 }] });
+assert.equal(routeIcons.at(-1)[1], 'headphones_fill', 'a different route ID clears the old icon immediately');
+route = [{ ...bluetoothRoute, id: 19, dmDeviceInfo: 'FreeClip 2' }];
+a2dpConnectedDevices = [peer.address];
+for (const tick of [...timers.values()]) tick();
+assert.equal(routeIcons.at(-1)[1], 'earphone_16659', 'late preferred metadata enriches the matching stream route');
+a2dpConnectedDevices = [];
+handoffPlayer.listener({ devices: [{ ...bluetoothRoute, id: 19, name: 'Other headphones' }] });
+assert.equal(routeIcons.at(-1)[1], 'headphones_fill', 'a confirmed unsupported name uses the default');
+handoffPlayer.listener({ devices: devices(DeviceType.SPEAKER) });
+assert.deepEqual(routeIcons.at(-1), [false, 'headphones_fill']);
+stableMonitor.dispose();
+
+route = [preferredNamed];
+const anonymousPlayer = player(4);
+stableMonitor.bind(anonymousPlayer, 4);
+anonymousPlayer.listener({ devices: devices(DeviceType.BLUETOOTH_A2DP) });
+assert.equal(routeIcons.at(-1)[1], 'earphone_16643', 'an anonymous stream gets a short grace period');
+for (let i = 0; i < 3; i++) for (const tick of [...timers.values()]) tick();
+assert.deepEqual(timerDelays.slice(-4, -1), [200, 450, 850], 'startup rechecks run before the steady retry interval');
+assert.equal(routeIcons.at(-1)[1], 'headphones_fill', 'an unverified route cannot keep the old icon indefinitely');
+anonymousPlayer.listener({ devices: [preferredNamed] });
+anonymousPlayer.listener({ devices: devices(DeviceType.BLUETOOTH_A2DP), changeReason: 3 });
+assert.equal(routeIcons.at(-1)[1], 'headphones_fill', 'explicit output selection clears an unverified match immediately');
+stableMonitor.dispose();
+assert.equal(timers.size, 0);
+
 (async () => {
   const values = [];
   const permissionMonitor = new PlaybackAudioOutputMonitor((...args) => values.push(args), () => ({}));
@@ -194,7 +249,7 @@ assert.equal(timers.size, 0);
   assert.equal(values.at(-1)[1], 'headphones_fill', 'stack not ready keeps the generic icon');
   assert.equal(timers.size, 1, 'unresolved bluetooth names schedule retries');
   remoteNameFailure = false;
-  for (const tick of timers.values()) tick();
+  for (const tick of [...timers.values()]) tick();
   assert.equal(values.at(-1)[1], 'earphone_roc', 'retry resolves once the stack reports the name');
   assert.equal(timers.size, 0, 'retry stops once the name resolves');
   btMonitor.dispose();

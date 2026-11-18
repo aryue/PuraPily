@@ -426,6 +426,15 @@ struct VideoPlayerPage {
   private referenceFeedPreparingMain: boolean = false
   private referenceFeedAudioStartPending: boolean = false
   private referencePanelStart: number = 0
+  /**
+   * 头部（把手 / 简介·评论标题行）下拉手势的 slop 锚点。
+   * PanGesture 的 offsetY 从按下点算起，识别那一帧已经带上了 distance 的位移，
+   * 直接写 start + offsetY 会让面板凭空补一段，所以把首帧的 offsetY 当新原点吃掉。
+   * ⚠️ 「是否已取锚点」必须用独立布尔量，不能用 anchor < 0 判断：上推时 offsetY 是负数，
+   *    用负数当哨兵会每帧都重新取锚点，`offsetY - anchor` 恒为 0 —— 上推彻底不动。
+   */
+  private referencePanelHeaderAnchored: boolean = false
+  private referencePanelHeaderAnchor: number = 0
   private referencePanelBodyLastY: number = 0
   private referencePanelBodyStartY: number = 0
   private referencePanelBodyStartX: number = 0
@@ -11203,6 +11212,58 @@ struct VideoPlayerPage {
     return HitTestMode.Default;
   }
 
+  /**
+   * ⭐ 「下拉进连刷」的头部手势通道：把手 `reference-portrait-resize-handle` 与
+   *    简介/评论标题行共用同一套回调。
+   *    此前只有把手那 20vp 挂了 PanGesture，58vp 头部里剩下的 32vp（简介 / 评论 标题行）
+   *    完全不跟手——用户从标题上起手拉不动面板，必须精准按住顶部那颗 42×4 的小横条。
+   *    语义与把手原有实现、以及正文的触顶接管（referencePanelBodyTouch）保持一致：
+   *    跟手位移写 referencePanelOffset，松手过阈值进连刷，没过阈值回起点。
+   */
+  private referencePanelHeaderPanStart(): void {
+    this.referencePanelStart = this.referencePanelOffset;
+    this.referencePanelHeaderAnchored = false;
+    this.referencePanelHeaderAnchor = 0;
+  }
+
+  private referencePanelHeaderPanUpdate(offsetY: number): void {
+    if (this.isLs) return;
+    if (!this.referencePanelHeaderAnchored) {
+      this.referencePanelHeaderAnchored = true;
+      this.referencePanelHeaderAnchor = offsetY;
+    }
+    // 评论半屏时头部只做「下拉关闭」，不动面板几何（与把手原口径一致）。
+    if (this.referenceFeedComments) return;
+    this.referencePanelOffset = this.referencePanelDragOffset(
+      this.referencePanelStart + offsetY - this.referencePanelHeaderAnchor);
+  }
+
+  private referencePanelHeaderPanEnd(offsetY: number, velocityY: number): void {
+    if (this.isLs) return;
+    this.referencePanelHeaderAnchored = false;
+    this.referencePanelHeaderAnchor = 0;
+    if (this.referenceFeedComments) {
+      if (offsetY > 80 || (offsetY > 30 && velocityY > 850)) this.referenceSetFeedComments(false);
+      return;
+    }
+    if (this.referencePanelOffset > 90 || (offsetY > 45 && velocityY > 850)) {
+      this.referenceSetFeed(true);
+    } else if (this.referencePanelOffset > 0) {
+      // 下拉是「进连刷」手势通道，没到阈值就回起点；否则 16:9 会停在
+      // 「区域变高、画面不放大」的大黑边中间态。
+      this.getUIContext().animateTo({ duration: 240, curve: Curve.EaseOut }, () => { this.referencePanelOffset = 0; });
+    }
+    // 上推方向保持手指松开时的比例（无级），不再吸附到 0 / 最小两档。
+    // 进连刷由 referenceSetFeed 收尾归零，取消手势仍回 referencePanelStart。
+  }
+
+  private referencePanelHeaderPanCancel(): void {
+    this.referencePanelHeaderAnchored = false;
+    this.referencePanelHeaderAnchor = 0;
+    if (this.isLs) return;
+    this.getUIContext().animateTo({ duration: 180, curve: Curve.EaseOut }, () => { this.referencePanelOffset = this.referencePanelStart; });
+  }
+
   private referencePanelBodyTouch(e: TouchEvent): void {
     // 半屏评论同样先上推播放区；触顶下拉仍交给原生 Refresh，不从评论进入连刷。
     if (this.isLs || this.referenceFeedComments) { this.referencePanelBodyCanDrag = false; return; }
@@ -12047,7 +12108,9 @@ struct VideoPlayerPage {
         PageHeader({ showSurface: !this.referenceFeed && !this.referenceFeedComments,
           withTabs: true, hideBottomEdge: true, scopeId: 'video-panel-tabs-native-scope',
           surfaceRevision: this.referencePanelHeaderRevision }) {
-          Column({ space: 6 }) {
+          // ⭐ 不能用 Column({ space: 6 })：标题行已经用 height 38 + padding top 6 吃掉了这 6vp
+          //    （20 + 38 = 58），再加 space 会溢出头部（64 > 58）。
+          Column() {
             Row() {
               Row().width(42).height(4).borderRadius(2).backgroundColor('#45494F')
             }.width('100%').height(this.isLs ? 8 : 20).visibility(this.isLs ? Visibility.Hidden : Visibility.Visible).justifyContent(FlexAlign.Center)
@@ -12055,38 +12118,17 @@ struct VideoPlayerPage {
               // ⭐ distance 与横屏 referenceLandscapeResize 一样取 1vp：
               //    GestureEvent.offsetY 是从按下点算起的累计量，原来的 distance: 8
               //    会让第一次 onActionUpdate 直接带 8vp，起步首帧凭空补 8vp（跳一下）。
-              //    取 1vp 后首帧只有 1vp、肉眼不可见，且 `referencePanelStart + offsetY`
+              //    取 1vp 后首帧的位移由 referencePanelHeaderAnchor 吃掉、肉眼不可见，
               //    与 onActionEnd 的 90 / 45 / 850 判定仍在同一坐标系，阈值语义完全不变。
               //    PanDirection.Vertical 已排除横向手势，把手 Row 内也没有点击目标。
               .gesture(PanGesture({ direction: PanDirection.Vertical, distance: 1 })
-                .onActionStart(() => { this.referencePanelStart = this.referencePanelOffset; })
-                .onActionUpdate((event: GestureEvent) => {
-                  if (this.isLs) return;
-                  if (!this.referenceFeedComments) {
-                    const offset = this.referencePanelStart + event.offsetY;
-                    this.referencePanelOffset = this.referencePanelDragOffset(offset);
-                  }
-                })
-                .onActionEnd((event: GestureEvent) => {
-                  if (this.isLs) return;
-                  if (this.referenceFeedComments) {
-                    if (event.offsetY > 80 || (event.offsetY > 30 && event.velocityY > 850)) this.referenceSetFeedComments(false);
-                    return;
-                  }
-                  if (this.referencePanelOffset > 90 || (event.offsetY > 45 && event.velocityY > 850)) {
-                    this.referenceSetFeed(true);
-                  } else if (this.referencePanelOffset > 0) {
-                    // 下拉是「进连刷」手势通道，没到阈值就回起点；否则 16:9 会停在
-                    // 「区域变高、画面不放大」的大黑边中间态。
-                    this.getUIContext().animateTo({ duration: 240, curve: Curve.EaseOut }, () => { this.referencePanelOffset = 0; });
-                  }
-                  // 上推方向保持手指松开时的比例（无级），不再吸附到 0 / 最小两档。
-                  // 进连刷由 referenceSetFeed 收尾归零，取消手势仍回 referencePanelStart。
-                })
-                .onActionCancel(() => {
-                  if (this.isLs) return;
-                  this.getUIContext().animateTo({ duration: 180, curve: Curve.EaseOut }, () => { this.referencePanelOffset = this.referencePanelStart; });
-                }))
+                .onActionStart(() => this.referencePanelHeaderPanStart())
+                .onActionUpdate((event: GestureEvent) => this.referencePanelHeaderPanUpdate(event.offsetY))
+                .onActionEnd((event: GestureEvent) => this.referencePanelHeaderPanEnd(event.offsetY, event.velocityY))
+                .onActionCancel(() => this.referencePanelHeaderPanCancel()))
+            // ⭐ 简介 / 评论标题行同属「下拉进连刷」的响应区（此前只有上面 20vp 的把手跟手，
+            //    从标题上起手完全没有反应）。这里挂同一套回调，distance 取 8vp：
+            //    标题本身有点击目标（切 Tab、发弹幕入口），1vp 的死区会让轻点被判成拖拽。
             Row() {
               if (!this.referenceFeedComments) {
                 ForEach(['简介', '评论'], (label: string, index: number) => {
@@ -12126,7 +12168,16 @@ struct VideoPlayerPage {
                 Image($r('app.media.ref_close')).width(24).height(24).fillColor('#757A81')
                   .onClick(() => this.referenceSetFeedComments(false))
               }
-            }.width('100%').padding({ left: 14, right: 12 })
+            }.width('100%').height(38).padding({ top: 6, left: 14, right: 12 })
+              // ⭐ 38vp 盒子里只留 32vp 内容区（padding top 6）：
+              //    父 Column 的 6vp 空隙原本两个子节点都不认，下拉起手落在中间完全没反应；
+              //    把空隙并进标题行的盒子（热区）后，内容盒仍是 26~58，Tab/弹幕胶囊一像素不动，
+              //    20 + 38 = 58（横屏 8 + 38 = 46）正好等于头部高度。
+              .gesture(PanGesture({ direction: PanDirection.Vertical, distance: 8 })
+                .onActionStart(() => this.referencePanelHeaderPanStart())
+                .onActionUpdate((event: GestureEvent) => this.referencePanelHeaderPanUpdate(event.offsetY))
+                .onActionEnd((event: GestureEvent) => this.referencePanelHeaderPanEnd(event.offsetY, event.velocityY))
+                .onActionCancel(() => this.referencePanelHeaderPanCancel()))
           }.width('100%').height(this.isLs ? 46 : 58)
         }
       }.width('100%').height(this.isLs ? 46 : 58).zIndex(1)
