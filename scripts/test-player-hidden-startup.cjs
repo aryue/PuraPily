@@ -9,8 +9,11 @@ function method(start, end) {
   return source.slice(a, b);
 }
 const context = { exports: {}, logInfo() {}, LiveViewHelper: { updatePlayState() {} },
+  PlaybackAudioSession: { async activate() {} },
   PlayerService: { getInstance: () => ({ hasActivePlayer: false }) } };
-const helpers = method('    private pagePlaybackAllowed(', '    /**',);
+const helpers = method('    private pagePlaybackAllowed(', '    /**') +
+  method('    private playbackIsTerminal(', '    /**') +
+  method('    private async startPagePlayback(', '    /**');
 const hide = method('    onPageHide()', '    /**');
 vm.runInNewContext(ts.transpileModule('export class Page {' + helpers + hide + '}', {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 }
@@ -24,13 +27,16 @@ function fixture() {
   Object.assign(p, { referenceAlive: true, playerPageVisible: true, bgp: false, appInBackground: false,
     playbackWindow_: { keepScreenOn() {}, cancelBarsRefresh() {} },
     userPaused_: false, play: false, playbackResources_: { video: track(), audio: track() },
-    playbackListPrefetch: { pause() {} }, releaseReferenceFeedPreview() {} });
+    playbackListPrefetch: { pause() {} }, releaseReferenceFeedPreview() {},
+    danmakuSaves: 0, saveDanmakuDisplaySettings() { this.danmakuSaves++; }, referenceCancelFeedPlayerTouch() {},
+    fullscreenDeviceOrientation: { stop() {} }, currentTopPage: () => '', markAutoPlay() {} });
   return p;
 }
 async function main() {
   for (const bgp of [false, true]) {
     const p = fixture(); p.bgp = bgp;
     p.onPageHide();
+    assert.equal(p.danmakuSaves, 1, 'hide commits pending danmaku edits in either background mode');
     assert.equal(await p.startPagePlayback(p.playbackResources_.video), false, 'late prepare after navigation must not start');
     assert.equal(p.playbackResources_.video.plays + p.playbackResources_.audio.plays, 0);
     assert.equal(p.playbackResources_.video.pauses, 0, 'preparing/prepared player cannot be paused');
@@ -62,7 +68,7 @@ async function main() {
   const retired = fixture(), old = retired.playbackResources_.video; retired.playbackResources_.video = {};
   assert.equal(await retired.startPagePlayback(old), false);
   // Verify actual compiled startup callbacks route every audible start through the guard.
-  const prepared = method("        case 'prepared':", "        case 'completed':");
+  const prepared = method('    private async applyPreparedState(', '    private confirmFirstFrame(');
   assert.ok(prepared.includes('startPagePlayback(player, false)'));
   assert.ok(prepared.includes('startPagePlayback(player)'));
   assert.equal((prepared.match(/\.play\(\)/g) || []).length, 1, 'only muted feed-frame preparation may play directly');

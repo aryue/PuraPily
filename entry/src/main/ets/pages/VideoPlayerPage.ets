@@ -1,3 +1,4 @@
+import { setBackgroundPlayback } from '../services/BackgroundPlaybackPreference';
 import { createSentDanmaku } from '../services/DanmakuService';
 import { DanmakuDisplaySettings } from '../services/DanmakuDisplaySettings';
 import { PlaybackInteractionStatus, PlaybackIntro } from '../services/PlaybackIntro';
@@ -225,7 +226,6 @@ interface MinimizedVideoState {
 // 覆盖本次换网后的判定（模块加载时 persistProp 会顶掉 AppStorage 里的新值）。
 PersistentStorage.persistProp('playbackProgressV1', '[]')
 PersistentStorage.persistProp('continuousRecommendationsV1', '[]')
-PersistentStorage.persistProp('bgp', false)
 PersistentStorage.persistProp('referencePlaybackMode', 'single')
 PersistentStorage.persistProp('phoneLayoutToggle', false)
 PersistentStorage.persistProp('lightsOffHideOnly', false)
@@ -3100,7 +3100,6 @@ struct VideoPlayerPage {
     }
     this.so_ = AppStorage.get<string>('screenOrientationLock') ?? '跟随系统';
     this.sh_ = AppStorage.get<boolean>('hideStatusBar') ?? false;
-    // @StorageLink('bgp') 自动同步持久化值，无需手动读取
 
     // ⭐ 同步读取弹幕开关状态（从 AppStorage，避免异步加载前的默认 true 闪一下）
     const savedDmk = AppStorage.get<boolean>('danmakuEnabled');
@@ -3802,6 +3801,7 @@ struct VideoPlayerPage {
    * 后台播放只允许真正切后台，页面跳转始终暂停，包括尚未准备完成的播放器。
    */
   onPageHide(): void {
+    this.saveDanmakuDisplaySettings();
     this.playbackWindow_.cancelBarsRefresh();
     this.referenceCancelFeedPlayerTouch();
     this.playerPageVisible = false;
@@ -3908,6 +3908,7 @@ struct VideoPlayerPage {
    * 页面显示时恢复播放（从后台/其他页面返回时）
    */
   onPageShow(): void {
+    this.loadDanmakuDisplaySettings();
     this.playerPageVisible = true;
     if (this.fs && this.referenceLayout && !this.isPcDevice) this.fullscreenDeviceOrientation.start();
     // ⭐ 登记「我是当前最上层的播放页实例」。被 push 出来的同路由页会覆盖这个值，
@@ -6238,18 +6239,7 @@ struct VideoPlayerPage {
   }
 
   toggleBackgroundPlayback() {
-    this.bgp = !this.bgp;
-    AppStorage.set<boolean>('bgp', this.bgp);
-    // 持久化到 Preferences（进程重启后仍保留）
-    try {
-      const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
-      preferences.getPreferences(context, 'my_app_settings').then((pref) => {
-        pref.put('bgp', this.bgp);
-        pref.flush();
-      });
-    } catch (e) {
-      logError('[bgp] 持久化保存失败', e);
-    }
+    setBackgroundPlayback(this.getUIContext().getHostContext() as common.Context, !this.bgp);
     this.sBH($r('app.media.headphones_fill'), this.bgp ? '后台播放已开启' : '后台播放已关闭');
     this.cancelDelayHide();
     if (this.cv) this.resetCT();
@@ -8195,18 +8185,14 @@ struct VideoPlayerPage {
     this.danmakuDisplaySettings_.changed(ctx, this.danmakuConfig);
   }
 
-  private async saveDanmakuDisplaySettings(): Promise<void> {
-    try {
-      const ctx = this.getUIContext().getHostContext() as common.Context;
-      await this.danmakuDisplaySettings_.save(ctx, this.danmakuConfig);
-    } catch (error) {
-      logWarn(`[VideoPlayer] 保存弹幕设置失败: ${errMsg(error)}`);
-    }
+  private saveDanmakuDisplaySettings(): void {
+    const ctx = this.getUIContext().getHostContext() as common.Context;
+    this.danmakuDisplaySettings_.commit(ctx);
   }
 
-  private async loadDanmakuDisplaySettings(): Promise<void> {
+  private loadDanmakuDisplaySettings(): void {
     const ctx = this.getUIContext().getHostContext() as common.Context;
-    await this.danmakuDisplaySettings_.load(ctx, this.danmakuConfig);
+    this.danmakuDisplaySettings_.load(ctx, this.danmakuConfig);
   }
 
   @Builder

@@ -1,3 +1,4 @@
+import { setBackgroundPlayback } from '../services/BackgroundPlaybackPreference';
 import { SplitPaneLayout } from '../components/SplitPaneLayout';
 import { SPLIT_DEFAULT_RATIO, SPLIT_EXPAND_THRESHOLD, clampSplitWidth, splitPrimaryWidth, splitResize,
   splitSecondaryWidth, splitSecondaryX } from '../utils/SplitPaneGeometry';
@@ -1552,17 +1553,7 @@ struct LivePlayerPage {
 
   /** 后台播放开关：持久化设置并同步媒体会话。 */
   private toggleBackgroundPlayback(): void {
-    this.bgp = !this.bgp;
-    AppStorage.set<boolean>('bgp', this.bgp);
-    try {
-      const ctx = this.getUIContext().getHostContext() as common.UIAbilityContext;
-      preferences.getPreferences(ctx, 'my_app_settings').then((pref) => {
-        pref.put('bgp', this.bgp);
-        pref.flush();
-      });
-    } catch (e) {
-      logError('[LivePlayer] bgp 持久化保存失败', e);
-    }
+    setBackgroundPlayback(this.getUIContext().getHostContext() as common.Context, !this.bgp);
     // ⭐ 接入媒体会话：开启→建会话（在播时）；关闭→结束会话并暂停（若在后台）
     if (this.bgp) {
       if (this.av && (this.av.state === 'playing' || this.av.state === 'prepared')) {

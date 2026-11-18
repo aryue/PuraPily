@@ -260,44 +260,59 @@ assert.ok(/danmakuTrackHeight/.test(panelSrc), '面板按真实行高预览行�
 
 console.log('PASS: danmaku display settings reflow on-screen items (rows = floor(H×area/trackHeight), 10% = 1 row on 291vp canvas)');
 
-async function verifySettingsSchedule() {
-  let finishRead, nextTimer = 0;
-  const writes = [], signals = [], timers = new Map();
+function verifySettingsSchedule() {
+  let nextTimer = 0, flushed = 0;
+  let saved = '{"displayArea":0.1,"fontSize":29.4}';
+  const signals = [], timers = new Map();
   const prefs = {
-    get: () => new Promise(resolve => { finishRead = resolve; }),
-    async put(_key, value) { writes.push(JSON.parse(value)); },
-    async flush() {}
+    getSync: () => saved,
+    putSync(_key, value) { saved = value; },
+    flushSync() { flushed++; }
   };
   const context = {
-    exports: {}, require: () => ({ preferences: { getPreferences: async () => prefs }, logInfo() {}, logWarn: assert.fail }),
-    AppStorage: { setOrCreate: (key, value) => signals.push([key, value]) },
+    exports: {}, require: () => ({ preferences: { getPreferencesSync: () => prefs }, logInfo() {}, logWarn: assert.fail }),
+    AppStorage: {
+      get: () => signals[signals.length - 1],
+      setOrCreate: (_key, value) => signals.push(value)
+    },
     setTimeout(callback, delay) { assert.equal(delay, 200); timers.set(++nextTimer, callback); return nextTimer; },
     clearTimeout(id) { timers.delete(id); }
   };
   vm.runInNewContext(ts.transpileModule(fs.readFileSync(path.join(etsRoot, 'services/DanmakuDisplaySettings.ets'), 'utf8'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 }
   }).outputText, context);
-  const settings = new context.exports.DanmakuDisplaySettings();
-  const config = { displayArea: 1, blockWeight: 0, showScroll: true, showTop: true, showBottom: true,
-    showAdvanced: false, blockColorful: false, blockCounted: false, hideDuplicates: false,
-    keywordFilterEnabled: false, blockKeywords: [], opacity: 1, fontSize: 28, fullScreenFontScale: 1,
-    lineHeight: 1.2, fontWeight: 400, borderWidth: 1, scrollDuration: 7000, staticDuration: 4000,
-    varyFontSize: false, massiveMode: false, static2Scroll: false, scrollFixedVelocity: false };
-  const loading = settings.load({}, config);
-  await new Promise(resolve => setImmediate(resolve));
+  const Settings = context.exports.DanmakuDisplaySettings;
+  const first = new Settings();
+  const config = new DanmakuConfig();
+  first.load({}, config);
+  assert.equal(config.displayArea, .1, 'restore before creating the canvas');
+  assert.equal(config.fontSize, 29.4, 'restore the saved slider value without rounding');
+  first.commit({});
+  assert.equal(flushed, 0, 'closing an untouched panel must not write defaults');
+
   config.displayArea = .25;
-  settings.changed({}, config);
+  first.changed({}, config);
   config.displayArea = .5;
-  settings.changed({}, config);
+  first.changed({}, config);
   assert.equal(timers.size, 1);
-  finishRead('{"displayArea":0.1}');
-  await loading;
-  assert.equal(config.displayArea, .5, 'late preferences cannot overwrite an edit');
-  assert.equal(signals.length, 0);
+  const second = new Settings();
+  const secondConfig = new DanmakuConfig();
+  second.load({}, secondConfig);
+  assert.equal(secondConfig.displayArea, .5, 'new page sees a pending slider edit');
+
+  secondConfig.displayArea = .75;
+  second.changed({}, secondConfig);
+  first.commit({});
+  assert.equal(timers.size, 0);
+  assert.equal(flushed, 1);
+  assert.equal(JSON.parse(saved).displayArea, .75, 'an older page cannot save over a newer edit');
+  first.load({}, config);
+  assert.equal(config.displayArea, .75, 'returning to a covered page restores the latest edit');
+
+  config.displayArea = 1;
+  first.changed({}, config);
   timers.get(nextTimer)();
-  await new Promise(resolve => setImmediate(resolve));
-  assert.deepEqual(signals, [['danmakuSettingVersion', 1]]);
-  assert.equal(writes.length, 1);
-  assert.equal(writes[0].displayArea, .5);
+  assert.equal(JSON.parse(saved).displayArea, 1);
+  assert.deepEqual(signals, [1, 2, 3, 4, 5], 'refresh notifications remain distinct across pages');
 }
-verifySettingsSchedule().catch(error => { console.error(error); process.exitCode = 1; });
+verifySettingsSchedule();

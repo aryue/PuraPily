@@ -1,3 +1,4 @@
+import { setBackgroundPlayback } from '../services/BackgroundPlaybackPreference';
 import { FavoritesDataService } from '../services/FavoritesDataService';
 import { extractMidFromCookie } from '../api/FeedbackService';
 import { pageBackgroundColor, secondaryTextColor, tertiaryTextColor } from '../utils/SurfaceColors';
@@ -1126,7 +1127,8 @@ export struct ProfilePage {
             Row() {
               Text('后台播放').fontSize(15).fontColor(this.isDarkMode ? '#E7E9EB' : '#18191C').layoutWeight(1)
               Toggle({ type: ToggleType.Switch, isOn: this.referenceBackgroundPlay }).selectedColor('#D34E7E')
-              .onChange((value: boolean) => this.referenceSaveBoolean('bgp', value))
+              .onChange((value: boolean) => setBackgroundPlayback(
+                this.getUIContext().getHostContext() as common.Context, value))
             }.width('100%').height(56).padding({ left: 16, right: 16 })
             Row({ space: 12 }) {
               Text('与其他应用同时播放').fontSize(15)

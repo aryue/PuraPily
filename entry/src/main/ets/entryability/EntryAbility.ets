@@ -1,3 +1,4 @@
+import { restoreBackgroundPlayback } from '../services/BackgroundPlaybackPreference';
 /**
  * EntryAbility.ets
  * 主 Ability — 按官方 MusicCard 模式重写
@@ -160,6 +161,7 @@ export default class EntryAbility extends UIAbility {
     if (want.parameters?.['cellularPrefetch'] !== undefined) {
       this.cellularPrefetchLaunchOverride = String(want.parameters['cellularPrefetch']) !== 'off';
     }
+    restoreBackgroundPlayback(this.context);
     this.loadCardSettings();
     this.registerCalleeHandlers();
     PersistentStorage.persistProp('statusBarHeight', 40);
@@ -478,9 +480,6 @@ export default class EntryAbility extends UIAbility {
       AppStorage.setOrCreate('cellularPrefetch', cellularPrefetch);
       hilog.info(DOMAIN, TAG, 'cellularPrefetch saved=%{public}s override=%{public}s active=%{public}s',
         String(savedCellularPrefetch), String(launchOverride), String(cellularPrefetch));
-      // ⭐ 注册 bgp（后台播放开关）为持久化 AppStorage 属性：重启后仍保留（直播/点播共用）。
-      //    必须入口注册，否则直接重启进直播页时 persistProp 未执行，@StorageLink('bgp') 只能拿默认 false
-      PersistentStorage.persistProp('bgp', false);
     } catch (e) {
       hilog.error(DOMAIN, TAG, 'Failed to load card settings: %{public}s', JSON.stringify(e));
     }
