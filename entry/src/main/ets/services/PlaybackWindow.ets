@@ -8,6 +8,7 @@ export class PlaybackWindow {
   private refreshTimer: number = -1;
   private transitionTimer: number = -1;
   private transitionDone: ((finished: boolean) => void) | null = null;
+  private landscapeExitPending: boolean = false;
 
   waitForTransition(duration: number): Promise<boolean> {
     this.cancelTransitionWait();
@@ -48,6 +49,7 @@ export class PlaybackWindow {
     AppStorage.setOrCreate('immersivePlayerAliveCount', remaining);
     if (!win) return;
     try {
+      if (this.landscapeExitPending) await this.finishDeferredLandscapeExit(win);
       const context = host();
       if (remaining > 0) {
         await StatusBarUtils.setPlayerStatusBarContent(context, win);
@@ -61,14 +63,21 @@ export class PlaybackWindow {
   }
 
   async restoreAfterFullscreen(win: window.Window, getOrigin: () => window.Orientation | undefined,
-    onPortraitLock: () => void): Promise<void> {
+    onPortraitLock: () => void, deferLandscapeMode: boolean = false): Promise<void> {
+    this.landscapeExitPending = deferLandscapeMode;
     try {
-      await win.disableLandscapeMultiWindow().catch(() => {});
+      if (!deferLandscapeMode) await win.disableLandscapeMultiWindow().catch(() => {});
       const origin = getOrigin();
       const orientation = origin ?? this.preferredOrientation();
       if (origin === undefined && orientation === window.Orientation.PORTRAIT) onPortraitLock();
       await win.setPreferredOrientation(orientation);
     } catch (_) {}
+  }
+
+  async finishDeferredLandscapeExit(win: window.Window): Promise<void> {
+    if (!this.landscapeExitPending) return;
+    this.landscapeExitPending = false;
+    await win.disableLandscapeMultiWindow().catch(() => {});
   }
 
   async prepareFullscreen(win: window.Window, landscape: () => boolean): Promise<void> {

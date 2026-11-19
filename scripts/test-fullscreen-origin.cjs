@@ -15,12 +15,15 @@ const methods = [
   between('  private fullscreenTargetLandscape():', '  // ⭐ 退出全屏后恢复系统栏'),
   between('  private snapshotPreFsBranch():', '  /** ⭐ 关灯+竖屏非全屏'),
   between('  private contentBranchKey():', '  /** ⭐ 转场状态翻转'),
+  between('  private manageSB(', '  async initW()'),
   between('  private async restoreOrientationOnly():', '  private restoreFullscreenSource():'),
   between('  private restoreFullscreenSource():', '  // ⭐ 带动画进入全屏'),
+  between('  private applyPlaybackWindowSize(', '  /** 根据新的窗口尺寸'),
   between('  private referenceSetFeed(value:', '  private referenceStopFeedMotion()'),
-  between('  private ovRectX():', '  /**\n   * ⭐ 全屏相关的圆角')
+  between('  private portraitPlateByArea():', '  /**\n   * ⭐ 全屏相关的圆角')
 ].join('\n');
 const context = { exports: {}, window: { Orientation: { AUTO_ROTATION: 0, PORTRAIT: 1, AUTO_ROTATION_LANDSCAPE: 2, AUTO_ROTATION_PORTRAIT: 3 } },
+  AppStorage: { setOrCreate() {} },
   setTimeout, clearTimeout, logInfo() {}, logWarn() {}, Date, Math };
 const windowControls = fs.readFileSync(path.resolve(__dirname, '../entry/src/main/ets/services/PlaybackWindow.ets'), 'utf8')
   .replace(/^import .*$/gm, '');
@@ -38,16 +41,24 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function test(feed) {
   const p = new context.exports.Page();
   const orientations = [];
-  Object.assign(p, { referenceAlive: true, referenceLayout: true, referenceFeed: feed, referenceFeedProgress: feed ? 1 : 0,
+  const windowEvents = [];
+  p.playbackWindow_.applyBars = () => { windowEvents.push('bars'); };
+  let sizeListener;
+  Object.assign(p, { referenceAlive: true, playerPageVisible: true, referenceLayout: true, referenceFeed: feed, referenceFeedProgress: feed ? 1 : 0,
     referenceFeedComments: false, referenceInfoHidden: true, referencePanelOffset: -23,
     isLs: false, isLandscapeVertical: false, cw: 440, ch: 744, ar: 16 / 9,
     fs: false, fsEntering: false, isAnimatingToFS: true, rotationInProgress: false,
     fsLerpSnapX: 0, fsLerpSnapY: 39, fsLerpSnapW: 440, fsLerpSnapH: 247.5,
     fsLerpSnapVW: 440, fsLerpSnapVH: 247.5,
     fullscreenDeviceOrientation: { start() {}, stop() {} },
-    mw: { getPreferredOrientation: () => 42, disableLandscapeMultiWindow: async () => {},
-      setPreferredOrientation: async orientation => { orientations.push(orientation); } },
-    updateIsLandscapeVertical() {}, updateVideoSize() {}, initOverlayRectSync() {}, manageSB() {}, resetFullscreenVideo() {},
+    mw: { getPreferredOrientation: () => 42, disableLandscapeMultiWindow: async () => { windowEvents.push('leave landscape'); },
+      setPreferredOrientation: async orientation => { orientations.push(orientation); },
+      on: (event, callback) => { assert.equal(event, 'windowSizeChange'); sizeListener = callback; },
+      off: (event, callback) => { assert.equal(event, 'windowSizeChange'); assert.equal(callback, sizeListener); sizeListener = undefined; } },
+    getUIContext: () => ({ px2vp: px => px / 3 }),
+    applyOrientationState(w, h) { this.isLs = w > h; this.commitFullscreenRotationLayout(); },
+    referenceAreaTop: () => 39, referenceAreaHeight: () => 247.5,
+    updateIsLandscapeVertical() {}, updateVideoSize() {}, initOverlayRectSync() {}, resetFullscreenVideo() {},
     loadReferenceIntroExtras() {}
   });
   p.snapshotPreFsBranch();
@@ -73,11 +84,25 @@ async function test(feed) {
 
   // Simulate unrelated state changes while fullscreen; returning restores the captured source.
   p.referenceFeed = !feed; p.referencePanelOffset = 0; p.referenceInfoHidden = false;
+  windowEvents.length = 0;
   p.mw.setPreferredOrientation = async orientation => {
     orientations.push(orientation);
+    windowEvents.push('request portrait');
     setTimeout(() => {
-      p.cw = 440; p.ch = 744; p.isLs = false;
-      p.commitFullscreenRotationLayout();
+      assert.equal(typeof sizeListener, feed ? 'undefined' : 'function');
+      if (sizeListener) {
+        sizeListener({ width: 2232, height: 1320 });
+        assert.equal(p.fs, true, 'ignore landscape window sizes while returning to portrait');
+        sizeListener({ width: 1320, height: 2232 });
+        assert.equal(p.fs, false, 'hand off when the window reports its portrait size');
+        assert.equal(p.ovRectY(), 39, 'land directly below the status bar');
+        assert.equal(p.ovRectW(), 440);
+        assert.equal(p.ovRectH(), 247.5, 'land at the destination playback size');
+      }
+      if (!sizeListener) p.applyPlaybackWindowSize(440, 744);
+      windowEvents.push('portrait layout');
+      p.manageSB(true);
+      assert.deepEqual(windowEvents, ['request portrait', 'portrait layout'], 'window mode and bars stay fixed while rotation is active');
     }, 40);
   };
   p.isAnimatingToFS = true;
@@ -90,7 +115,9 @@ async function test(feed) {
   assert.equal(p.referenceFeedProgress, feed ? 1 : 0);
   assert.equal(p.referencePanelOffset, -23); assert.equal(p.referenceInfoHidden, true);
   assert.equal(p.fsPanProgress, 0); assert.equal(p.isAnimatingToFS, false);
+  assert.equal(sizeListener, undefined, 'remove the listener after the rotation');
   assert.deepEqual(orientations, [42], 'restore the original policy in one request');
+  assert.deepEqual(windowEvents, ['request portrait', 'portrait layout', 'leave landscape', 'bars']);
 }
 (async () => {
   const { fullscreenEntryProgress, fullscreenViewportExtent, fullscreenSurfaceExtent, fullscreenCornerRadius } = context.exports;
@@ -147,7 +174,9 @@ async function test(feed) {
     getUIContext: () => ({ getHostContext: () => ({}) }),
     fullscreenDeviceOrientation: { stop() {}, returnLandscape: (policy, current) => {
       assert.equal(policy, 42);
-      assert.equal(current, true);
+      // current 是"非全屏态方向"（fullscreenSource.isLandscape），不是全屏中的 isLs：
+      // 本用例从竖屏进入（isLandscape=false），锁定开时手机端必须据此回竖屏。
+      assert.equal(current, false, 'current must be the non-fullscreen direction');
       return true;
     } },
     fullscreenSource: { isLandscape: false, orientation: 42 },

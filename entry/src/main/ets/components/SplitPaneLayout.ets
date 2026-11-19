@@ -18,6 +18,17 @@ export struct SplitPaneLayout {
   @Prop secondaryY: number = 0;
   @Prop showHandle: boolean = true;
   @Prop swapped: boolean = false;
+  /**
+   * 退全屏到分栏期间，把整个副栏（含分发线）沿副栏方向推出窗口的距离。
+   *
+   * 全屏态下副栏本来就被全屏底板盖住、停在静止位置；退出时若直接撤底板，
+   * 副栏会「原地啪一下出现」，视频再单独缩 200ms —— 两件事各走各的。
+   * 这里由调用方按同一条插值进度把它推回窗口外再滑回来，
+   * 于是「视频缩小」和「分栏推入」是同一个动作。其余时刻恒 0。
+   */
+  @Prop secondaryShiftX: number = 0;
+  /** 分发线透明度：滑入起点它还在窗口边缘外，先淡出避免边缘闪一条。 */
+  @Prop handleOpacity: number = 1;
   @Prop dividerTop: number = 0;
   @Prop dividerHeight: number = 0;
   @Prop handleWidth: number = SPLIT_HANDLE_WIDTH;
@@ -33,7 +44,7 @@ export struct SplitPaneLayout {
       Stack({ alignContent: Alignment.TopStart }) {
         this.secondary()
       }.width(this.secondaryWidth).height(this.secondaryHeight)
-        .position({ x: this.secondaryX, y: this.secondaryY })
+        .position({ x: this.secondaryX + this.secondaryShiftX, y: this.secondaryY })
         .hitTestBehavior(HitTestMode.None)
 
       Stack({ alignContent: Alignment.TopStart }) {
@@ -49,8 +60,9 @@ export struct SplitPaneLayout {
         }.width(this.handleWidth).height(this.handleHeight).justifyContent(FlexAlign.Center)
           .id(this.handleId)
           .accessibilityText(this.handleLabel)
-          .position({ x: splitHandleX(this.secondaryX, this.secondaryWidth, this.swapped, this.handleWidth),
+          .position({ x: splitHandleX(this.secondaryX + this.secondaryShiftX, this.secondaryWidth, this.swapped, this.handleWidth),
             y: this.dividerTop + (this.dividerHeight - this.handleHeight) / 2 })
+          .opacity(this.handleOpacity)
           .gesture(PanGesture({ direction: PanDirection.Horizontal, distance: 1 })
             .onActionStart(() => this.onResizeStart())
             .onActionUpdate((event: GestureEvent) => this.onResizeUpdate(event.offsetX))

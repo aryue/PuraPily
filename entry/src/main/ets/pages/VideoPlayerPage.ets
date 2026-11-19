@@ -891,7 +891,7 @@ struct VideoPlayerPage {
 
   /** ⭐ 常驻播放器层矩形：非全屏跟踪占位槽；全屏为整屏；进出全屏期间在两者间连续插值 */
   private ovRectX(): number {
-    if (this.fsEntering) return this.fsLerpSnapX;
+    if (this.fsEntering) return this.fsFreezeToWindow ? 0 : this.fsLerpSnapX;
     if (this.referenceLayout && this.isLs && (!this.fs || this.fsLerpDir === 2)) {
       return this.referenceLandscapePlayerX() * (this.fs ? 1 - this.fsPanProgress : 1);
     }
@@ -904,7 +904,7 @@ struct VideoPlayerPage {
     return 0;
   }
   private ovRectY(): number {
-    if (this.fsEntering) return this.fsLerpSnapY;
+    if (this.fsEntering) return this.fsFreezeToWindow ? 0 : this.fsLerpSnapY;
     if (this.referenceLayout && this.isLs && (!this.fs || this.fsLerpDir === 2)) {
       const target = this.referenceLandscapeAreaTop();
       return this.fs ? target + (0 - target) * this.fsPanProgress : target;
@@ -917,7 +917,7 @@ struct VideoPlayerPage {
     return 0;
   }
   private ovRectW(): number {
-    if (this.fsEntering) return Math.max(1, this.fsLerpSnapW);
+    if (this.fsEntering) return this.fsFreezeToWindow ? Math.max(1, this.cw) : Math.max(1, this.fsLerpSnapW);
     if (this.referenceLayout && this.isLs && (!this.fs || this.fsLerpDir === 2)) {
       const target = this.referenceLandscapeViewportWidth();
       return this.fs ? target + (this.cw - target) * this.fsPanProgress : target;
@@ -931,7 +931,7 @@ struct VideoPlayerPage {
       this.fsLerpDir, this.fsPanProgress, this.fsLerpStartP);
   }
   private ovRectH(): number {
-    if (this.fsEntering) return Math.max(1, this.fsLerpSnapH);
+    if (this.fsEntering) return this.fsFreezeToWindow ? Math.max(1, this.ch) : Math.max(1, this.fsLerpSnapH);
     if (this.referenceLayout && this.isLs && (!this.fs || this.fsLerpDir === 2)) {
       const target = this.referenceLandscapeAreaHeight();
       return this.fs ? target + (this.ch - target) * this.fsPanProgress : target;
@@ -1013,7 +1013,35 @@ struct VideoPlayerPage {
     return Math.max(0.01, this.ovVideoW() / this.portraitBaseW());
   }
 
+  /**
+   * ⭐ 退全屏期间「画面必须装进容器」的统一缩放系数。
+   *
+   * 病根（2026-11-18 真机录屏逐帧）：退出时容器和画面用了**两个基准**——
+   *   · `ovRectW/H`：dir=2 时是 `full + (normal - full) * (1 - P)`，P=1 就等于**实时 `cw/ch`**；
+   *   · `ovVideoW/H`：`fullscreenSurfaceExtent` 在 dir=2、P=1 时返回**横屏快照 `snapshot`**。
+   * 系统把窗口一步换成 440×744 之后，744 宽的画面挂在一个 440 宽的容器里，
+   * 常驻层又没有 clip，只有屏幕边缘能切它 ⇒ 屏上就是"画面比屏幕大 / 飞到屏幕外"。
+   *
+   * 这里把 surface 等比缩进容器：装得下恒返回 1（不改变任何既有观感），装不下才缩。
+   * 只在退出方向（dir=2，以及退出旋转直提的冻结期）生效，进入全屏/稳态一律 1。
+   */
+  private fsExitVideoScale(): number {
+    if (!this.fs) return 1;
+    if (this.fsLerpDir !== 2 && !this.fsFreezeToWindow) return 1;
+    const w = this.ovVideoWidthRaw();
+    const h = this.ovVideoHeightRaw();
+    const pw = this.ovRectW();
+    const ph = this.ovRectH();
+    if (!(w > 0) || !(h > 0) || !(pw > 0) || !(ph > 0)) return 1;
+    const scale = Math.min(1, pw / w, ph / h);
+    return Number.isFinite(scale) && scale > 0 ? scale : 1;
+  }
+
   private ovVideoW(): number {
+    return Math.max(1, this.ovVideoWidthRaw() * this.fsExitVideoScale());
+  }
+
+  private ovVideoWidthRaw(): number {
     if (this.fsEntering) return Math.max(1, this.fsLerpSnapVW);
     if (this.referenceLayout && this.isLs && (!this.fs || this.fsLerpDir === 2)) {
       const target = this.referenceLandscapeMediaWidth();
@@ -1047,6 +1075,10 @@ struct VideoPlayerPage {
       this.fsLerpDir, this.fsPanProgress, this.fsLerpStartP);
   }
   private ovVideoH(): number {
+    return Math.max(1, this.ovVideoHeightRaw() * this.fsExitVideoScale());
+  }
+
+  private ovVideoHeightRaw(): number {
     if (this.fsEntering) return Math.max(1, this.fsLerpSnapVH);
     if (this.referenceLayout && this.isLs && (!this.fs || this.fsLerpDir === 2)) {
       const target = this.referenceLandscapeMediaHeight();
@@ -1627,6 +1659,13 @@ struct VideoPlayerPage {
   @State @Watch('onPlaybackViewportChanged') isLs: boolean = false
   @State isAnimatingToFS: boolean = false
   @State fsEntering: boolean = false  // 进入全屏旋转期间常驻层固定在快照位置
+  /**
+   * ⭐ 退出全屏的"系统旋转直提"（`rotateReferenceFullscreen(false,…)`）期间：
+   *    窗口已被换成竖屏，冻结的横屏快照不能再当常驻层用 —— 改成常驻层跟当前窗口、画面等比缩进去。
+   * ⚠️ 进入全屏的冻结**不能**跟窗口（窗口还没转横屏，跟窗口会让黑板开屏铺满整屏闪一下），
+   *    所以不能复用 `fullscreenRotationEntering` 判定（手势进入时它可能是上一轮退出留下的 false）。
+   */
+  @State fsFreezeToWindow: boolean = false
   @State fsPanProgress: number = 0
   @State fsLerpStartP: number = 0  // 全屏插值动画起点(手势全屏时=当前fsPanProgress,点击全屏时=0)
   private fsLerpT(): number { return fullscreenEntryProgress(this.fsPanProgress, this.fsLerpStartP); }
@@ -5164,6 +5203,7 @@ struct VideoPlayerPage {
     if (!this.mw || !this.referenceAlive || !this.playerPageVisible) return;
     // Ability 回前台时使用同一全屏状态，避免把全屏误恢复成半屏的系统栏。
     AppStorage.setOrCreate('isFullscreen', this.fs);
+    if (this.fullscreenReturningToPortrait()) return;
     if (!force && this.fs) return;
     const feed = this.referenceLayout && this.referenceFeed && !this.fs && !this.isLs;
     const visible = !this.fs && (this.referenceLayout || !this.isLs) &&
@@ -6550,6 +6590,7 @@ struct VideoPlayerPage {
     // ⭐ 快照插值起点（进入前的槽矩形，须在旋转开始前捕捉）
     this.captureFSSnapshot();
     this.fsEntering = true;
+    this.fsFreezeToWindow = false;  // 进入侧冻结在竖屏槽，不跟窗口（否则黑板开屏铺满整屏）
     this.fsHapticPrev = 0;
     if (this.referenceLayout && !this.isPcDevice && this.fullscreenTargetLandscape() !== this.isLs &&
       (!this.fsAnimOn || this.fsPanProgress >= 0.62)) {
@@ -6649,13 +6690,28 @@ struct VideoPlayerPage {
       () => {
         this.isLs = false;
         this.isLandscapeVertical = false;
-      });
+      }, this.fullscreenReturningToPortrait());
   }
 
+  private fullscreenReturningToPortrait(): boolean {
+    return this.fullscreenRotationTransition && !this.fullscreenRotationEntering && this.fullscreenRotationTarget === false;
+  }
+
+  /**
+   * 退出全屏后应回到横屏吗？
+   *
+   * `current` 传**非全屏态（锁定后）的方向** `source.isLandscape`，不是全屏中的窗口方向 `isLs`。
+   * `AUTO_ROTATION_RESTRICTED` + 系统旋转锁定开启时 `returnLandscape` 原样返回 `current`：
+   *   · 手机：锁定开 ⇒ 非全屏态只能是竖屏 ⇒ `isLandscape=false` ⇒ 回竖屏；
+   *   · 平板：锁定开 ⇒ 非全屏态就是用户锁定的方向 ⇒ `isLandscape` 即答案（锁横屏时为 true）。
+   * 之前传 `isLs`（全屏横屏恒 true）⇒ 手机锁定开被判成"退出回横屏"，
+   * 但手机上窗口退出横屏多窗后必然回竖屏 ⇒ 系统旋转与 200ms 插值抢跑/并行，
+   * 真机就是"先缩小后旋转"和"同步旋转缩小"两种动画随机出现。
+   */
   private fullscreenReturnLandscape(): boolean {
     const source = this.fullscreenSource;
     if (!source) return this.isLs;
-    return this.fullscreenDeviceOrientation.returnLandscape(source.orientation, this.isLs,
+    return this.fullscreenDeviceOrientation.returnLandscape(source.orientation, source.isLandscape,
       this.getUIContext().getHostContext() as common.UIAbilityContext);
   }
 
@@ -6683,15 +6739,28 @@ struct VideoPlayerPage {
     if (!this.fs) this.initOverlayRectSync();
   }
 
-  /** Let the system own rotation; a second rectangle animation after rotation causes jumps. */
+  /** 系统负责旋转，窗口到达竖屏尺寸时直接提交最终分栏布局。 */
   private async rotateReferenceFullscreen(entering: boolean, target: boolean): Promise<void> {
     this.fullscreenRotationTransition = true;
     this.fullscreenRotationEntering = entering;
     this.fullscreenRotationTarget = target;
     this.fsEntering = true;
+    // ⭐ 只有"退出"这一侧窗口已经变成竖屏，冻结几何必须跟窗口；进入侧仍冻结在竖屏槽上。
+    this.fsFreezeToWindow = !entering;
     this.fsLerpDir = 0;
+    const source = this.fullscreenSource;
+    const portraitReturnWindow = !entering && !target ? this.mw : null;
+    const portraitDetailWindow = source && !source.feed && !source.feedComments && !this.isLightsOff
+      ? portraitReturnWindow : null;
+    const onPortraitSize = (size: window.Size): void => {
+      if (!this.referenceAlive || !this.fsEntering || size.width <= 0 || size.width >= size.height) return;
+      const ui = this.getUIContext();
+      this.applyPlaybackWindowSize(ui.px2vp(size.width), ui.px2vp(size.height));
+    };
     logInfo(`[FSDBG] native rotation begin entering=${entering} sourceFeed=${this.fullscreenSource?.feed} targetLandscape=${target}`);
     try {
+      // 窗口尺寸先于 ArkUI 布局通知到达，以竖屏尺寸接续画面，避免横屏快照被窗口裁掉。
+      portraitDetailWindow?.on('windowSizeChange', onPortraitSize);
       if (entering) {
         this.fs = true;
         this.fsPanProgress = 1;
@@ -6714,13 +6783,21 @@ struct VideoPlayerPage {
         this.fs = false;
         this.fsPanProgress = 0;
       }
-      if (this.mw) this.manageSB(true);
+      if (portraitReturnWindow) {
+        // 横屏模式退出会触发窗口重排，等系统旋转稳定后再提交。
+        await this.playbackWindow_.finishDeferredLandscapeExit(portraitReturnWindow);
+      } else if (this.mw) {
+        this.manageSB(true);
+      }
     } finally {
       this.fsEntering = false;
+      this.fsFreezeToWindow = false;
       this.fullscreenRotationTarget = null;
       this.fullscreenRotationTransition = false;
       this.fsLerpDir = 0;
       this.isAnimatingToFS = false;
+      portraitDetailWindow?.off('windowSizeChange', onPortraitSize);
+      if (portraitReturnWindow) this.manageSB(true);
       logInfo(`[FSDBG] native rotation end fs=${this.fs} feed=${this.referenceFeed} progress=${this.referenceFeedProgress} viewport=${this.cw}x${this.ch}`);
     }
   }
@@ -6738,6 +6815,7 @@ struct VideoPlayerPage {
     // ⭐ 快照插值起点（进入前的槽矩形，须在旋转开始前捕捉）
     this.captureFSSnapshot();
     this.fsEntering = true;
+    this.fsFreezeToWindow = false;  // 同上：进入全屏的冻结不跟窗口
     if (this.referenceLayout && !this.isPcDevice && this.fullscreenTargetLandscape() !== this.isLs) {
       await this.rotateReferenceFullscreen(true, this.fullscreenTargetLandscape());
       return;
@@ -6784,6 +6862,35 @@ struct VideoPlayerPage {
   }
 
   // ⭐ 退出全屏（优化：先动画驱动 fsPanProgress，再切换布局避免 XComponent 闪黑）
+  /**
+   * ⭐ 等窗口尺寸**真正稳定**（连续 3 拍不变，最多 400ms）。
+   *
+   * 退全屏的 200ms 插值必须等"窗口已经到达它要去的地方"再开始，否则同一姿态（比如横持）
+   * 在一次退出里会出现两种观感：
+   *   · 插值先跑 → 画面在仍是横屏的窗口里先缩成一条 → **先缩小后旋转**；
+   *   · 系统先转完再插值 → **同步旋转和缩小**。
+   *
+   * ⚠️ 不能拿 `rotationInProgress` 当判据：它要等 `applyPlaybackWindowSize` 发现方向翻转
+   *    才置位（450ms 后清），而 `disableLandscapeMultiWindow()` 的窗口重排事件可能晚于
+   *    本次判定 —— `waitForRotationEnd` 于是在 `rotating()` 还是 false 时直接返回、漏等，
+   *    这正是"同一姿态下随机出现两种动画"的来源。
+   */
+  private async waitForStableWindowSize(): Promise<void> {
+    let lastW = -1;
+    let lastH = -1;
+    let stable = 0;
+    for (let i = 0; i < 20; i++) {
+      await new Promise<void>(resolve => setTimeout(resolve, 20));
+      if (this.cw === lastW && this.ch === lastH) {
+        if (++stable >= 3) return;
+      } else {
+        lastW = this.cw;
+        lastH = this.ch;
+        stable = 0;
+      }
+    }
+  }
+
   private async exitFullscreenAnimated(): Promise<void> {
     if (!this.fs || this.isAnimatingToFS) return;
     this.isAnimatingToFS = true;
@@ -6812,6 +6919,11 @@ struct VideoPlayerPage {
         return;
       }
       this.restoreFullscreenSource();
+      // ⭐ 退出到横屏（分栏/半屏）：全屏控件必须在动画起点就收起。
+      //    `referenceLandscapeFullscreen` 依赖 `fs`，而 `fs` 要等 200ms 插值结束才置 false，
+      //    期间 `isControlsVisible` 仍为 true ⇒ 全屏顶栏/大控制栏跟着画面一起缩，
+      //    直到 `fs=false` 才被 `VideoControls` 的分支切换一次性换掉 —— 观感就是"切换完成才突然消失"。
+      this.cv = false;
     }
 
     // ⭐ 动画关闭：瞬时切换，无过渡动画
@@ -6834,9 +6946,11 @@ struct VideoPlayerPage {
     this.fsLerpDir = 2;
     logInfo(`[FSDBG] exit: dir=2 P=${this.fsPanProgress} ovVideo=(${this.ovVideoW().toFixed(1)},${this.ovVideoH().toFixed(1)}) ovRect=(${this.ovRectW().toFixed(1)},${this.ovRectH().toFixed(1)}) plateVis=${this.fs && this.fsLerpDir !== 2}`);
     await this.restoreOrientationOnly();
-    // ⭐ 等旋转完成再开始几何插值（旋转期间视频随窗口旋转持续渲染，无黑屏）
+    // ⭐ 等窗口尺寸稳定再开始几何插值（旋转期间视频随窗口旋转持续渲染，无黑屏）。
+    //    原先用 waitForRotationEnd(rotationInProgress)：该标记晚于本次判定才置位时直接早退，
+    //    导致插值与系统旋转的先后关系随机 —— 同一姿态下时而"先缩小后旋转"、时而"同步"。
     if (!this.isPcDevice) {
-      await this.playbackWindow_.waitForRotationEnd(() => this.rotationInProgress, () => this.referenceAlive);
+      await this.waitForStableWindowSize();
     }
     if (!this.referenceAlive) return;
     // ⭐ PC：无旋转 → 提前恢复进入前布局方向，使插值目标矩形按原布局计算
@@ -7347,23 +7461,19 @@ struct VideoPlayerPage {
     const h = n.height as number;
     // ⭐ onAreaChange 在布局阶段回调：@State 更新延迟到本帧渲染结束后，避免“渲染中改状态”
     //    框架报错与评论区/详情卡闪烁（onSlotArea/onColumnArea 同理）
-    setTimeout(() => {
-      const was = this.isLs;
-      this.cw = w;
-      this.ch = h;
-      // ⭐ 横竖屏切换：XComponent 常驻单实例，surface 不再重建，直接切换布局；
-      //    rotationInProgress 供退出全屏插值等待旋转完成 + 旋转期间暂停评论头像预解码
-      if (w > h !== was) {
-        this.rotationInProgress = true;
-        this.applyOrientationState(w, h, was);
-        setTimeout(() => {
-          this.rotationInProgress = false;
-        }, 450);
-      } else {
-        // 尺寸变化但方向未翻转：直接同步更新布局
-        this.applyOrientationState(w, h, was);
-      }
-    }, 0);
+    setTimeout(() => this.applyPlaybackWindowSize(w, h), 0);
+  }
+
+  private applyPlaybackWindowSize(w: number, h: number): void {
+    const was = this.isLs;
+    this.cw = w;
+    this.ch = h;
+    // 方向翻转期间暂停评论头像预解码，等待系统旋转收尾。
+    if ((w > h) !== was) {
+      this.rotationInProgress = true;
+      setTimeout(() => { this.rotationInProgress = false; }, 450);
+    }
+    this.applyOrientationState(w, h, was);
   }
 
   /** 根据新的窗口尺寸更新方向相关布局状态（isLs → build 分支切换） */
@@ -9021,7 +9131,11 @@ struct VideoPlayerPage {
               secondaryHeight: this.referencePanelHeight(),
               secondaryX: this.isLs ? this.referenceLandscapePanelX() : 0,
               secondaryY: this.isLs ? this.referenceSafeTop() : this.referenceDetailPanelTop(),
-              showHandle: this.referenceLayout && this.isLs && !this.fs && !this.floatingMorph && !this.isLightsOff,
+              // ⭐ 退全屏到分栏：副栏与分发线跟着同一条插值进度从窗口外滑入（见 exitSplitShiftX）
+              secondaryShiftX: this.isLs ? this.exitSplitShiftX() : 0,
+              handleOpacity: this.exitSplitHandleOpacity(),
+              showHandle: this.referenceLayout && this.isLs && !this.floatingMorph && !this.isLightsOff &&
+                (!this.fs || this.fsLerpDir === 2),
               swapped: this.isLayoutSwapped,
               dividerTop: this.referenceLandscapeAreaTop(),
               dividerHeight: this.referenceLandscapeAreaHeight(),
@@ -10142,6 +10256,35 @@ struct VideoPlayerPage {
   private referenceLandscapePlayerWidth(): number {
     return splitPrimaryWidth(this.cw, this.referenceLandscapePlayerRatio ?? SPLIT_DEFAULT_RATIO,
       this.referenceLandscapeExpandProgress || 0);
+  }
+
+  /**
+   * ⭐ 退全屏到横屏分栏（插值路径 B）期间，副栏要退到窗口外的距离。
+   *
+   * 病根不是「控件消失得晚」，而是**整个切分过程只有视频在动**：
+   * 全屏底板一撤，副栏（简介/评论）已经在静止位置「原地出现」，
+   * 视频再单独缩 200ms，最后 `fs=false` 又把顶栏/分发线一次性换上来 —— 三段观感互不相干。
+   *
+   * 这里按同一条 `fsPanProgress`（1→0）把副栏连同分发线一起推出窗口：
+   * P=1 时副栏左缘正好落在窗口右缘（`secondaryX + (cw - secondaryX)`），
+   * P=0 时回到静止位置。于是「视频缩小」和「副栏滑入」是同一个动作，
+   * 中间只留一条 `2*inset` 的黑色分发缝。
+   * 只在 `fs && fsLerpDir===2` 生效，进入全屏/稳态/分栏拖动一律 0。
+   */
+  private exitSplitShiftX(): number {
+    if (!this.fs || this.fsLerpDir !== 2) return 0;
+    const p = Math.max(0, Math.min(1, this.fsPanProgress));
+    if (p <= 0) return 0;
+    const panelX = this.referenceLandscapePanelX();
+    const panelW = this.referenceLandscapePanelWidth();
+    // 播放区在左：副栏从右缘外滑入；播放区在右（swapped）：副栏从左缘外滑入。
+    return this.isLayoutSwapped ? -p * (panelX + panelW) : p * (this.cw - panelX);
+  }
+
+  /** 退全屏插值期间分发线贴着副栏左缘，P=1 时它还在窗口边缘外，先淡出避免露出半截。 */
+  private exitSplitHandleOpacity(): number {
+    if (!this.fs || this.fsLerpDir !== 2) return 1;
+    return Math.max(0, Math.min(1, (1 - this.fsPanProgress) / 0.3));
   }
 
   private referenceLandscapeResize(offset: number): void {
@@ -12241,7 +12384,9 @@ struct VideoPlayerPage {
       }.width('100%').height('100%')
         .onRefreshing(() => this.refreshReferenceComments())
       FloatingCommentEntry({ bottomInset: this.navIndicatorHeight,
-        entryWidth: this.referenceLayoutPixel((this.isLs && !this.fs ? this.referenceLandscapeTabWidth(1) : this.cw) * 0.94),
+        // ⭐ 这里不能带 `!this.fs`：全屏态该页被全屏底板盖住，宽度按 cw 算看不出来；
+        //    退出到分栏的 200ms 里副栏已经露出，若还按 cw 算，落位那一刻会突然缩窄一截。
+        entryWidth: this.referenceLayoutPixel((this.isLs ? this.referenceLandscapeTabWidth(1) : this.cw) * 0.94),
         onOpen: () => this.openCommentSheet('new', 0, 0, '') })
         .opacity(this.commentSheetVisible ? 0 : 1)
     }.width(this.isLs && !this.fs ? this.referenceLandscapeTabWidth(1) : '100%').height('100%').layoutWeight(1)

@@ -74,7 +74,7 @@ function load(file, methods) {
   assert.equal(target(Orientation.AUTO_ROTATION, false), false, 'flat data cannot revive a stale sample');
   tracker.stop();
   assert.equal(trackerContext.sample, undefined);
-  const p = load('pages/VideoPlayerPage.ets', ['async restoreOrientationOnly():']);
+  const p = load('pages/VideoPlayerPage.ets', ['async restoreOrientationOnly():', 'fullscreenReturningToPortrait():']);
   const applied = [];
   Object.assign(p, { fullscreenDeviceOrientation: { stop() {} },
     mw: { disableLandscapeMultiWindow: async () => {}, setPreferredOrientation: async value => applied.push(value) } });
@@ -84,7 +84,7 @@ function load(file, methods) {
     await p.restoreOrientationOnly();
     assert.equal(applied.at(-1), expected, `fullscreen exit: ${setting ?? 'default'}`);
   }
-  const bars = load('pages/VideoPlayerPage.ets', ['manageSB(']);
+  const bars = load('pages/VideoPlayerPage.ets', ['manageSB(', 'fullscreenReturningToPortrait():']);
   Object.assign(bars, { mw: {}, referenceAlive: true, playerPageVisible: true,
     referenceLayout: true, referenceFeed: false, referenceInfoHidden: false, sh_: false, isLightsOff: false });
   for (const isLs of [false, true]) {
