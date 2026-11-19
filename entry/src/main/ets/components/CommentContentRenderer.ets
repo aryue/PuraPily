@@ -313,9 +313,9 @@ export struct CommentContentRenderer {
     .bindContentCover($$this.showPreview, this.imagePreviewBuilder(), {
       transition: TransitionEffect.asymmetric(
         TransitionEffect.opacity(0)
-          .animation({ curve: curves.interpolatingSpring(0, 1, 228, 22) }),
+          .animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, curve: curves.interpolatingSpring(0, 1, 228, 22) }),
         TransitionEffect.opacity(0)
-          .animation({ curve: curves.interpolatingSpring(0, 1, 228, 22) })
+          .animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, curve: curves.interpolatingSpring(0, 1, 228, 22) })
       )
     })
   }
@@ -601,7 +601,7 @@ export struct CommentContentRenderer {
         .transition(
           TransitionEffect.opacity(0)
             .combine(TransitionEffect.scale({ x: 0.8, y: 0.8 }))
-            .animation({ duration: 200, curve: Curve.EaseOut })
+            .animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 200, curve: Curve.EaseOut })
         )
       }
 

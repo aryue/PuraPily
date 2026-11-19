@@ -836,11 +836,11 @@ struct SearchPage {
   /** 回到顶部按钮点击（覆盖层 Up 未拖动时调用，替代 TabBar onTabBarClick） */
   private handleBackToTopClick(): void {
     this.triggerHaptic();
-    animateTo({ duration: 100, curve: Curve.FastOutLinearIn }, () => {
+    animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 100, curve: Curve.FastOutLinearIn }, () => {
       this.btnScale = 0.8;
     });
     setTimeout(() => {
-      animateTo({ duration: 300, curve: curves.springMotion(0.4, 0.8) }, () => {
+      animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: curves.springMotion(0.4, 0.8) }, () => {
         this.btnScale = 1;
       });
     }, 100);
@@ -1382,7 +1382,7 @@ struct SearchPage {
         .backgroundColor(Color.Transparent)
         .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP])
         .id('search-landing-scene')
-        .transition(TransitionEffect.translate({ x: -this.currentWindowW }))
+        .transition(TransitionEffect.translate({ x: -this.currentWindowW }) /* MOTION-EXEMPT: 裸 TransitionEffect 无 AnimateParam 对象，补动画参数会改默认时长，须真机确认 */)
       } else {
         Scroll(this.scroller) {
           Column() {
@@ -1599,7 +1599,7 @@ struct SearchPage {
       .backgroundColor(Color.Transparent)
       .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP])
       .id('search-results-scene')
-      .transition(TransitionEffect.translate({ x: this.currentWindowW }))
+      .transition(TransitionEffect.translate({ x: this.currentWindowW }) /* MOTION-EXEMPT: 裸 TransitionEffect 无 AnimateParam 对象，补动画参数会改默认时长，须真机确认 */)
       }
 
       // ── 固定顶部的搜索栏 ──
@@ -1939,7 +1939,7 @@ struct SearchPage {
                     sideChanged = true;
                   }
                   if (sideChanged || totalOffsetX !== 0) {
-                    animateTo({ duration: 300, curve: Curve.Ease }, () => {
+                    animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.Ease }, () => {
                       this.dragOffsetX = 0;
                       if (sideChanged) {
                         this.searchFloatBtnSide = newSide;

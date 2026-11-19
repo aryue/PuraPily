@@ -819,7 +819,7 @@ struct UpSpacePage {
       }
 
           }.width('100%').height('100%')
-            .transition(TransitionEffect.OPACITY)
+            .transition(TransitionEffect.OPACITY /* MOTION-EXEMPT: 裸 TransitionEffect 无 AnimateParam 对象，补动画参数会改默认时长，须真机确认 */)
         } else {
           Column({ space: 12 }) {
             if (!this.loadError) {
@@ -828,7 +828,7 @@ struct UpSpacePage {
             Text(this.loadError || '加载中…').fontSize(13).fontColor(this.muted())
               .onClick(() => { if (this.loadError) this.loadAllData(); })
           }.width('100%').height('100%').justifyContent(FlexAlign.Center)
-            .transition(TransitionEffect.OPACITY)
+            .transition(TransitionEffect.OPACITY /* MOTION-EXEMPT: 裸 TransitionEffect 无 AnimateParam 对象，补动画参数会改默认时长，须真机确认 */)
             .id('space-initial-loading')
           Column() { this.spaceToolbar() }.width('100%')
         }
@@ -945,7 +945,7 @@ struct UpSpacePage {
       }
     }.width('100%').height('100%').backgroundColor(Color.Transparent)
       .id('space-search-panel')
-      .transition(TransitionEffect.translate({ x: this.spaceViewportWidth, y: 0 }))
+      .transition(TransitionEffect.translate({ x: this.spaceViewportWidth, y: 0 }) /* MOTION-EXEMPT: 裸 TransitionEffect 无 AnimateParam 对象，补动画参数会改默认时长，须真机确认 */)
   }
 
   /** 竖屏空间页：头图与头像重叠，统计和关注按钮排在头像右侧。 */

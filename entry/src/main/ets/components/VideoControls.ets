@@ -603,7 +603,7 @@ export struct VideoControls {
     if (this.gestureHintType !== 'seek') return;
     if (!this.showGestureHint || !this.gestureHintMainText) return;
     if (this.thumb.pm === undefined || this.seekThumbGrow >= 1) return;
-    animateTo({ duration: 220, curve: curves.springMotion(0.36, 0.9) }, () => {
+    animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 220, curve: curves.springMotion(0.36, 0.9) }, () => {
       this.seekThumbGrow = 1;
     });
   }
@@ -754,7 +754,7 @@ export struct VideoControls {
       this.holdPopTimer = -1;
     }
     this.holdPopStarted = true;
-    animateTo({ duration: 260, curve: curves.springMotion(0.35, 0.7) }, () => {
+    animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 260, curve: curves.springMotion(0.35, 0.7) }, () => {
       this.holdPop = 1;
     });
   }
@@ -791,7 +791,7 @@ export struct VideoControls {
     this.rippleO = 0.5;
     this.rippleTimer = setTimeout(() => {
       this.rippleTimer = -1;
-      animateTo({ duration: 420, curve: Curve.EaseOut }, () => {
+      animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 420, curve: Curve.EaseOut }, () => {
         this.rippleS = 1.6;
         this.rippleO = 0;
       });
@@ -1084,7 +1084,7 @@ export struct VideoControls {
       //   ⚠️ 时长 180ms ≤ 弹层出场 200ms（`hintTransition()`），别让弹层先销毁把收缩截断。
       //   ⚠️ `cancelHoldPop()` 只清定时器/标记，**不动 holdPop**（老注释"不重置 holdPop"那句话
       //     在"没有退场动画"的前提下才成立，现在是 animateTo 平滑缩回）。
-      animateTo({ duration: 180, curve: Curve.EaseIn }, () => {
+      animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 180, curve: Curve.EaseIn }, () => {
         this.holdPop = this.holdPopStart();
       });
     }
@@ -2140,7 +2140,7 @@ export struct VideoControls {
             .onClick(() => {
               // ⭐ 先通知播放页取消延迟隐藏并持久化，再切状态（animateTo 让四组按钮滑移过渡）
               this.onMirrorToggle();
-              this.getUIContext().animateTo({ duration: 300, curve: Curve.EaseInOut }, () => {
+              this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.EaseInOut }, () => {
                 this.mirrorIconAngle += 180;
                 this.isMirrorControls = !this.isMirrorControls;
               });
@@ -2665,7 +2665,7 @@ export struct VideoControls {
                       //   在 animateTo 里改它能让滑块/轨道滑过去而不是瞬跳
                       //   （文字内容不是可动画属性，所以时间文案仍是即时跳到目标值）。
                       if (mode === SliderChangeMode.Click) {
-                        this.getUIContext().animateTo({ duration: 180, curve: Curve.EaseOut }, () => {
+                        this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 180, curve: Curve.EaseOut }, () => {
                           this.currentTime = value;
                         });
                     } else {
@@ -2673,7 +2673,7 @@ export struct VideoControls {
                     }
                     // 非全屏：拖动/点击中显示轨道（厚度随之平滑过渡），松开后隐藏
                     if (!this.isFullscreen) {
-                      this.getUIContext().animateTo({ duration: 200, curve: Curve.EaseOut }, () => {
+                      this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 200, curve: Curve.EaseOut }, () => {
                         this.seekTrackVisible = interacting;
                       });
                     }

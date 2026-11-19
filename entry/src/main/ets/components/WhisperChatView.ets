@@ -933,7 +933,7 @@ export struct WhisperChatView {
       // ⭐ 打开预览时背景放大（iOS 式 modal 层级感），关闭恢复；弹簧曲线同预览一镜到底
       .scale({ x: this.previewSinkScale, y: this.previewSinkScale })
       .translate({ y: this.previewSinkY })
-      .animation({ curve: curves.interpolatingSpring(0, 1, 228, 22) })
+      .animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, curve: curves.interpolatingSpring(0, 1, 228, 22) })
       .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     }
     .titleBar({

@@ -7926,7 +7926,7 @@ struct VideoPlayerPage {
     this.sp = false;
     this.ip = false;
     if (this.cv) this.resetCT();
-    animateTo({ duration: 200, curve: Curve.EaseOut }, () => {
+    animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 200, curve: Curve.EaseOut }, () => {
       if (!switchingFromStretch) {
         try { if (this.playbackResources_.video) this.playbackResources_.video.videoScaleType = this.getVideoScaleType(); } catch (_) {}
       }
@@ -9118,7 +9118,7 @@ struct VideoPlayerPage {
             .width('100%').height('100%')
             .opacity(this.referencePortraitFeedActive() && !this.referenceFeedComments && this.referencePreviewVisible ? 1 : 0)
             .offset({ y: this.referenceFeedTouchDirection * this.ch + this.referenceFeedDragY })
-            .animation({ duration: this.referenceLayout && this.referenceFeed ? this.referenceFeedMotionDuration : 0, curve: Curve.EaseOut })
+            .animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: this.referenceLayout && this.referenceFeed ? this.referenceFeedMotionDuration : 0, curve: Curve.EaseOut })
             .zIndex(0)
             .hitTestBehavior(HitTestMode.None)
         }
@@ -9158,7 +9158,7 @@ struct VideoPlayerPage {
           //    （用户截图里「本该被裁掉却盖住下一个视频」的那一条，翻页收尾还会残留一两帧）。
           //    裁剪必须挂在这个带 offset 的节点上：裁剪框随页面一起移动，溢出止于页边界。
           //    ⚠️ 不要改成裁到视频视口（ovRect）：连刷里双指放大要能扩进原始黑边。
-          .animation({ duration: this.referenceLayout && this.referenceFeed ? this.referenceFeedMotionDuration : 0, curve: Curve.EaseOut })
+          .animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: this.referenceLayout && this.referenceFeed ? this.referenceFeedMotionDuration : 0, curve: Curve.EaseOut })
           // 放在 .animation() 之后：裁剪不是可动画属性，别让它进隐式动画节点（HDR 画面经不起额外的图层包裹）。
           .clip(this.referenceFeed)
         }
@@ -9349,7 +9349,7 @@ struct VideoPlayerPage {
                     sideChanged = true;
                   }
                   if (sideChanged || totalOffsetX !== 0) {
-                    animateTo({ duration: 300, curve: Curve.Ease }, () => {
+                    animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.Ease }, () => {
                       this.lightDragOffsetX = 0;
                       if (sideChanged) {
                         this.videoLightBtnSide = newSide;
@@ -9366,19 +9366,19 @@ struct VideoPlayerPage {
             .onClick(() => {
               this.triggerHaptic();
               this.clearLightBtnTimer();
-              animateTo({ duration: 100, curve: Curve.FastOutLinearIn }, () => {
+              animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 100, curve: Curve.FastOutLinearIn }, () => {
                 this.lightBtnScale = 0.8;
               });
               setTimeout(() => {
-                animateTo({ duration: 300, curve: curves.springMotion(0.4, 0.8) }, () => {
+                animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: curves.springMotion(0.4, 0.8) }, () => {
                   this.lightBtnScale = 1;
                 });
               }, 100);
-              animateTo({ duration: 600, curve: curves.springMotion(0.6, 0.8) }, () => {
+              animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 600, curve: curves.springMotion(0.6, 0.8) }, () => {
                 this.lightbulbRotation = 180;
               });
               setTimeout(() => {
-                animateTo({ duration: 300, curve: Curve.Ease }, () => {
+                animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.Ease }, () => {
                   this.isLightsOff = false;
                   this.loBgScale = 1;
                   this.loBgBlur = 0;
@@ -9426,19 +9426,19 @@ struct VideoPlayerPage {
               .onClick(() => {
                 this.triggerHaptic();
                 this.clearLightBtnTimer();
-                animateTo({ duration: 100, curve: Curve.FastOutLinearIn }, () => {
+                animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 100, curve: Curve.FastOutLinearIn }, () => {
                   this.lightBtnScale = 0.8;
                 });
                 setTimeout(() => {
-                  animateTo({ duration: 300, curve: curves.springMotion(0.4, 0.8) }, () => {
+                  animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: curves.springMotion(0.4, 0.8) }, () => {
                     this.lightBtnScale = 1;
                   });
                 }, 100);
-                animateTo({ duration: 600, curve: curves.springMotion(0.6, 0.8) }, () => {
+                animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 600, curve: curves.springMotion(0.6, 0.8) }, () => {
                   this.lightbulbRotation = 180;
                 });
                 setTimeout(() => {
-                  animateTo({ duration: 300, curve: Curve.Ease }, () => {
+                  animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.Ease }, () => {
                     this.isLightsOff = false;
                     this.loBgScale = 1;
                     this.loBgBlur = 0;
@@ -9483,19 +9483,19 @@ struct VideoPlayerPage {
               .onClick(() => {
                 this.triggerHaptic();
                 this.clearLightBtnTimer();
-                animateTo({ duration: 100, curve: Curve.FastOutLinearIn }, () => {
+                animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 100, curve: Curve.FastOutLinearIn }, () => {
                   this.lightBtnScale = 0.8;
                 });
                 setTimeout(() => {
-                  animateTo({ duration: 300, curve: curves.springMotion(0.4, 0.8) }, () => {
+                  animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: curves.springMotion(0.4, 0.8) }, () => {
                     this.lightBtnScale = 1;
                   });
                 }, 100);
-                animateTo({ duration: 600, curve: curves.springMotion(0.6, 0.8) }, () => {
+                animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 600, curve: curves.springMotion(0.6, 0.8) }, () => {
                   this.lightbulbRotation = 180;
                 });
                 setTimeout(() => {
-                  animateTo({ duration: 300, curve: Curve.Ease }, () => {
+                  animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.Ease }, () => {
                     this.isLightsOff = false;
                     this.loBgScale = 1;
                     this.loBgBlur = 0;
@@ -9547,7 +9547,7 @@ struct VideoPlayerPage {
                       sideChanged = true;
                     }
                     if (sideChanged || totalOffsetX !== 0) {
-                      animateTo({ duration: 300, curve: Curve.Ease }, () => {
+                      animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.Ease }, () => {
                         this.lightDragOffsetX = 0;
                         if (sideChanged) {
                           this.videoLightBtnSide = newSide;
@@ -9564,19 +9564,19 @@ struct VideoPlayerPage {
               .onClick(() => {
                 this.triggerHaptic();
                 this.clearLightBtnTimer();
-                animateTo({ duration: 100, curve: Curve.FastOutLinearIn }, () => {
+                animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 100, curve: Curve.FastOutLinearIn }, () => {
                   this.lightBtnScale = 0.8;
                 });
                 setTimeout(() => {
-                  animateTo({ duration: 300, curve: curves.springMotion(0.4, 0.8) }, () => {
+                  animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: curves.springMotion(0.4, 0.8) }, () => {
                     this.lightBtnScale = 1;
                   });
                 }, 100);
-                animateTo({ duration: 600, curve: curves.springMotion(0.6, 0.8) }, () => {
+                animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 600, curve: curves.springMotion(0.6, 0.8) }, () => {
                   this.lightbulbRotation = 180;
                 });
                 setTimeout(() => {
-                  animateTo({ duration: 300, curve: Curve.Ease }, () => {
+                  animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.Ease }, () => {
                     this.isLightsOff = false;
                     this.loBgScale = 1;
                     this.loBgBlur = 0;
@@ -10331,7 +10331,7 @@ struct VideoPlayerPage {
       if (this.fs) this.referenceLandscapePlayerRatio = this.referenceLandscapeResizeStart;
       this.referenceLandscapeExpandProgress = 0;
     } else {
-      this.getUIContext().animateTo({ duration: 200, curve: Curve.EaseOut }, () => {
+      this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 200, curve: Curve.EaseOut }, () => {
         this.referenceLandscapeExpandProgress = 0;
       });
     }
@@ -10390,7 +10390,7 @@ struct VideoPlayerPage {
       this.onPlaybackViewportChanged();
     };
     try {
-      this.getUIContext().animateTo({
+      this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 },
         duration: Math.max(120, 320 * Math.abs(target - origin)),
         curve: curves.cubicBezierCurve(0.2, 0, 0, 1),
         onFinish: finish
@@ -11046,7 +11046,7 @@ struct VideoPlayerPage {
     }
     try {
       this.getUIContext().animateTo(
-        { duration: 320, curve: Curve.EaseInOut, onFinish: finish },
+        { expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 320, curve: Curve.EaseInOut, onFinish: finish },
         () => { this.referenceFeedProgress = target; });
     } catch (_) {
       finish();
@@ -11394,7 +11394,7 @@ struct VideoPlayerPage {
     } else if (this.referencePanelOffset > 0) {
       // 下拉是「进连刷」手势通道，没到阈值就回起点；否则 16:9 会停在
       // 「区域变高、画面不放大」的大黑边中间态。
-      this.getUIContext().animateTo({ duration: 240, curve: Curve.EaseOut }, () => { this.referencePanelOffset = 0; });
+      this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 240, curve: Curve.EaseOut }, () => { this.referencePanelOffset = 0; });
     }
     // 上推方向保持手指松开时的比例（无级），不再吸附到 0 / 最小两档。
     // 进连刷由 referenceSetFeed 收尾归零，取消手势仍回 referencePanelStart。
@@ -11404,7 +11404,7 @@ struct VideoPlayerPage {
     this.referencePanelHeaderAnchored = false;
     this.referencePanelHeaderAnchor = 0;
     if (this.isLs) return;
-    this.getUIContext().animateTo({ duration: 180, curve: Curve.EaseOut }, () => { this.referencePanelOffset = this.referencePanelStart; });
+    this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 180, curve: Curve.EaseOut }, () => { this.referencePanelOffset = this.referencePanelStart; });
   }
 
   private referencePanelBodyTouch(e: TouchEvent): void {
@@ -11487,12 +11487,12 @@ struct VideoPlayerPage {
       if (!comments && dy > 90 && this.referencePanelBodyStartOffset >= -20) this.referenceSetFeed(true);
       else if (this.referencePanelOffset > 0) {
         // 与把手 onActionEnd 同口径：下拉回起点，上推保持无级。
-        this.getUIContext().animateTo({ duration: 240, curve: Curve.EaseOut }, () => { this.referencePanelOffset = 0; });
+        this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 240, curve: Curve.EaseOut }, () => { this.referencePanelOffset = 0; });
       }
       this.referencePanelBodyCanDrag = false;
     } else if (e.type === TouchType.Cancel) {
       this.referencePanelBodyCanDrag = false;
-      this.getUIContext().animateTo({ duration: 180, curve: Curve.EaseOut }, () => { this.referencePanelOffset = this.referencePanelBodyStartOffset; });
+      this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 180, curve: Curve.EaseOut }, () => { this.referencePanelOffset = this.referencePanelBodyStartOffset; });
     }
   }
 

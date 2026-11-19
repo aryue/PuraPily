@@ -972,11 +972,11 @@ struct WatchHistoryPage {
                   this.saveFloatBtnPrefs();
                 } else if (event.type === TouchType.Up) {
                   this.triggerHaptic();
-                  animateTo({ duration: 100, curve: Curve.FastOutLinearIn }, () => {
+                  animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 100, curve: Curve.FastOutLinearIn }, () => {
                     this.btnScale = 0.8;
                   });
                   setTimeout(() => {
-                    animateTo({ duration: 300, curve: curves.springMotion(0.4, 0.8) }, () => {
+                    animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: curves.springMotion(0.4, 0.8) }, () => {
                       this.btnScale = 1;
                     });
                   }, 100);
@@ -1034,11 +1034,11 @@ struct WatchHistoryPage {
                   this.saveFloatBtnPrefs();
                 } else if (event.type === TouchType.Up) {
                   this.triggerHaptic();
-                  animateTo({ duration: 100, curve: Curve.FastOutLinearIn }, () => {
+                  animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 100, curve: Curve.FastOutLinearIn }, () => {
                     this.btnScale = 0.8;
                   });
                   setTimeout(() => {
-                    animateTo({ duration: 300, curve: curves.springMotion(0.4, 0.8) }, () => {
+                    animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: curves.springMotion(0.4, 0.8) }, () => {
                       this.btnScale = 1;
                     });
                   }, 100);
@@ -1107,7 +1107,7 @@ struct WatchHistoryPage {
                     sideChanged = true;
                   }
                   if (sideChanged || totalOffsetX !== 0) {
-                    animateTo({ duration: 300, curve: Curve.Ease }, () => {
+                    animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.Ease }, () => {
                       this.dragOffsetX = 0;
                       if (sideChanged) {
                         this.watchHistoryFloatBtnSide = newSide;
@@ -1123,11 +1123,11 @@ struct WatchHistoryPage {
                   this.dragOffsetX = 0;
                   if (event.type === TouchType.Up) {
                     this.triggerHaptic();
-                    animateTo({ duration: 100, curve: Curve.FastOutLinearIn }, () => {
+                    animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 100, curve: Curve.FastOutLinearIn }, () => {
                       this.btnScale = 0.8;
                     });
                     setTimeout(() => {
-                      animateTo({ duration: 300, curve: curves.springMotion(0.4, 0.8) }, () => {
+                      animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: curves.springMotion(0.4, 0.8) }, () => {
                         this.btnScale = 1;
                       });
                     }, 100);

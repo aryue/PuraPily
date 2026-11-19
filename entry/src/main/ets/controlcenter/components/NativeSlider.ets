@@ -265,20 +265,20 @@ export struct NativeSlider {
         outerChanged: (pressed: boolean): void => {
           this.outerPressed = pressed;
           if (!this.nativeJellyActive) {
-            this.getUIContext().animateTo({ curve: curves.interpolatingSpring(0, 1, 180, 20) }, () => {
+            this.getUIContext().animateTo({ /* MOTION-EXEMPT: 持续跟手 —— 触摸事件流逐帧驱动，spring 每事件打断重发，帧率不取决于补间 duration */ curve: curves.interpolatingSpring(0, 1, 180, 20) }, () => {
               this.buttonZoom = pressed ? 1.1 : 1;
             });
           }
         },
         contactChanged: (pressed: boolean): void => {
-          this.getUIContext().animateTo({ curve: curves.springMotion(0.3, 1) }, () => {
+          this.getUIContext().animateTo({ /* MOTION-EXEMPT: 持续跟手 —— 触摸事件流逐帧驱动，spring 每事件打断重发，帧率不取决于补间 duration */ curve: curves.springMotion(0.3, 1) }, () => {
             this.lightIntensity = pressed ? 1 : 0;
           });
         },
         innerChanged: (selected: boolean): void => {
           // The actual Lottie changes color as a whole. It is outside the scaled fill.
           this.chosen = selected;
-          this.getUIContext().animateTo({ curve: curves.responsiveSpringMotion(0.28, 1, 0) }, () => {
+          this.getUIContext().animateTo({ /* MOTION-EXEMPT: 持续跟手 —— 触摸事件流逐帧驱动，spring 每事件打断重发，帧率不取决于补间 duration */ curve: curves.responsiveSpringMotion(0.28, 1, 0) }, () => {
             this.innerZoomX = selected ? this.widthVp() / this.innerWidthVp() : 1;
             this.innerZoomY = selected ? this.heightVp() / this.innerHeightVp() : 1;
           });
@@ -336,7 +336,7 @@ export struct NativeSlider {
             // factors together; never restore a stale pressed multiplier.
             this.buttonZoom = 1;
             if (this.outerPressed) {
-              this.getUIContext().animateTo({ curve: curves.interpolatingSpring(0, 1, 180, 20) }, () => {
+              this.getUIContext().animateTo({ /* MOTION-EXEMPT: 持续跟手 —— 触摸事件流逐帧驱动，spring 每事件打断重发，帧率不取决于补间 duration */ curve: curves.interpolatingSpring(0, 1, 180, 20) }, () => {
                 this.buttonZoom = 1.1;
               });
             }
@@ -349,7 +349,7 @@ export struct NativeSlider {
       if (this.nativeJellyReady) {
         this.jellyController = new NativeJellyMotion(host,
           (shape: number[], delay: number, onFinish?: () => void): void => {
-            this.getUIContext().animateTo({ curve: curves.interpolatingSpring(0, 1, 140, 20),
+            this.getUIContext().animateTo({ /* MOTION-EXEMPT: 持续跟手 —— 触摸事件流逐帧驱动，spring 每事件打断重发，帧率不取决于补间 duration */ curve: curves.interpolatingSpring(0, 1, 140, 20),
               delay: delay, onFinish: onFinish }, () => { host.frame(shape); });
           });
       } else {
@@ -388,7 +388,7 @@ export struct NativeSlider {
     this.syncAdjusting();
   }
   private syncProgress(): void {
-    this.getUIContext().animateTo({ curve: curves.responsiveSpringMotion(0.1, 1, 0) }, () => {
+    this.getUIContext().animateTo({ /* MOTION-EXEMPT: 持续跟手 —— 触摸事件流逐帧驱动，spring 每事件打断重发，帧率不取决于补间 duration */ curve: curves.responsiveSpringMotion(0.1, 1, 0) }, () => {
       this.uiValue = this.value * this.trackVp();
     });
   }
@@ -506,7 +506,7 @@ export struct NativeSlider {
     if (!this.jellyShowing) { this.jellyCaptureMode = false; }
     this.stopTimer();
     const generation: number = this.particleGeneration;
-    this.getUIContext().animateTo({ duration: 600, curve: Curve.EaseOut,
+    this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 600, curve: Curve.EaseOut,
       onFinish: () => {
         if (!this.feedbackActive && generation === this.particleGeneration) { this.showParticles = false; }
       }
@@ -516,7 +516,7 @@ export struct NativeSlider {
   private followLight(x: number, y: number): void {
     const targetX: number = Math.max(0, Math.min(this.widthVp(), x));
     const targetY: number = Math.max(0, Math.min(this.heightVp(), y));
-    this.getUIContext().animateTo({ curve: curves.responsiveSpringMotion() }, () => {
+    this.getUIContext().animateTo({ /* MOTION-EXEMPT: 持续跟手 —— 触摸事件流逐帧驱动，spring 每事件打断重发，帧率不取决于补间 duration */ curve: curves.responsiveSpringMotion() }, () => {
       this.lightX = targetX;
       this.lightY = targetY;
     });

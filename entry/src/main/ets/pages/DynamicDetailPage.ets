@@ -547,11 +547,11 @@ struct DynamicDetailPage {
   /** 点击回到顶部：触觉反馈 + 缩一下再弹回（与搜索页同一套曲线）+ 列表回顶 */
   private handleBackToTopClick(): void {
     this.triggerHaptic();
-    animateTo({ duration: 100, curve: Curve.FastOutLinearIn }, () => {
+    animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 100, curve: Curve.FastOutLinearIn }, () => {
       this.btnScale = 0.8;
     });
     setTimeout(() => {
-      animateTo({ duration: 300, curve: curves.springMotion(0.4, 0.8) }, () => {
+      animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: curves.springMotion(0.4, 0.8) }, () => {
         this.btnScale = 1;
       });
     }, 100);

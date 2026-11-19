@@ -2626,7 +2626,7 @@ struct LivePlayerPage {
           x: this.gestureHintX(),
           y: Math.max(0, (this.viewportHeight - 144) / 2)
         })
-        .transition(TransitionEffect.OPACITY)
+        .transition(TransitionEffect.OPACITY /* MOTION-EXEMPT: 裸 TransitionEffect 无 AnimateParam 对象，补动画参数会改默认时长，须真机确认 */)
         .hitTestBehavior(HitTestMode.None)
         .zIndex(10)
       }

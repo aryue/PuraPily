@@ -43,10 +43,10 @@ export struct PlayerLegacyVideoOptions {
               TransitionEffect.asymmetric(
                 TransitionEffect.translate({ x: (this.mirror ? -1 : 1) * (this.scalePanel ? 60 : 40) })
                   .combine(TransitionEffect.opacity(0))
-                  .animation({ duration: this.scalePanel ? 450 : 300,
+                  .animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: this.scalePanel ? 450 : 300,
                     curve: this.scalePanel ? Curve.EaseOut : Curve.EaseIn, delay: index * 100 }),
                 TransitionEffect.translate({ x: this.mirror ? -40 : 40 }).combine(TransitionEffect.opacity(0))
-                  .animation({ duration: 300, curve: Curve.EaseIn, delay: index * 100 })
+                  .animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.EaseIn, delay: index * 100 })
               )
           )
           .offset({ x: this.mirror ? 14 : -14 })
@@ -68,8 +68,8 @@ export struct PlayerLegacyVideoOptions {
       this.instant ? TransitionEffect.IDENTITY :
         TransitionEffect.asymmetric(
           TransitionEffect.translate({ x: this.mirror ? '-100%' : '100%' }).combine(TransitionEffect.opacity(0))
-            .animation({ duration: 400, curve: Curve.EaseOut }),
-          TransitionEffect.opacity(0).animation({ duration: 700, curve: Curve.EaseIn })
+            .animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 400, curve: Curve.EaseOut }),
+          TransitionEffect.opacity(0).animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 700, curve: Curve.EaseIn })
         )
     )
   }

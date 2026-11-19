@@ -276,7 +276,7 @@ export struct ExperimentalLevelBar {
     .backgroundColor('#202D3344')
     .shadow({ radius: 14, color: '#22000000', offsetY: 6 })
     .scale({ x: this.pressed ? 1.035 : 1, y: this.pressed ? 1.015 : 1 })
-    .animation({ duration: 180, curve: Curve.EaseOut })
+    .animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 180, curve: Curve.EaseOut })
     .accessibilityText(`${this.kind === 'brightness' ? '亮度' : '音量'} ${this.percent}%`)
     .onTouch((event: TouchEvent) => this.touch(event))
   }

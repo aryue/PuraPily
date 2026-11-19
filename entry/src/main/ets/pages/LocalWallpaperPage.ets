@@ -145,7 +145,7 @@ struct LocalWallpaperPage {
           .height(Math.ceil(this.items.length / 3) * (Math.max(1, this.previewWidth - 56) / 3 + 42))
       }.width('100%').padding({ left: 16, right: 16, top: this.statusBarHeight + 68, bottom: 24 + this.bottomInset })
     }.width('100%').height('100%').align(Alignment.TopStart)
-      .transition(TransitionEffect.move(TransitionEdge.START))
+      .transition(TransitionEffect.move(TransitionEdge.START) /* MOTION-EXEMPT: 裸 TransitionEffect 无 AnimateParam 对象，补动画参数会改默认时长，须真机确认 */)
       .onSizeChange((_old: SizeOptions, size: SizeOptions) => { this.previewWidth = Number(size.width); })
   }
 
@@ -186,7 +186,7 @@ struct LocalWallpaperPage {
           .backgroundColor('#D34E7E').fontColor(Color.White).enabled(!this.busy).onClick(() => this.apply())
       }.width('100%')
     }.width('100%').height('100%').padding({ left: 16, right: 16, top: this.statusBarHeight + 76, bottom: 12 + this.bottomInset })
-      .transition(TransitionEffect.move(TransitionEdge.END))
+      .transition(TransitionEffect.move(TransitionEdge.END) /* MOTION-EXEMPT: 裸 TransitionEffect 无 AnimateParam 对象，补动画参数会改默认时长，须真机确认 */)
   }
 
 

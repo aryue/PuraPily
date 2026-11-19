@@ -191,7 +191,7 @@ export struct ImmersiveLightWrapper {
       if (da) {
         this.currentIntensity = this.lightIntensity;
       } else {
-        this.getUIContext().animateTo({ duration: 100, curve: Curve.EaseIn }, () => {
+        this.getUIContext().animateTo({ /* MOTION-EXEMPT: 持续跟手 —— 触摸事件流逐帧驱动，spring 每事件打断重发，帧率不取决于补间 duration */ duration: 100, curve: Curve.EaseIn }, () => {
           this.currentIntensity = this.lightIntensity;
         })
       }
@@ -202,7 +202,7 @@ export struct ImmersiveLightWrapper {
         this.fingerX = event.touches[0].x;
         this.fingerY = event.touches[0].y;
       } else {
-        this.getUIContext().animateTo({ curve: curves.responsiveSpringMotion(0.5, 0.5) }, () => {
+        this.getUIContext().animateTo({ /* MOTION-EXEMPT: 持续跟手 —— 触摸事件流逐帧驱动，spring 每事件打断重发，帧率不取决于补间 duration */ curve: curves.responsiveSpringMotion(0.5, 0.5) }, () => {
           this.fingerX = event.touches[0].x;
           this.fingerY = event.touches[0].y;
         })
@@ -211,7 +211,7 @@ export struct ImmersiveLightWrapper {
       if (da) {
         this.currentIntensity = 0;
       } else {
-        this.getUIContext().animateTo({ duration: 200, curve: Curve.EaseOut }, () => {
+        this.getUIContext().animateTo({ /* MOTION-EXEMPT: 持续跟手 —— 触摸事件流逐帧驱动，spring 每事件打断重发，帧率不取决于补间 duration */ duration: 200, curve: Curve.EaseOut }, () => {
           this.currentIntensity = 0;
         })
       }

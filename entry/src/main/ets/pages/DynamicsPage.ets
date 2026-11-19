@@ -1224,7 +1224,7 @@ export struct DynamicsPage {
         color: this.themeColorRgba(this.selectedRingAlpha)
       })
       .borderRadius(22)
-      .animation({ duration: 600, curve: Curve.EaseInOut })
+      .animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 600, curve: Curve.EaseInOut })
       Text(up.uname)
         .fontSize(10)
         .fontColor(this.highlightType === 'up' && this.selectedUpMid === up.mid
@@ -1255,7 +1255,7 @@ export struct DynamicsPage {
         .onAction(() => { this.openUpSpaceByMid(up); })
     )
     // ⚠️ .animation() 只作用于**它之前**声明的属性 → 必须放在 opacity/scale/translate 之后
-    .animation({ duration: 700, curve: curves.springCurve(0.15, 1, 80, 10) })
+    .animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 700, curve: curves.springCurve(0.15, 1, 80, 10) })
   }
 
   /** UP 面板高度：面板底部距屏幕底部 90vp；横屏限制不超屏（vp）
@@ -1828,6 +1828,6 @@ export struct DynamicsPage {
     //    弹簧曲线 interpolatingSpring（与预览一镜到底一致）：下沉/恢复都带轻微回弹
     .scale({ x: this.previewSinkScale, y: this.previewSinkScale })
     .translate({ y: this.previewSinkY })
-    .animation({ curve: curves.interpolatingSpring(0, 1, 228, 22) })
+    .animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, curve: curves.interpolatingSpring(0, 1, 228, 22) })
   }
 }
