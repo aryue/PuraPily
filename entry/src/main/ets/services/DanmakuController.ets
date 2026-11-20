@@ -2,6 +2,7 @@
  * 弹幕控制器
  * 整合数据获取、过滤、轨道管理、渲染等所有模块
  */
+import displaySync from '@ohos.graphics.displaySync'
 import { DanmakuItem, DanmakuItemInit, DanmakuConfig, DanmakuSegment, DanmakuSegmentInit, DanmakuStats, DanmakuType } from '../model/DanmakuItem'
 import { logInfo, logWarn, logError } from '../utils/Logger';
 import { DanmakuService } from './DanmakuService'
@@ -76,6 +77,18 @@ export class DanmakuController {
   //   renderTimer 是 setTimeout 返回的 id，链终止后这个值【不会被清零】，
   //   若只靠它判断"是否已在渲染"，链一旦停掉就永远无法重启（见 startRendering 注释）。
   private renderActive: boolean = false
+
+  // ⭐ vsync 帧驱动（取代原来的 setTimeout(16) 自调度链）。
+  //   为什么必须换成它：16ms 只是"不早于"，实际触发会被主线程排队推后，而且 16ms ≈ 62.5Hz
+  //   与设备 120Hz 的 8.33ms 帧**不同步** —— 每次推送要等 1~2 个显示帧才上屏，
+  //   屏幕上就是滚动弹幕一顿一顿（节奏忽快忽慢）。displaySync 的回调与屏幕刷新对齐，
+  //   位置推进仍按真实 dt，观感才是匀速。
+  private frameSync: displaySync.DisplaySync | null = null
+  // displaySync 不可用（老 SDK / 极端情况下 create 抛错）时退回定时器驱动，行为与改造前一致
+  private frameSyncUnavailable: boolean = false
+  // 空闲（无可见弹幕）扫描节流：vsync 每帧都扫分桶纯属浪费，250ms 一次足够
+  private nextIdleScanAt: number = 0
+
 
   // 统计信息
   private stats: DanmakuStats = new DanmakuStats()
@@ -366,6 +379,50 @@ export class DanmakuController {
     this.renderer.setSize(width, height)
     this.publishTrackGeometry()
     logInfo(`[DanmakuController] 画布尺寸: ${width}x${height}${fullscreen ? ' (全屏/横屏)' : ''}`)
+  }
+
+  /**
+   * ⭐ 下发画布**像素**尺寸（surface），只用于清屏；0 = 同逻辑视口。
+   *
+   * 与 `canvasWidth/canvasHeight`（逻辑视口，几何口径）是两件事：
+   * 横屏分栏里画布宽刻意恒为窗口宽（拖动零重建），而逻辑视口宽只有窗口宽的 6 成左右。
+   * 清屏必须按画布像素清，否则视口被拖宽时右边露出来的区域里还留着上一帧的字。
+   */
+  setSurfaceSize(width: number, height: number): void {
+    this.renderer.setSurfaceSize(width, height)
+  }
+
+  /**
+   * ⭐ 逻辑视口变化（横屏分栏拖动分隔线，逐帧调用）。
+   *
+   * 只做三件事：更新几何口径、同步渲染器视口、必要时补一帧。
+   * **不重排屏上弹幕**（`reflowVisibleDanmaku` 会逐条 measureText，逐帧做就是卡顿本身）：
+   * 屏上弹幕的 x / speed 在分配时就已经算好，宽度变化只影响**新**弹幕从哪儿进场
+   * （`trackManager.canvasWidth` → `item.x = canvasWidth`）。
+   * 行数真的变了（高度变化）才重排，和 `setTrackAreaHeight` 同一套判据。
+   */
+  setViewport(width: number, height: number, fullscreen: boolean = false): void {
+    if (!(width > 0) || !(height > 0)) {
+      return
+    }
+    if (Math.abs(width - this.canvasWidth) < 0.5 && Math.abs(height - this.canvasHeight) < 0.5) {
+      return
+    }
+    this.canvasWidth = width
+    this.canvasHeight = height
+    this.trackManager.setFullscreen(fullscreen)
+    this.renderer.setSize(width, height)
+    const previousRows = this.trackManager.trackRows
+    const rows = this.trackManager.updateGeometry(width, this.geometryHeight(height))
+    if (rows !== previousRows) {
+      this.reflowVisibleDanmaku()
+      this.publishTrackGeometry()
+      return
+    }
+    // 宽度变化不动屏上弹幕；但暂停时渲染循环是停的，静止弹幕要按新视口重新居中就得补画一帧
+    if (!this.isPlaying) {
+      this.renderer.render(this.visibleDanmaku, this.currentTime, 0)
+    }
   }
 
   /**
@@ -786,7 +843,7 @@ export class DanmakuController {
 
   /**
    * 开始渲染
-   * 自调度循环：有可见弹幕时 60fps 流畅渲染，无弹幕时 250ms 低频轮询（空弹幕停帧省电）
+   * vsync 帧驱动：有可见弹幕时每帧推进并重绘；无弹幕时按 250ms 节流扫描（空屏不重绘）
    */
   startRendering(): void {
     // ⚠️ 这里原先判断的是 `if (this.renderTimer) return`，而 renderTimer 是 setTimeout 的 id，
@@ -803,18 +860,80 @@ export class DanmakuController {
     this.isPlaying = true
     this.lastRenderTime = Date.now()
     this.lastFrameTimestamp = 0  // 重置帧时间，避免恢复播放时产生大dt跳帧
+    this.nextIdleScanAt = 0      // 首帧立刻扫一次可见列表（恢复播放时不用等 250ms）
 
-    this.scheduleNextFrame()
+    this.startFrameDriver()
 
-    logInfo('[DanmakuController] 开始渲染 (自调度)')
+    logInfo('[DanmakuController] 开始渲染 (vsync)')
   }
 
   /**
-   * 调度下一帧
+   * 启动帧驱动。首选 displaySync（跟随屏幕刷新，并显式声明 120Hz）；
+   * 拿不到时退回原来的 setTimeout 自调度链，保证任何设备上弹幕都还能动。
+   *
+   * ⚠️ 必须声明 expectedFrameRateRange：不声明时系统按 60Hz 给回调，
+   *    在 120Hz 屏上依然是"每 2 帧一跳"，等于没修。
+   */
+  private startFrameDriver(): void {
+    if (!this.frameSyncUnavailable) {
+      try {
+        if (this.frameSync === null) {
+          const sync = displaySync.create()
+          sync.setExpectedFrameRateRange({ min: 60, max: 120, expected: 120 })
+          sync.on('frame', this.onFrameTick)
+          this.frameSync = sync
+        }
+        this.frameSync.start()
+        return
+      } catch (e) {
+        this.frameSyncUnavailable = true
+        logWarn(`[DanmakuController] displaySync 不可用，退回定时器驱动: ${JSON.stringify(e)}`)
+      }
+    }
+    this.scheduleNextFrame()
+  }
+
+  /** vsync 帧回调：帧里任何异常都不能中断驱动链（链一断就是"弹幕整体静止"） */
+  private onFrameTick = (_info: displaySync.IntervalInfo): void => {
+    if (!this.renderActive || !this.isPlaying || !this.config.enable) {
+      return
+    }
+    try {
+      this.tick()
+    } catch (e) {
+      logError(`[DanmakuController] 渲染帧异常（已捕获，不影响后续帧）: ${JSON.stringify(e)}`)
+    }
+  }
+
+  /**
+   * 一帧的实际工作。
+   *
+   * 空闲（屏上一条都没有）时不必每帧扫分桶：250ms 扫一次就够（原来 60fps 循环里的
+   * "空弹幕 250ms 低频轮询"就是这件事，换到 vsync 后由这里节流）。
+   */
+  private tick(): void {
+    const now = Date.now()
+    if (this.visibleDanmaku.length === 0) {
+      if (now < this.nextIdleScanAt) {
+        // 节流期间也要把帧时间跟上，否则下次真有弹幕时 dt 会一次性补上几百毫秒
+        this.lastFrameTimestamp = now
+        return
+      }
+      this.nextIdleScanAt = now + 250
+    }
+    this.render()
+  }
+
+  /**
+   * 调度下一帧（仅 displaySync 不可用时的兜底路径）
    * 有可见弹幕：16ms（约60fps）流畅渲染
    * 无可见弹幕：250ms 低频轮询，仅刷新可见列表检查新弹幕，避免 60fps 空转耗电
    */
   private scheduleNextFrame(): void {
+    // 走 displaySync 时不能再挂定时器，否则两条链同时推进弹幕（速度翻倍 + 画布互踩）
+    if (this.frameSync !== null && !this.frameSyncUnavailable) {
+      return
+    }
     // 不再继续调度时必须把 renderActive 与 renderTimer 一并复位，
     // 否则渲染链处于"已死但标志未清"的状态，之后永远无法重启。
     if (!this.isPlaying || !this.config.enable) {
@@ -830,7 +949,7 @@ export class DanmakuController {
       //   而链中断是静默的（没有崩溃弹窗、日志里也看不到），排查成本极高。
       //   catch 里只记录一次，finally 保证链继续往下走。
       try {
-        this.render()
+        this.tick()
       } catch (e) {
         logError(`[DanmakuController] 渲染帧异常（已捕获，不影响后续帧）: ${JSON.stringify(e)}`)
       } finally {
@@ -846,6 +965,15 @@ export class DanmakuController {
     if (this.renderTimer) {
       clearTimeout(this.renderTimer)
       this.renderTimer = 0
+    }
+    // ⚠️ 必须显式 stop：不停的话暂停后回调照旧每帧进来（虽然有 isPlaying 守卫不画，
+    //    但白白占着 vsync 回调，且回前台恢复时 start() 会被重复调用）
+    if (this.frameSync !== null) {
+      try {
+        this.frameSync.stop()
+      } catch (e) {
+        logWarn(`[DanmakuController] 停止 vsync 驱动失败: ${JSON.stringify(e)}`)
+      }
     }
 
     this.renderActive = false
@@ -1095,6 +1223,16 @@ export class DanmakuController {
    */
   destroy(): void {
     this.stopRendering()
+    // vsync 驱动连同回调一起摘掉：只 stop 不 off 的话，回调仍挂在 DisplaySync 上，
+    // 控制器（含整份弹幕数据）会被回调引用住，页面反复进出时白占内存。
+    if (this.frameSync !== null) {
+      try {
+        this.frameSync.off('frame', this.onFrameTick)
+      } catch (e) {
+        logWarn(`[DanmakuController] 摘除 vsync 回调失败: ${JSON.stringify(e)}`)
+      }
+      this.frameSync = null
+    }
     this.service.destroy()
     this.clear()
 

@@ -91,7 +91,7 @@ import { FullscreenVideoTransform, VideoTransformPoint } from '../utils/Fullscre
 
 import { predecodeImage, getCachedPixelMap, clearImageCache } from '../utils/ImageCache';
 import { image } from '@kit.ImageKit';
-import { MIN_HEARTBEAT_PROGRESS_SEC } from '../model/WatchHistoryHelper';
+import { MIN_FINAL_PROGRESS_SEC, MIN_HEARTBEAT_PROGRESS_SEC } from '../model/WatchHistoryHelper';
 import { nextPlaybackEpisode, playbackCompletionAction, neighboringSeasonEpisode, firstSeasonEpisode } from '../utils/PlaybackEpisodeQueue';
 import { PlaybackHistoryRecord, PlaybackProgressReporter } from '../services/PlaybackProgressReporter';
 import { PlaybackSleepTimer } from '../services/PlaybackSleepTimer';
@@ -1204,6 +1204,28 @@ struct VideoPlayerPage {
     if (this.isLs || this.isLandscapeVertical) return Math.max(1, this.lsvh);
     if (this.isLightsOff && !this.isLandscapeVertical) return Math.max(1, this.loVideoHeight());
     return Math.max(1, this.videoDisplayHeight);
+  }
+  /**
+   * ⭐ 弹幕画布的**像素**尺寸（surface）—— 与 `ovDanmakuCW/CH()`（**逻辑视口**）分开。
+   *
+   * 横屏非全屏时 `ovDanmakuCW()` = 分栏视口宽，拖分隔线时逐帧变。Canvas 元素的尺寸
+   * 跟着逐帧变 ⇒ ArkUI 每帧重建 surface（内容被清空）⇒ 整层弹幕闪。
+   * 所以画布宽恒取**窗口宽**（拖动时的上限，且与视口无关）：拖动零重建，画布不动；
+   * 可见区域仍由弹幕层按实时视口 `.clip(true)` 裁，几何口径仍按实时视口算
+   * （新弹幕从画面右缘进场，不是从画布右缘 — 否则会先在画面外空走一段）。
+   *
+   * ⚠️ 不是"拖动期间冻结"：这个值在横屏分栏的**任何时刻**都等于窗口宽，不随手势变，
+   *    也不存在解冻时机；分栏比例写回后不会因为"忘了解冻"留下错尺寸。
+   */
+  private dmSurfaceW(): number {
+    if (this.referenceLayout && this.isLs && !this.fs) return Math.max(1, this.cw);
+    return this.ovDanmakuCW();
+  }
+  private dmSurfaceH(): number {
+    // 同理取窗口高：拖到全屏时可用高度会从 `ch - 安全区` 逐帧涨到 `ch`（展开动画 200ms），
+    // 画布高度若跟着变，这一段就变成逐帧重建 surface —— 同一个闪。
+    if (this.referenceLayout && this.isLs && !this.fs) return Math.max(1, this.ch);
+    return this.ovDanmakuCH();
   }
   /** 弹幕层在常驻层内的偏移：播放器区域在常驻层里是居中的（Stack 默认 Center 对齐） */
   private ovDanmakuX(): number {
@@ -2999,6 +3021,39 @@ struct VideoPlayerPage {
   private lastHapticPct_: number = -1 // 上次震动时的百分比 (0-100)，拖动时按档位震动
   // ⭐ 初始播放进度（从历史记录恢复）
   private initialProgress_: number = 0
+  /**
+   * 本会话是否已经落过一次**有效**进度（>0 秒或播完）。
+   * 用途：起播瞬间 / 恢复点还没生效时 `ct` 仍是 0，此时写库会把上一次的记录抹成 0，
+   * 下次进来 `PlaybackProgress.resume(0, dur)` 返回 0 ⇒ 从头播，用户看到的就是「没记录」。
+   * 一旦本会话真的读到过 >0 的位置，就允许正常写（含用户主动 seek 回 0 重播）。
+   */
+  private progressCommitted_: boolean = false
+  /**
+   * 「本次会话已确定的续播点」（秒，0 = 没有已知位置）。
+   *
+   * 为什么需要它：`initialProgress_` 在 `applyPreparedState` 里就被清零了，之后没有任何东西
+   * 记得「这一场本该从哪儿开始」。于是当预热实例带着续播点准备、native 的 start_time 却
+   * 没生效（实测 resume-prepared=2917ms，起播后 timeUpdate 从 0 开始）时，
+   * 第一个采样就把 2.9s 的记录改写成 1.8s —— 用户看到的就是「记录没了 / 从头播」。
+   *
+   * 语义：在 `ct` 真正追上它之前，任何更小的位置都是「seek 还没落地」的旧值，
+   * 本地与云端都不许写。用户**主动**拖动/点击进度条时清 0（那是真实的意图），
+   * 换片换集也清 0（新身份）。
+   */
+  private progressFloor_: number = 0
+  /** 预热实例起播后第一次拿到的播放器时钟（ms，-1 = 还没记录），用于核对续播是否真的生效。 */
+  private startupFirstClockMs_: number = -1
+  /**
+   * 预热实例接管后「还没补上的续播 seek」（ms，0 = 没有）。
+   * 为什么不能就地 seek：池实例刚 setSurface 时 IJK 还没有可用的读线程，
+   * 这一刻的 seek 会被静默丢弃（实测 seekDone 立刻回报 0ms，时钟仍从 0 走），
+   * 于是续播点丢失、第一个采样又把记录改小。改为等真的播起来（timeUpdate>0）再补。
+   */
+  private pendingResumeSeekMs_: number = 0
+  /** 上面那次补 seek 已经试了几轮（最多 2 轮，避免死循环）。 */
+  private pendingResumeSeekTries_: number = 0
+  /** `seekProgressPending` 的置位时刻（-1 = 未挂起），用于给「等不到 seekDone」加超时兜底。 */
+  private seekPendingSince_: number = -1
   // ⭐ 长按文本选取弹窗（简介等）：openCustomDialog 返回的对话框 id，用于关闭
   private textSelectDialogId_: number = -1
   // ⭐ seek完成Promise的resolve函数
@@ -3853,6 +3908,9 @@ struct VideoPlayerPage {
     this.playbackWindow_.cancelBarsRefresh();
     this.referenceCancelFeedPlayerTouch();
     this.playerPageVisible = false;
+    // ⭐ 页面被覆盖 / 切后台：离开这一刻的位置先锚定一次（force 绕过 3 秒节流）。
+    //    下面各分支里的暂停、提前 return 都不再经过保存路径，这里就是最后的机会。
+    this.saveWatchHistory(true);
     this.fullscreenDeviceOrientation.stop();
     // ⭐ 记录本次隐藏的成因：栈顶已变成别的页面就是跳页，不是切后台；
     //    pushUrl 时序可能让这里仍读到本页，故 onBackground 确认时会用 Ability 记录的栈顶复核。
@@ -3910,6 +3968,9 @@ struct VideoPlayerPage {
    */
   onAppBackgroundConfirmed(): void {
     if (this.appBgTimestamp === 0) return;
+    // ⭐ 切后台/熄屏 = 进程随时可能被回收的节点，必须落一次（force 绕过节流）。
+    //    旧实现只有「后台播放恢复」才会走到这里，普通模式下切后台不留任何记录。
+    this.saveWatchHistory(true);
     // ⭐ 关键复核：这次 onBackground 发生时，本页是否仍是「最上层的播放页实例」。
     //    1) 路由栈顶不是播放页 → 被其它页面覆盖（进 UP 空间、动态详情等）；
     //    2) 路由栈顶是播放页但不是本实例 → 被同路由的另一个播放页覆盖
@@ -4088,7 +4149,10 @@ struct VideoPlayerPage {
     this.stopSyncTimer();
     // ⭐ 取消声画同步（2x 追赶）
     this.cancelVideoSpeedSync();
-    this.saveWatchHistory();
+    // ⭐ 页面销毁是最后一次保存机会：必须带 force。旧实现走默认节流，
+    //    若退出前 3 秒内刚有过心跳/暂停上报（很常见），这一次会被直接吞掉，
+    //    云端记录就停在上一个心跳点，严重时整条看起来「没记录」。
+    this.saveWatchHistory(true);
     this.reportWatchBehavior();  // ⭐ 上报观看行为
     this.clrT();
     this.clearLightBtnTimer(); // ⭐ 清除开灯按钮自动隐藏定时器
@@ -4216,13 +4280,14 @@ struct VideoPlayerPage {
    * 走 /x/click-interface/web/heartbeat，带 aid + cid + epid + sid + type=4 + csrf，
    * 这样历史记录里该分集的观看位置才能被记住（否则重进只能定位到"哪一集"，定位不到时间）。
    */
-  private reportPgcHeartbeat(watchTime: number): Promise<void> {
+  private reportPgcHeartbeat(watchTime: number, allowShortProgress: boolean = false): Promise<void> {
     const generation = this.referenceSwitchGeneration;
     const epId = this.epId_;
     const cid = this.vi.cid;
     const cookie = AppStorage.get<string>('biliCookie') || '';
     return this.playbackProgressReporter_.reportPgc({
-      cookie, epId, watchTime, minimumProgress: MIN_HEARTBEAT_PROGRESS_SEC,
+      cookie, epId, watchTime,
+      minimumProgress: allowShortProgress ? MIN_FINAL_PROGRESS_SEC : MIN_HEARTBEAT_PROGRESS_SEC,
       current: () => generation === this.referenceSwitchGeneration && this.epId_ === epId &&
         (cid <= 0 || this.vi.cid === cid) && cookie === (AppStorage.get<string>('biliCookie') || ''),
       ensureContext: () => this.ensurePgcContext(),
@@ -4255,6 +4320,13 @@ struct VideoPlayerPage {
     const key = PlaybackProgress.storageKey(this.vi.bvid, this.vi.cid || 0, this.epId_);
     const resume = PlaybackProgress.startupResume(key, this.initialProgress_,
       result.lastPlayTimeMs ?? 0, this.dur);
+    const localEntry = PlaybackProgress.readLocal(key);
+    // ⭐ 续播点下限：本地已完成就按全片算，否则取「本地记录 / 服务端续播点」里更大的那个。
+    //   调用点可能不止一次（预取与正式取流各一次），只升不降。
+    const knownFloor: number = localEntry
+      ? (localEntry.completed ? Math.max(this.dur, localEntry.duration) : localEntry.position)
+      : (resume ? resume.position : 0);
+    if (knownFloor > 0) this.progressFloor_ = Math.max(this.progressFloor_, knownFloor);
     if (!resume) return;
     if (resume.source === 'serverEnd') {
       logInfo(`[VideoPlayer] 服务端续播点 ${resume.position}s 已到片尾，忽略`);
@@ -4275,30 +4347,86 @@ struct VideoPlayerPage {
    *   连发 5+ 个「上报观看进度」，是拖动后半段发涩、松手后延迟的来源之一。
    */
   private saveWatchHistory(force: boolean = false): void {
-    if (((this.sk_ || this.sg_ || this.seekProgressPending) && !this.referencePlaybackCompleted) || this.restoringProgress || this.initialProgress_ > 0 || this.referenceFeedPreparingMain) return;
-    this.saveLocalPlaybackProgress();
+    // ⭐ 「恢复点还没落地」时 ct 仍是 0：任何路径都不能写，否则会把已有记录清零。
+    //   正常路径 initialProgress_ 由 applyPreparedState 清零，这里只是兜底
+    //   （万一 prepared 分支提前 return，旧实现会让整场一条记录都不写）。
+    if (this.initialProgress_ > 0 && this.ct < this.initialProgress_ - 1) {
+      if (force) logWarn(`[PlaybackProgress] 跳过离开保存：恢复点未落地 ct=${this.ct.toFixed(1)}s resume=${this.initialProgress_.toFixed(1)}s`);
+      return;
+    }
+    // ⭐ 同一条判据的持久版：`initialProgress_` 在 prepared 之后就被清零，但「这一场本该从
+    //   哪儿开始」必须一直记着 —— 预热实例没按续播点起播时（实测时钟从 0 开始），
+    //   前几秒的 ct 全是假的，写下去只会把已有记录改小。force 也不例外。
+    const floor: number = this.referencePlaybackCompleted ? 0 : this.progressFloor_;
+    if (floor > 0 && this.ct < floor - 1) {
+      logWarn(`[PlaybackProgress] 跳过保存：续播点未落地 ct=${this.ct.toFixed(1)}s`
+        + ` floor=${floor.toFixed(1)}s force=${force}`);
+      return;
+    }
+    // 瞬时状态守卫（拖动中 / seek 在途 / 恢复 seek / 连刷准备中）只拦非关键节点。
+    // force = 离开这一条（退出页面 / 切后台 / 播完 / 连刷换片）：此时页面马上就没了，
+    // 宁可落一个「用户意图位置」，也不要整场一条都不写 —— 后者会同时丢掉本地与云端记录。
+    if (!force) {
+      if (!this.referencePlaybackCompleted && (this.sk_ || this.sg_ || this.seekProgressPending)) return;
+      if (this.restoringProgress || this.referenceFeedPreparingMain) return;
+    } else if (!this.referencePlaybackCompleted && (this.sk_ || this.sg_ || this.seekProgressPending || this.restoringProgress || this.referenceFeedPreparingMain)) {
+      logWarn(`[PlaybackProgress] 关键节点保存绕过节流/瞬时状态 ct=${this.ct.toFixed(1)}s`);
+    }
+    this.saveLocalPlaybackProgress(force);
     const detail = this.detailIsCurrentVideo() ? this.vd : null;
     this.playbackProgressReporter_.saveHistory({
       cookie: AppStorage.get<string>('biliCookie') || '',
-      force, completed: this.referencePlaybackCompleted, minimumProgress: MIN_HEARTBEAT_PROGRESS_SEC,
+      force, completed: this.referencePlaybackCompleted,
+      // 周期性心跳用 5s 抑制噪音；离开页面的最终保存放宽到 1s，
+      // 否则「看几秒就退出」在历史里永远没有这一条（用户感知 = 没记录）。
+      minimumProgress: force ? MIN_FINAL_PROGRESS_SEC : MIN_HEARTBEAT_PROGRESS_SEC,
       record: {
         aid: detail?.aid || this.aidFromParams_ || 0, cid: this.vi.cid || 0, bvid: this.vi.bvid,
         title: this.vi.title || (detail?.title ?? ''), coverUrl: this.vi.cover || '',
         ownerName: detail?.owner?.name ?? '', progress: this.ct, duration: this.dur,
         epId: this.epId_, seasonId: this.seasonId_
       },
-      reportEpisode: this.isPgc_ && this.epId_ > 0 ? (progress: number): Promise<void> => this.reportPgcHeartbeat(progress) : undefined
+      reportEpisode: this.isPgc_ && this.epId_ > 0 ? (progress: number): Promise<void> => this.reportPgcHeartbeat(progress, force) : undefined
     }).catch((error: Error) => logError(`[saveWatchHistory] 进度上报异常: ${error.message}`));
   }
 
-  private saveLocalPlaybackProgress(): void {
+  private saveLocalPlaybackProgress(force: boolean = false): void {
     const completed = this.referencePlaybackCompleted;
-    if ((this.seekProgressPending || this.sk_) && !completed) return;
-    if (this.referenceFeedPreparingMain || this.restoringProgress || this.initialProgress_ > 0) return;
+    if (!force) {
+      if ((this.seekProgressPending || this.sk_) && !completed) return;
+      if (this.referenceFeedPreparingMain || this.restoringProgress) return;
+    }
+    const state = this.playbackResources_.video?.state;
+    // 先算一遍落库值：位置无效（cid/时长缺失、NaN）直接放弃，与 saveConfirmed 同一判据。
+    const confirmed = PlaybackProgress.confirmedPosition(this.vi.cid, state, this.ct, this.dur, completed);
+    if (confirmed === null) {
+      logInfo(`[PlaybackProgress] 本地跳过：身份/状态无效 bvid=${this.vi.bvid} cid=${this.vi.cid}`
+        + ` state=${state} ct=${this.ct.toFixed(1)} dur=${this.dur.toFixed(1)} completed=${completed}`);
+      return;
+    }
+    // ⭐ 本会话还没真正读过任何位置时，0 值不能覆盖旧记录：起播瞬间 ct=0，
+    //   写进去等于把「上次看到 3:20」抹成 0，下次进来必然从头播。
+    if (confirmed <= 0 && !completed && !this.progressCommitted_) {
+      logInfo(`[PlaybackProgress] 本地跳过：本次会话尚未产生有效进度 ct=${this.ct.toFixed(1)}`);
+      return;
+    }
+    // ⭐ 续播点还没落地：预热实例没按续播点起播时，前几秒 ct 是假的（实测从 0 开始），
+    //   照写只会把已有记录越改越小。用户主动 seek 会清掉 progressFloor_。
+    const floor: number = completed ? 0 : this.progressFloor_;
+    if (floor > 0 && confirmed < floor - 1) {
+      logInfo(`[PlaybackProgress] 本地跳过：续播点未落地 pos=${confirmed.toFixed(1)}s`
+        + ` floor=${floor.toFixed(1)}s force=${force}`);
+      return;
+    }
     PlaybackProgress.saveConfirmed({
-      bvid: this.vi.bvid, cid: this.vi.cid, epId: this.epId_, state: this.playbackResources_.video?.state,
+      bvid: this.vi.bvid, cid: this.vi.cid, epId: this.epId_, state,
       position: this.ct, duration: this.dur, completed
     });
+    if (completed || confirmed > 0) this.progressCommitted_ = true;
+    // 落库后回读一次：key 与条目数能直接暴露「写了但 key 对不上」和「写了但没落盘」。
+    const stored = AppStorage.get<string>('playbackProgressV1') || '';
+    logInfo(`[PlaybackProgress] 本地已保存 key=${PlaybackProgress.storageKey(this.vi.bvid, this.vi.cid, this.epId_)}`
+      + ` pos=${confirmed.toFixed(1)}s dur=${this.dur.toFixed(1)}s storeLen=${stored.length}`);
   }
 
   /**
@@ -5286,6 +5414,13 @@ struct VideoPlayerPage {
     if (changed) {
       this.resetVideoShot_();
       this.referenceResetSubtitles();
+      // 新身份 = 新记录：在它真正播到 >0 之前，不许用 ct=0 覆盖它自己的历史记录。
+      this.progressCommitted_ = false;
+      // 新身份的续播点由 applyServerResumePoint 重新确定（取流回来之前先别拦）。
+      this.progressFloor_ = 0;
+      this.startupFirstClockMs_ = -1;
+      this.pendingResumeSeekMs_ = 0;
+      this.pendingResumeSeekTries_ = 0;
     }
   }
 
@@ -5649,9 +5784,28 @@ struct VideoPlayerPage {
     if (this.qs) { this.initialProgress_ = 0; return; }
     // ⭐ 如果有初始进度，跳转到该位置
     const preparedProgress = PlaybackProgress.resume(this.initialProgress_, this.dur);
+    // ⭐ 「带着续播点准备」≠「真的从续播点起播」：native 的 start_time 在部分片源/内核上
+    //   不生效（实测 resume-prepared=2917ms，起播后时钟从 0 走）。只信实际时钟：
+    //   读不到或明显不符就退回 seek 路径（多花 ~900ms，但位置是对的）。
+    const actualMs: number = this.startupResumePlayer_ === player
+      ? Math.max(0, player.currentTime || 0) : 0;
     const resumeAlreadyPrepared = this.startupResumePlayer_ === player &&
-      Math.abs(this.startupResumeMs_ - preparedProgress * 1000) < 100;
-    if (resumeAlreadyPrepared) this.playbackProfile?.mark('resume-prepared', this.startupResumeMs_);
+      Math.abs(this.startupResumeMs_ - preparedProgress * 1000) < 100 &&
+      actualMs > 0 && Math.abs(actualMs - this.startupResumeMs_) < 1500;
+    if (resumeAlreadyPrepared) {
+      this.playbackProfile?.mark('resume-prepared', this.startupResumeMs_);
+    } else if (preparedProgress > 0) {
+      logInfo(`[Startup] 预热续播点未生效，改走 seek actual=${actualMs}ms`
+        + ` expect=${this.startupResumeMs_}ms target=${Math.round(preparedProgress * 1000)}ms`);
+    }
+    // 接管预热实例时不能就地 seek（读线程还没起来，请求会被丢弃）：
+    // 先记下来，等真播起来（timeUpdate>0）再补，见 timeUpdate 里的 pendingResumeSeekMs_。
+    const deferResumeSeek: boolean = !resumeAlreadyPrepared && preparedProgress > 0 &&
+      this.startupResumePlayer_ === player;
+    if (deferResumeSeek) {
+      this.pendingResumeSeekMs_ = Math.round(preparedProgress * 1000);
+      this.pendingResumeSeekTries_ = 0;
+    }
     this.initialProgress_ = 0;
     const continuePaused = this.userPaused_ || (this.continuationRestore_ && this.continuationPaused_);
     if (this.continuationRestore_) await this.setRate(this.continuationRate_, false);
@@ -5664,7 +5818,8 @@ struct VideoPlayerPage {
       this.ct = preparedProgress;
       this.play = false;
       this.userPaused_ = true;
-    } else if (preparedProgress > 0 && this.dur > 0 && preparedProgress < this.dur && !resumeAlreadyPrepared) {
+    } else if (preparedProgress > 0 && this.dur > 0 && preparedProgress < this.dur &&
+      !resumeAlreadyPrepared && !deferResumeSeek) {
       logInfo(`[VideoPlayer] 跳转到目标进度: ${preparedProgress}秒`);
       const seekPos = preparedProgress;
       this.restoringProgress = true;
@@ -5959,6 +6114,7 @@ struct VideoPlayerPage {
       }
       const savePending = this.seekProgressPending;
       this.seekProgressPending = false;
+      this.seekPendingSince_ = -1;
       this.playbackProfile?.mark('seek-done', pos);
       logInfo(`[VideoPlayer] video seekDone: ${pos}ms`);
       if (this.videoSeekResolve_) {
@@ -5988,7 +6144,34 @@ struct VideoPlayerPage {
     });
     this.playbackResources_.video.on('timeUpdate', (t: number) => {
       if (this.playbackResources_.video !== player || (this.referenceFeed && generation !== this.referenceSwitchGeneration)) return;
+      // ⭐ 预热实例的续播点补 seek：此刻播放器真的在走了，seek 才会被接受。
+      //   两轮之内还没到位就放弃（记录有 progressFloor_ 兜着，不会被改小）。
+      if (this.pendingResumeSeekMs_ > 0) {
+        if (t + 1000 >= this.pendingResumeSeekMs_) {
+          // 已经到续播点：seek 生效，别再补。
+          this.pendingResumeSeekMs_ = 0;
+        } else if (this.pendingResumeSeekTries_ < 2) {
+          const target: number = this.pendingResumeSeekMs_;
+          this.pendingResumeSeekTries_++;
+          if (this.pendingResumeSeekTries_ >= 2) this.pendingResumeSeekMs_ = 0;
+          logWarn(`[Startup] 起播后仍未到续播点，补 seek → ${target}ms（第 ${this.pendingResumeSeekTries_} 次）`);
+          player.seek(target, media.SeekMode.SEEK_CLOSEST);
+          this.ct = target / 1000;
+          this.videoSeekPosition = -1;
+          this.seekProgressPending = true;
+          this.seekPendingSince_ = Date.now();
+          this.seekExpectedPosition = target / 1000;
+          return;
+        }
+      }
       if (t > 0 && this.playbackProfile?.seen('frame')) this.playbackProfile.once('time-update', t);
+      // ⭐ 起播后第一口时钟：预热实例「带着续播点准备」不等于「真的从那里起播」。
+      //   这一行与 seek 分支的日志对照，能直接判定续播到底生效没有。
+      if (t > 0 && this.startupFirstClockMs_ < 0) {
+        this.startupFirstClockMs_ = t;
+        logInfo(`[Startup] first-clock=${t}ms resumeMs=${this.startupResumeMs_}`
+          + ` floor=${this.progressFloor_.toFixed(1)}s`);
+      }
       this.updatePlaybackTimeline(player, t);
     });
     this.playbackResources_.video.on('error', (e: BusinessError) => {
@@ -6034,6 +6217,19 @@ struct VideoPlayerPage {
     // 抽屉开合动画期间进度条与字幕层都被盖住：不写这些 state，
     // 否则每次 timeUpdate 都要带着整块不可见 UI 重新布局，动画就会被切成几段。
     const uiFrozen = this.referencePortraitSettingsAnimating;
+    // ⭐「seek 在途」标志的兜底：seek 收尾只在自己拿到 seekDone 时清 seekProgressPending，
+    //    超时分支（videoSeekPosition 仍是 -1）会把它留在 true —— 而 saveWatchHistory /
+    //    saveLocalPlaybackProgress 都靠它挡「seek 中的旧 ct」。于是一次没等到回调的 seek
+    //    就能让这条视频之后**整场**本地和云端都不再记录（退出重进只能从头播）。
+    //    3 秒足够覆盖正常 seek（4 轮合并 + 200ms 让位 + 渲染帧等待）；超时后按当前 ct 落一次。
+    if (this.seekProgressPending && !this.sg_ && this.seekPendingSince_ > 0 &&
+      Date.now() - this.seekPendingSince_ > 3000) {
+      logWarn(`[PlaybackProgress] seek 确认超时，释放进度保存: target=${this.seekExpectedPosition.toFixed(1)}s`
+        + ` landed=${this.videoSeekPosition.toFixed(1)}s ct=${this.ct.toFixed(1)}s`);
+      this.seekProgressPending = false;
+      this.seekPendingSince_ = -1;
+      this.saveWatchHistory();
+    }
     if (this.referenceSubtitleEnabled && !uiFrozen) {
       const text = this.subtitleTracks_.textAt(this.referenceSubtitleKey(), t / 1000);
       if (text === null) this.referenceSubtitleEnabled = false;
@@ -6045,6 +6241,7 @@ struct VideoPlayerPage {
       if (!uiFrozen) this.ct = t / 1000;
       if (this.seekProgressPending && !this.sg_ && Math.abs(t / 1000 - this.seekExpectedPosition) < 2) {
         this.seekProgressPending = false;
+        this.seekPendingSince_ = -1;
         this.referencePlaybackCompleted = player.state === 'completed';
         this.saveWatchHistory();
       }
@@ -6374,6 +6571,10 @@ struct VideoPlayerPage {
       this.playbackCompletedAt_ = 0;
       this.cv = false;
     }
+    // ⭐ 用户主动选定的位置就是这个视频的新起点：续播点下限从此失效
+    //   （否则「回拖到 5 分钟再看」会被当成 seek 未落地而拒绝落库）。
+    this.progressFloor_ = 0;
+    this.pendingResumeSeekMs_ = 0;
     // ⭐ 连拖合并（last-wins）：seek 在途时只记目标，由**在途那一次**跑完后立刻改打最新目标。
     //   ⚠️ 绝不能在这里再发一次 seek：IJK 的 `stream_seek` 是 `if (!is->seek_req) {...}`，
     //   进行中的 seek 还没被读线程取走时，新请求会被**静默丢弃**。
@@ -6383,6 +6584,7 @@ struct VideoPlayerPage {
       this.ct = v;
       this.bufferedUntil = v;
       this.seekProgressPending = true;
+      this.seekPendingSince_ = Date.now();
       logInfo(`[VideoPlayer] seek merge → ${v.toFixed(2)}s（等在途 seek 落地后再打）`);
       return;
     }
@@ -6393,6 +6595,7 @@ struct VideoPlayerPage {
     this.bufferedUntil = v;
     this.videoSeekPosition = -1;
     this.seekProgressPending = true;
+    this.seekPendingSince_ = Date.now();
     this.seekExpectedPosition = v;
     this.seekFastMode_ = fast;
     this.sg_ = true;
@@ -6435,6 +6638,7 @@ struct VideoPlayerPage {
         this.seekExpectedPosition = target;
         this.seekFastMode_ = fast;
         this.seekProgressPending = true;
+        this.seekPendingSince_ = Date.now();
         this.videoSeekResolve_ = null;
         this.audioSeekResolve_ = null;
         const result = await seekPlaybackTracks(seekPlayer, seekAudio, target * 1000, fast, round > 0, {
@@ -6528,6 +6732,7 @@ struct VideoPlayerPage {
       if (!pending) {
         if (sameVideo && seekPlayer.state !== 'error' && this.videoSeekPosition >= 0) {
           this.seekProgressPending = false;
+          this.seekPendingSince_ = -1;
           // Playback can reach EOF while the seek's render-frame wait is still pending.
           // Do not erase the completed callback's replay state when that wait unwinds.
           // 但只在「确实落在片尾」时才认这个状态：否则 seek 之后 state 还是旧的 completed，
@@ -8495,11 +8700,15 @@ struct VideoPlayerPage {
           isPlaying: this.play,
           visible: this.isDanmakuEnabled && !this.isVidShrunk(),
           isFullscreen: this.fs || this.isLs,
+          // 逻辑视口（几何口径）跟着分栏实时变；画布像素尺寸恒为窗口宽（拖动零重建，见 dmSurfaceW）
           canvasWidth: this.ovDanmakuCW(),
           canvasHeight: this.ovDanmakuCH(),
           trackAreaHeight: this.dmTrackAreaHeight(),
           layerWidth: this.shrinkAnimating && this.dmFreezeW > 0 ? this.dmFreezeW : this.ovDanmakuCW(),
           layerHeight: this.shrinkAnimating && this.dmFreezeH > 0 ? this.dmFreezeH : this.ovDanmakuCH(),
+          // 收缩动画（dmFreezeW/H）期间画布也不许动：这段 200ms 容器逐帧变，画布跟着变就是逐帧重建
+          surfaceWidth: this.shrinkAnimating && this.dmFreezeW > 0 ? this.dmFreezeW : this.dmSurfaceW(),
+          surfaceHeight: this.shrinkAnimating && this.dmFreezeH > 0 ? this.dmFreezeH : this.dmSurfaceH(),
           layerX: this.shrinkAnimating && this.dmFreezeW > 0
             ? Math.max(0, (this.ovRectW() - this.dmFreezeW) / 2) : this.dmPositionX(),
           layerY: this.shrinkAnimating && this.dmFreezeH > 0
@@ -10323,6 +10532,7 @@ struct VideoPlayerPage {
       });
       return;
     }
+    // 落位：套用最终 ratio（分栏比例只影响逻辑视口，画布像素尺寸恒为窗口宽，无需任何切换）
     this.referenceLandscapeResize(offset);
     if (this.referenceLandscapeExpandProgress >= SPLIT_EXPAND_THRESHOLD) {
       // Capture the held Surface before fullscreen changes its geometry. The

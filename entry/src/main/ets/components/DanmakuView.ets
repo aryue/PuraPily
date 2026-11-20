@@ -24,9 +24,20 @@ export struct DanmakuView {
   @StorageProp('appInBackground') @Watch('onAppBackgroundChange') appInBackground: boolean = false
   @Prop cookie: string = ''                // Cookie
   
-  // 尺寸参数（用于强制刷新Canvas）
+  // 尺寸参数（逻辑视口 = 几何口径；用于强制刷新Canvas）
   @Prop @Watch('onCanvasSizeChange') canvasWidth: number = 0
   @Prop @Watch('onCanvasSizeChange') canvasHeight: number = 0
+
+  /**
+   * ⭐ 画布**像素**尺寸（surface），0 = 同 `canvasWidth/canvasHeight`（绝大多数场景）。
+   *
+   * 只有横屏分栏会传非 0：那时画布像素尺寸恒为窗口宽（拖动分隔线零重建、零闪烁），
+   * 而**逻辑视口**（`canvasWidth`）跟着分栏实时变 —— 弹幕要从画面真实的右缘进场，
+   * 不能从画布右缘进场（那会让新弹幕先在画面外空走 1~2 秒才露头）。
+   * 两者分工：像素尺寸只管清屏范围，逻辑视口管几何。
+   */
+  @Prop @Watch('onSurfaceSizeChange') surfaceWidth: number = 0
+  @Prop @Watch('onSurfaceSizeChange') surfaceHeight: number = 0
 
   /**
    * ⭐ 轨道**可用高度**（vp；0 = 跟画布同高，绝大多数场景都不用传）。
@@ -106,10 +117,20 @@ export struct DanmakuView {
     }
   }
   
-  // Canvas尺寸防抖
-  private canvasSizeDebounceTimer: number = 0
-  private pendingCanvasWidth: number = 0
-  private pendingCanvasHeight: number = 0
+  /** 画布实际像素尺寸（surface 显式下发优先，否则跟逻辑视口） */
+  private surfaceW(): number {
+    return this.surfaceWidth > 0 ? this.surfaceWidth : this.canvasWidth
+  }
+  private surfaceH(): number {
+    return this.surfaceHeight > 0 ? this.surfaceHeight : this.canvasHeight
+  }
+  /** 组件盒子尺寸：有独立 surface 尺寸时按它，否则铺满父容器（旧行为） */
+  private boxWidth(): Length {
+    return this.surfaceWidth > 0 ? this.surfaceWidth : '100%'
+  }
+  private boxHeight(): Length {
+    return this.surfaceHeight > 0 ? this.surfaceHeight : '100%'
+  }
   
   // 注意：时间同步仅靠 @Watch('onTimeChange') 驱动，不再使用独立定时器
   // 避免 @Watch + 定时器两套机制重复调用 controller.updateTime()
@@ -145,12 +166,6 @@ export struct DanmakuView {
   }
 
   aboutToDisappear(): void {
-    // 停止Canvas尺寸防抖定时器
-    if (this.canvasSizeDebounceTimer) {
-      clearTimeout(this.canvasSizeDebounceTimer)
-      this.canvasSizeDebounceTimer = 0
-    }
-
     // 注意：不要在这里销毁controller，因为组件可能被复用
     // 只停止渲染，保留controller供复用
     if (this.controller) {
@@ -210,7 +225,11 @@ export struct DanmakuView {
   }
   
   /**
-   * 尺寸变化回调
+   * ⭐ 逻辑视口尺寸变化（横屏拖分隔线时**每帧**都变）。
+   *
+   * 这里不能再做 100ms 防抖 + `applyDisplaySettings`：那条路径会重排屏上弹幕
+   * （逐条 measureText）、换轨道状态、清渲染缓存 —— 拖动时每秒十来次纯属自找卡顿。
+   * 交给 `setViewport`：只更新几何口径（新弹幕从新的右缘进场），不碰屏上已有弹幕。
    */
   private onCanvasSizeChange(): void {
     // 忽略无效尺寸
@@ -218,25 +237,32 @@ export struct DanmakuView {
       logWarn(`[DanmakuView] onCanvasSizeChange: 无效尺寸 ${this.canvasWidth}x${this.canvasHeight}`)
       return
     }
-    
-    // 防抖：延迟100ms处理，避免频繁触发
-    this.pendingCanvasWidth = this.canvasWidth
-    this.pendingCanvasHeight = this.canvasHeight
-    
-    if (this.canvasSizeDebounceTimer) {
-      clearTimeout(this.canvasSizeDebounceTimer)
+    if (!this.controller || !this.canvasReady) {
+      return
     }
-    
-    this.canvasSizeDebounceTimer = setTimeout(() => {
-      if (this.controller && this.canvasReady && 
-          this.pendingCanvasWidth > 0 && this.pendingCanvasHeight > 0) {
-        this.controller.setCanvasSize(this.pendingCanvasWidth, this.pendingCanvasHeight, this.isFullscreen)
-        // 画布尺寸变了会按新画布重算行数 —— 可用高度必须补一次，否则会退回"整块画布都能放弹幕"
-        this.applyTrackArea()
-        logInfo(`[DanmakuView] Canvas尺寸已更新: ${this.pendingCanvasWidth}x${this.pendingCanvasHeight}`)
-      }
-      this.canvasSizeDebounceTimer = 0
-    }, 100)
+    this.controller.setViewport(this.canvasWidth, this.canvasHeight, this.isFullscreen)
+  }
+
+  /**
+   * ⭐ 画布像素尺寸变化（surface 被重建，内容已经清空）。
+   *
+   * 与视口变化分开：这条**必须**重排 + 立刻补画一帧，否则暂停态下画布永远是空的
+   * （"横屏分栏松手后弹幕整层消失"就是漏了补画）。正常情况下拖动分隔线不会触发它 ——
+   * surface 尺寸在横屏分栏里恒为窗口宽。
+   */
+  private onSurfaceSizeChange(): void {
+    if (!this.controller || !this.canvasReady) {
+      return
+    }
+    const w = this.canvasWidth > 0 ? this.canvasWidth : this.surfaceW()
+    const h = this.canvasHeight > 0 ? this.canvasHeight : this.surfaceH()
+    if (!(w > 0) || !(h > 0)) {
+      return
+    }
+    this.controller.setSurfaceSize(this.surfaceW(), this.surfaceH())
+    this.controller.applyDisplaySettings(w, h, this.isFullscreen)
+    this.applyTrackArea()
+    logInfo(`[DanmakuView] 画布像素尺寸变更: ${this.surfaceW()}x${this.surfaceH()}，视口 ${w}x${h}`)
   }
 
   /**
@@ -424,8 +450,8 @@ export struct DanmakuView {
         this.DebugOverlay()
       }
     }
-    .width('100%')
-    .height('100%')
+    .width(this.boxWidth())
+    .height(this.boxHeight())
   }
 
   /**
@@ -454,7 +480,10 @@ export struct DanmakuView {
         logInfo(`[DanmakuView] 延迟重试Canvas尺寸: ${retryWidth}x${retryHeight}`)
         if (retryWidth > 0 && retryHeight > 0 && this.controller) {
           this.controller.setRenderContext(this.canvasContext)
-          this.controller.setCanvasSize(retryWidth, retryHeight, this.isFullscreen)
+          this.controller.setSurfaceSize(this.surfaceWidth > 0 ? this.surfaceWidth : retryWidth,
+            this.surfaceHeight > 0 ? this.surfaceHeight : retryHeight)
+          this.controller.setCanvasSize(this.canvasWidth > 0 ? this.canvasWidth : retryWidth,
+            this.canvasHeight > 0 ? this.canvasHeight : retryHeight, this.isFullscreen)
           this.canvasReady = true
           this.applyTrackArea()
           logInfo(`[DanmakuView] Canvas延迟就绪: ${retryWidth}x${retryHeight}`)
@@ -464,13 +493,19 @@ export struct DanmakuView {
       return
     }
 
-    // 设置渲染上下文
+    // ⭐ 几何口径用**逻辑视口**（页面下发）：横屏分栏时画布像素尺寸恒为窗口宽，
+    //   可见视口比它窄 —— 拿画布尺寸当几何会让新弹幕从画面外面进场（空走 1~2 秒才露头）。
+    //   清屏范围另走 surface 尺寸（见 DanmakuRenderer.setSurfaceSize）。
+    const viewportWidth = this.canvasWidth > 0 ? this.canvasWidth : width
+    const viewportHeight = this.canvasHeight > 0 ? this.canvasHeight : height
     this.controller.setRenderContext(this.canvasContext)
-    this.controller.setCanvasSize(width, height, this.isFullscreen)
+    this.controller.setSurfaceSize(this.surfaceWidth > 0 ? this.surfaceWidth : width,
+      this.surfaceHeight > 0 ? this.surfaceHeight : height)
+    this.controller.setCanvasSize(viewportWidth, viewportHeight, this.isFullscreen)
     this.applyTrackArea()
 
     this.canvasReady = true
-    logInfo(`[DanmakuView] Canvas就绪: ${width}x${height}`)
+    logInfo(`[DanmakuView] Canvas就绪: 画布 ${width}x${height}, 视口 ${viewportWidth}x${viewportHeight}`)
 
     // 如果已经初始化过且cid相同，只需要更新Canvas尺寸并恢复渲染
     if (this.initialized && this.lastCid === this.cid && this.cid > 0) {

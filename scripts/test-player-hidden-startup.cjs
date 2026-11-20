@@ -29,6 +29,7 @@ function fixture() {
     userPaused_: false, play: false, playbackResources_: { video: track(), audio: track() },
     playbackListPrefetch: { pause() {} }, releaseReferenceFeedPreview() {},
     danmakuSaves: 0, saveDanmakuDisplaySettings() { this.danmakuSaves++; }, referenceCancelFeedPlayerTouch() {},
+    progressSaves: 0, saveWatchHistory() { this.progressSaves++; },
     fullscreenDeviceOrientation: { stop() {} }, currentTopPage: () => '', markAutoPlay() {} });
   return p;
 }
@@ -37,6 +38,7 @@ async function main() {
     const p = fixture(); p.bgp = bgp;
     p.onPageHide();
     assert.equal(p.danmakuSaves, 1, 'hide commits pending danmaku edits in either background mode');
+    assert.equal(p.progressSaves, 1, 'hide anchors the last playback position once (page may never come back)');
     assert.equal(await p.startPagePlayback(p.playbackResources_.video), false, 'late prepare after navigation must not start');
     assert.equal(p.playbackResources_.video.plays + p.playbackResources_.audio.plays, 0);
     assert.equal(p.playbackResources_.video.pauses, 0, 'preparing/prepared player cannot be paused');

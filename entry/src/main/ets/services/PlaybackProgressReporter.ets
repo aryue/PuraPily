@@ -41,6 +41,9 @@ export class PlaybackProgressReporter {
   private heartbeatTimer: number = -1;
   private lastHeartbeatTime: number = 0;
   private lastCloudPushAt: number = 0;
+  private lastPushedProgress: number = -1;
+  private lastPushedKey: string = '';
+  private lastPushedAt: number = 0;
   private pgcQueue: Promise<void> = Promise.resolve();
 
   private acceptCloudPush(force: boolean): boolean {
@@ -50,11 +53,29 @@ export class PlaybackProgressReporter {
     return true;
   }
 
+  /**
+   * 同一位置的重复上报去重。
+   * `onPageHide` 与 `aboutToDisappear` 都会各发一次 force 保存（页面被 pop 时两者只差几十毫秒），
+   * 旧实现两次都发，日志里能看到连续两条「观看进度已上报 ... 9s」—— 白多一次请求，
+   * 还容易撞上 B 站的上报节流。位置没变就不必再发。
+   */
+  private acceptSamePosition(progress: number, force: boolean, key: string): boolean {
+    const now = Date.now();
+    if (force && key === this.lastPushedKey && Math.abs(progress - this.lastPushedProgress) < 1 &&
+      now - this.lastPushedAt < 1500) return false;
+    this.lastPushedKey = key;
+    this.lastPushedProgress = progress;
+    this.lastPushedAt = now;
+    return true;
+  }
+
   async saveHistory(request: PlaybackHistorySave): Promise<void> {
     const entry = request.record;
     const episode = request.reportEpisode;
     if ((!entry.bvid && !episode) || !Number.isFinite(entry.progress) ||
-      entry.progress < request.minimumProgress || !this.acceptCloudPush(request.force)) return;
+      entry.progress < request.minimumProgress || !this.acceptCloudPush(request.force) ||
+      !this.acceptSamePosition(entry.progress, request.force,
+        `${entry.bvid}:${entry.cid}:${entry.epId}`)) return;
     if (!request.cookie) {
       logWarn('[saveWatchHistory] 用户未登录，无法保存观看历史');
       return;
@@ -65,10 +86,15 @@ export class PlaybackProgressReporter {
       return;
     }
     if (entry.aid <= 0) {
-      logWarn('[saveWatchHistory] 缺少aid，无法上报到B站');
-      return;
+      if (!entry.bvid) {
+        logWarn('[saveWatchHistory] 缺少 aid 与 bvid，无法上报到B站');
+        return;
+      }
+      // 从 UP 空间 / 动态 / 搜索进入时详情可能还没回来（aid 只在详情里），
+      // 旧实现直接 return —— 表现为「这一条云端永远没记录」。heartbeat 支持 bvid，放行。
+      logInfo(`[saveWatchHistory] 缺少 aid，改用 bvid 上报: ${entry.bvid}`);
     }
-    await this.upload(request.cookie, entry, progress);
+    await this.upload(request.cookie, entry, progress, request.force);
   }
 
   enqueuePgc(upload: () => Promise<void>): Promise<void> {
@@ -98,7 +124,8 @@ export class PlaybackProgressReporter {
     });
   }
 
-  private upload(cookie: string, record: PlaybackHistoryRecord, progress: number = record.progress): Promise<void> {
+  private upload(cookie: string, record: PlaybackHistoryRecord, progress: number = record.progress,
+    allowShortProgress: boolean = false): Promise<void> {
     const item = new WatchHistoryItem();
     item.aid = record.aid;
     item.cid = record.cid;
@@ -113,7 +140,7 @@ export class PlaybackProgressReporter {
     item.seasonId = record.seasonId;
     const helper = WatchHistoryHelper.getInstance();
     helper.setCookie(cookie);
-    return helper.saveWatchRecord(item);
+    return helper.saveWatchRecord(item, allowShortProgress);
   }
 
   startHeartbeat(report: () => void): void {

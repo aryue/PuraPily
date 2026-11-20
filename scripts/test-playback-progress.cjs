@@ -167,8 +167,8 @@ async function main() {
   assert.equal(savedPositions.at(-1), 13, 'late seekDone must upload the confirmed position');
   assert.equal(h.seekProgressPending, false);
   const historyMethod = page.slice(page.indexOf('  private saveWatchHistory(force: boolean = false): void {'),
-    page.indexOf('  private saveLocalPlaybackProgress(): void {'));
-  const localStart = page.indexOf('  private saveLocalPlaybackProgress(): void {');
+    page.indexOf('  private saveLocalPlaybackProgress('));
+  const localStart = page.indexOf('  private saveLocalPlaybackProgress(');
   const localMethod = page.slice(localStart, page.indexOf('\n  /**', localStart));
   const completionExports = {}, completedUploads = [];
   const reporter = fs.readFileSync('entry/src/main/ets/services/PlaybackProgressReporter.ets', 'utf8')
@@ -180,7 +180,8 @@ async function main() {
     compilerOptions: { target: ts.ScriptTarget.ES2020 }
   }).outputText, {
     exports: completionExports, PlaybackProgress: p, MIN_HEARTBEAT_PROGRESS_SEC: 5,
-    WatchHistoryItem: class {}, logWarn() {}, Date: { now: () => now },
+    MIN_FINAL_PROGRESS_SEC: 1,
+    WatchHistoryItem: class {}, logInfo() {}, logWarn() {}, logError() {}, Date: { now: () => now },
     WatchHistoryHelper: { getInstance: () => ({ setCookie() {}, saveWatchRecord: item => completedUploads.push(item) }) },
     AppStorage: { get: key => key === 'biliCookie' ? 'test' : completionStorage.get(key),
       set: (key, value) => completionStorage.set(key, value) }
@@ -188,7 +189,7 @@ async function main() {
   const completedPage = new completionExports.CompletionHarness();
   completedPage.playbackProgressReporter_ = new completionExports.Reporter();
   Object.assign(completedPage, { vi: { bvid: 'BVtest', cid: 11 }, vd: { aid: 1 }, detailIsCurrentVideo: () => true,
-    playbackResources_: { video: { state: 'completed' } }, ct: 75, dur: 75,
+    playbackResources_: { video: { state: 'completed' } }, ct: 75, dur: 75, progressFloor_: 0,
     sk_: true, sg_: true, seekProgressPending: true, referencePlaybackCompleted: true });
   completedPage.saveWatchHistory();
   assert.equal(completedUploads[0].playProgress, -1, 'native completion bypasses seek upload guards');
@@ -197,6 +198,9 @@ async function main() {
   now += 100;
   completedPage.saveWatchHistory();
   assert.equal(completedUploads.length, 1, 'early duplicate cloud pushes are throttled');
+  // 同一位置 1.5s 内的重复强制保存也会被去重（onPageHide + aboutToDisappear 只发一次），
+  // 想验证「force 绕过 3s 节流」就得先把时间推过去重窗口。
+  now += 2000;
   completedPage.saveWatchHistory(true);
   assert.equal(completedUploads.length, 2, 'forced cloud push bypasses the throttle');
   const events = [];

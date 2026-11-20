@@ -23,6 +23,15 @@ import { common } from '@kit.AbilityKit';
 export const MIN_HEARTBEAT_PROGRESS_SEC: number = 5;
 
 /**
+ * 「离开播放页」这一次最终保存的最低进度。
+ * 周期性心跳用 {@link MIN_HEARTBEAT_PROGRESS_SEC}（5s）避免起播瞬间刷接口，但用户
+ * **真的看过几秒就退出**时那条记录也必须落库 —— 官方客户端 2~3 秒就会出现在历史里，
+ * 用 5s 卡掉的表现就是「看了一会儿，历史里什么都没有」。
+ * 真正的保护由调用方的「续播点未落地 / 已知记录更大」判据负责，不靠这条阈值。
+ */
+export const MIN_FINAL_PROGRESS_SEC: number = 1;
+
+/**
  * 观看历史帮助类
  * 负责与B站服务器交互，管理观看历史记录
  * 注意：需要用户已登录（Cookie中包含SESSDATA）
@@ -248,21 +257,22 @@ export class WatchHistoryHelper {
    * 注意：B站会自动记录观看历史，这里主要用于上报播放进度
    * @param item 观看记录项
    */
-  async saveWatchRecord(item: WatchHistoryItem): Promise<void> {
+  async saveWatchRecord(item: WatchHistoryItem, allowShortProgress: boolean = false): Promise<void> {
     const cookie = this.cookie;
-    const task = this.progressQueue.then(() => this.uploadWatchRecord(item, cookie));
+    const task = this.progressQueue.then(() => this.uploadWatchRecord(item, cookie, allowShortProgress));
     this.progressQueue = task.catch(() => {});
     return task;
   }
 
-  private async uploadWatchRecord(item: WatchHistoryItem, cookie: string): Promise<void> {
+  private async uploadWatchRecord(item: WatchHistoryItem, cookie: string,
+    allowShortProgress: boolean = false): Promise<void> {
     if (!cookie) {
       logWarn('[WatchHistory] Cookie未设置，无法上报观看进度');
       return;
     }
 
-    if (!item.aid || !item.cid) {
-      logWarn('[WatchHistory] aid或cid为空，无法上报观看进度');
+    if ((!item.aid && !item.bvid) || !item.cid) {
+      logWarn('[WatchHistory] aid/bvid 与 cid 为空，无法上报观看进度');
       return;
     }
 
@@ -278,8 +288,10 @@ export class WatchHistoryHelper {
         return;
       }
       // ⭐ 最后一道闸：进度低于阈值绝不上报（type=4 会覆盖整季唯一那条记录，type=3 会抹掉该视频原有进度）
-      if (item.playProgress !== -1 && item.playProgress < MIN_HEARTBEAT_PROGRESS_SEC) {
-        logInfo(`[WatchHistory] 进度 ${item.playProgress}s < ${MIN_HEARTBEAT_PROGRESS_SEC}s，`
+      //   离开播放页的最终保存（allowShortProgress）放宽到 1s：看几秒就退出的记录也要落库。
+      const minimum: number = allowShortProgress ? MIN_FINAL_PROGRESS_SEC : MIN_HEARTBEAT_PROGRESS_SEC;
+      if (item.playProgress !== -1 && item.playProgress < minimum) {
+        logInfo(`[WatchHistory] 进度 ${item.playProgress}s < ${minimum}s，`
           + `跳过上报以保护已有进度 (${isPgc ? 'PGC' : 'UGC'}, aid=${item.aid})`);
         return;
       }

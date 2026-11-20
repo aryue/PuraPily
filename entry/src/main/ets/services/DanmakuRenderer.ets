@@ -6,8 +6,12 @@ import { DanmakuItem, DanmakuConfig, DanmakuType } from '../model/DanmakuItem'
 
 export class DanmakuRenderer {
   private config: DanmakuConfig
+  /** 逻辑视口（几何口径）：出屏判定 / 静止弹幕居中 / 速度兜底都按它算 */
   private canvasWidth: number = 0
   private canvasHeight: number = 0
+  /** 画布像素（surface）：只用于清屏；0 = 同逻辑视口（见 setSurfaceSize） */
+  private surfaceWidth: number = 0
+  private surfaceHeight: number = 0
   
   // 渲染上下文（由外部设置）
   private context: CanvasRenderingContext2D | null = null
@@ -112,7 +116,11 @@ export class DanmakuRenderer {
   }
   
   /**
-   * 设置画布尺寸
+   * 设置**逻辑视口**尺寸（几何口径：出屏判定、静止弹幕居中都按它）。
+   *
+   * ⚠️ 它不一定等于画布像素尺寸：横屏分栏拖动时视口宽随分隔线逐帧变，而画布（surface）
+   *    刻意保持窗口宽不变（见 `setSurfaceSize` 注释）。这时 `canvasWidth` 是"能看到多宽"，
+   *    不是"画布有多宽"—— 两者混用会让居中弹幕偏到可见区外面去。
    */
   setSize(width: number, height: number): void {
     // ⭐ 尺寸变化通常伴随 Canvas 重建，上下文状态会一起重置 → 缓存必须失效，
@@ -122,6 +130,28 @@ export class DanmakuRenderer {
     }
     this.canvasWidth = width
     this.canvasHeight = height
+  }
+
+  /**
+   * 设置画布**像素**尺寸（surface），只用于清屏。
+   *
+   * 为什么必须单独一份：横屏分栏里画布宽 = 窗口宽（常量，拖动零重建），而逻辑视口宽
+   * 可能只有窗口宽的 6 成。清屏若只清逻辑视口那一块，视口再被拖宽时**旧内容还留在
+   * 右边没被清掉**，新露出来的区域会闪出上一帧的字（比闪一下更难查）。
+   * 0 = 与逻辑视口相同（绝大多数场景）。
+   */
+  setSurfaceSize(width: number, height: number): void {
+    this.surfaceWidth = width
+    this.surfaceHeight = height
+  }
+
+  /** 清屏范围：覆盖整块 surface，与逻辑视口无关 */
+  private clearWidth(): number {
+    return this.surfaceWidth > 0 ? this.surfaceWidth : this.canvasWidth
+  }
+
+  private clearHeight(): number {
+    return this.surfaceHeight > 0 ? this.surfaceHeight : this.canvasHeight
   }
 
   /**
@@ -151,7 +181,7 @@ export class DanmakuRenderer {
     // 否则低频轮询模式下每 250ms 都会白清一次全屏画布。
     if (items.length === 0) {
       if (this.needsClear) {
-        ctx.clearRect(0, 0, this.canvasWidth, this.canvasHeight)
+        ctx.clearRect(0, 0, this.clearWidth(), this.clearHeight())
         this.needsClear = false
       }
       return
@@ -160,7 +190,7 @@ export class DanmakuRenderer {
     const startTime = Date.now()
 
     // 清空画布
-    ctx.clearRect(0, 0, this.canvasWidth, this.canvasHeight)
+    ctx.clearRect(0, 0, this.clearWidth(), this.clearHeight())
     this.needsClear = true
 
     // 设置全局透明度
@@ -515,7 +545,7 @@ export class DanmakuRenderer {
    */
   clear(): void {
     if (this.context) {
-      this.context.clearRect(0, 0, this.canvasWidth, this.canvasHeight)
+      this.context.clearRect(0, 0, this.clearWidth(), this.clearHeight())
       this.needsClear = false
     }
   }
