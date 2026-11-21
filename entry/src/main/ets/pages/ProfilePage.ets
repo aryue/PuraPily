@@ -92,6 +92,8 @@ export struct ProfilePage {
   @StorageLink('networkMetered') networkMetered: boolean = true;
   @StorageLink('recommendApiSource') recommendApiSource: string = 'App';
   @StorageLink('danmakuApiSource') danmakuApiSource: string = 'grpc';
+  @StorageLink('sponsorBlockEnabled') sponsorBlockEnabled: boolean = false;
+  @StorageLink('sponsorBlockPgcMode') sponsorBlockPgcMode: string = 'skipOnce';
   @StorageProp('refreshHomeFlag') @Watch('onLoginStateChanged') refreshHomeFlag: number = 0;
   @StorageLink('statusBarHeight') statusBarHeight: number = 0;
   @State isLoggedIn: boolean = (AppStorage.get<string>('biliCookie') ?? '').includes('SESSDATA');
@@ -1186,6 +1188,28 @@ export struct ProfilePage {
               Text('弹幕数据源').fontSize(15).fontColor(this.isDarkMode ? '#E7E9EB' : '#18191C').layoutWeight(1)
               Text((this.danmakuApiSource === 'xml' ? 'XML' : 'gRPC Protobuf') + ' ›').fontSize(13).fontColor(this.pageWallpaperEnabled ? (this.isDarkMode ? '#C9CDD3' : '#50545A') : '#757A81')
             }.width('100%').height(56).padding({ left: 16, right: 16 }).bindMenu(this.SettingsOptions('danmaku'), this.settingsMenuOptions())
+          }.width('100%').padding({ top: 4, bottom: 4 })
+        }
+        }.width('100%').margin({ bottom: 18 })
+        Column({ space: 6 }) {
+        this.SectionTitle('空降助手')
+        PageSurface() {
+          Column() {
+            Row({ space: 12 }) {
+              Column({ space: 4 }) {
+                Text('空降助手').fontSize(15).fontColor(this.isDarkMode ? '#E7E9EB' : '#18191C')
+                Text('跳赞助片段、番剧片头片尾与精彩时刻标记').fontSize(12)
+                  .fontColor(secondaryTextColor(this.isDarkMode))
+              }.layoutWeight(1).alignItems(HorizontalAlign.Start)
+              Text(((this.sponsorBlockEnabled || this.sponsorBlockPgcMode !== 'disable') ? '已开启' : '已关闭') + ' ›')
+                .fontSize(13).fontColor(secondaryTextColor(this.isDarkMode))
+            }.width('100%').constraintSize({ minHeight: 64 })
+              .padding({ left: 16, right: 16, top: 10, bottom: 10 })
+              .id('setting-entry-sponsor-block')
+              .onClick(() => {
+                this.getUIContext().getRouter().pushUrl({ url: 'pages/SponsorBlockPage' })
+                  .catch((error: Error) => { logError('打开空降助手设置失败', error); });
+              })
           }.width('100%').padding({ top: 4, bottom: 4 })
         }
         }.width('100%').margin({ bottom: 18 })

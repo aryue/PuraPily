@@ -14,9 +14,9 @@ import { statistics } from '@kit.NetworkKit';
 import { batteryInfo } from '@kit.BasicServicesKit';
 import { display, curves, uiMaterial } from '@kit.ArkUI';
 import { SeekThumb } from '../model/SeekThumb';
-import { bufferedTrack } from '../utils/BufferedTrack';
 import { MaterialUtil } from '../utils/MaterialUtil';
 import { ImmersiveLightWrapper } from './ImmersiveLightWrapper';
+import { bufferedTrack } from '../utils/BufferedTrack';
 
 
 /**
@@ -34,6 +34,18 @@ const PLAYER_TOP_BAR_INSET_X: number = 18;
 const PLAYER_TOP_BAR_PAD_TOP: number = 20;
 const PLAYER_TOP_BAR_ROW_H: number = 62;   // 内容区 42vp = 40 按钮 + 上下各 1
 const PLAYER_TOP_BAR_BAND_H: number = 70;  // 容器比行高多 8（沿用改动前 64/54 的缓冲关系）
+
+class SkipMarkInterval {
+  start: number;
+  end: number;
+  color: string;
+
+  constructor(start: number, end: number, color: string) {
+    this.start = start;
+    this.end = end;
+    this.color = color;
+  }
+}
 
 @Component
 export struct VideoControls {
@@ -103,6 +115,9 @@ export struct VideoControls {
   @Prop hidePlaybackControls: boolean = false;
   @Prop isCompleted: boolean = false;
   @Prop bufferedUntil: number = 0;
+  // 空降助手：进度条上的分类标记（`start,end,#color;...`）。
+  // 用字符串传值：@Prop 对「类数组」的替换在部分 API 版本不会触发 @Watch。
+  @Link skipMarksJson: string;
   onReplay: () => void = () => {};
   @StorageLink('statusBarHeight') statusBarHeight: number = 0;
   @StorageLink('navIndicatorHeight') navIndicatorHeight: number = 0;
@@ -145,6 +160,8 @@ export struct VideoControls {
   // ⭐ 播放器区域实测宽度（vp）——音量/亮度竖条的**右侧**锚点必须用数值 x 才精确（见 edgeAnchorX）。
   //   由根 Stack 的 onAreaChange 实测（首次布局后即有值），旋转/尺寸变化会自动跟随重估。
   @State vcW: number = 0;
+  /** 半屏/横屏进度条外层 Stack 实测宽（vp）；用于把空降色条贴合 Slider 轨道。 */
+  @State private seekBarStackW_: number = 0;
   /** 播放器区域实测高度（vp）—— seek 锚点要用数值 y（30% 处再按生长量上移），见 seekAnchorY() */
   @State vcH: number = 0;
   // ⭐ 提示胶囊渲染通道开关（一次性能力探测，无副作用）：
@@ -859,6 +876,74 @@ export struct VideoControls {
    */
   private seekBarFillRadius(): number {
     return (this.seekBarH() - this.edgeInset() * 2) / 2;
+  }
+
+  private skipMarkTokens(): string[] {
+    if (this.skipMarksJson.length === 0) return [];
+    return this.skipMarksJson.split(';').filter((item: string): boolean => item.length > 0);
+  }
+
+  private markStartRatio(token: string): number {
+    const startMs = Number(token.split(',')[0]);
+    return Number.isFinite(startMs) ? Math.max(0, Math.min(1, startMs / Math.max(1, this.duration * 1000))) : 0;
+  }
+
+  private markEndRatio(token: string): number {
+    const parts = token.split(',');
+    const endMs = Number(parts[1]);
+    if (!Number.isFinite(endMs)) return this.markStartRatio(token);
+    return Math.max(this.markStartRatio(token),
+      Math.min(1, endMs / Math.max(1, this.duration * 1000)));
+  }
+
+  private markColor(token: string): string {
+    return token.split(',')[2] ?? '#00D400';
+  }
+
+  /** 整条 3vp 覆盖层用渐变画多段分类色；透明段让视频与 Slider 轨道透出来。 */
+  private skipGradient(): LinearGradient {
+    const intervals: SkipMarkInterval[] = [];
+    for (const token of this.skipMarkTokens()) {
+      const start = this.markStartRatio(token);
+      let end = this.markEndRatio(token);
+      if (end - start < 0.004) end = Math.min(1, start + 0.004);
+      intervals.push(new SkipMarkInterval(start, end, this.markColor(token)));
+    }
+    intervals.sort((a: SkipMarkInterval, b: SkipMarkInterval): number => {
+      if (a.start !== b.start) return a.start - b.start;
+      return a.end - b.end;
+    });
+    const merged: SkipMarkInterval[] = [];
+    for (const item of intervals) {
+      const last = merged.length > 0 ? merged[merged.length - 1] : null;
+      if (last !== null && item.start <= last.end + 0.0005) {
+        // 重叠片段取最长区间，颜色跟随最长的那条（例如 0-110 赞助 + 0-114 片头 → 0-114 片头色）。
+        if (item.end - item.start > last.end - last.start) last.color = item.color;
+        last.end = Math.max(last.end, item.end);
+      } else {
+        merged.push(new SkipMarkInterval(item.start, item.end, item.color));
+      }
+    }
+    const stops: Array<[string, number]> = [['#00000000', 0]];
+    for (const item of merged) {
+      stops.push(['#00000000', item.start]);
+      stops.push([item.color, item.start]);
+      stops.push([item.color, item.end]);
+      stops.push(['#00000000', item.end]);
+    }
+    stops.push(['#00000000', 1]);
+    stops.sort((a: [string, number], b: [string, number]): number => a[1] - b[1]);
+    return { direction: GradientDirection.Right, colors: stops };
+  }
+
+  private skipTrackW_(): number {
+    const stackW = this.seekBarStackW_ > 0 ? this.seekBarStackW_ : Math.max(0, this.vcW - 162);
+    return Math.max(0, stackW - 21);
+  }
+
+  /** 横屏控制条：左右 padding 12/18 + 轨道内缩 14/7。 */
+  private skipTrackWLandscape_(): number {
+    return Math.max(0, this.vcW - (this.referenceLandscapeHalfScreen ? 45 : 57));
   }
 
   /**
@@ -2289,7 +2374,21 @@ export struct VideoControls {
           Image(this.isPlaying ? $r('app.media.ref_pause') : $r('app.media.ref_play_triangle'))
             .width(24).height(24).fillColor('#FFFFFF')
         }.width(40).height(44).id('portrait-play-pause').onClick(() => this.togglePlayPause())
-        Row() { this.ReferenceSeekBar(44, 9, '#D34E7E') }.layoutWeight(1)
+        Stack({ alignContent: Alignment.Start }) {
+          Row() { this.ReferenceSeekBar(44, 9, '#D34E7E') }.width('100%')
+          if (this.skipMarksJson.length > 0) {
+            Row()
+              .width(this.skipTrackW_())
+              .height(3)
+              .position({ x: 14, y: 20.5 })
+              .linearGradient(this.skipGradient())
+              .zIndex(2)
+              .hitTestBehavior(HitTestMode.None)
+          }
+        }.layoutWeight(1).height(44)
+        .onAreaChange((_old: Area, area: Area) => {
+          this.seekBarStackW_ = Number(area.width);
+        })
         Text(`${this.formatTime(this.currentTime)}/${this.formatTime(this.duration)}`)
           .fontSize(12).fontColor('#FFFFFF').maxLines(1)
         Stack() {
@@ -2369,9 +2468,21 @@ export struct VideoControls {
             Text(`${this.formatTime(this.currentTime)}/${this.formatTime(this.duration)}`)
               .fontSize(11).fontColor('#FFFFFF').maxLines(1)
           }.width('100%').height(22).padding({ left: this.referenceLandscapeHalfScreen ? 22 : 38, right: this.referenceLandscapeHalfScreen ? 22 : 38 }).alignItems(VerticalAlign.Center)
-          Row() {
-            this.ReferenceSeekBar(26, this.referenceLandscapeHalfScreen ? 9 : 7, this.referenceLandscapeHalfScreen ? '#D34E7E' : '#FFFFFF')
-          }.width('100%').padding({ left: this.referenceLandscapeHalfScreen ? 12 : 18, right: this.referenceLandscapeHalfScreen ? 12 : 18 })
+          Stack({ alignContent: Alignment.Start }) {
+            Row() {
+              this.ReferenceSeekBar(26, this.referenceLandscapeHalfScreen ? 9 : 7, this.referenceLandscapeHalfScreen ? '#D34E7E' : '#FFFFFF')
+            }.width('100%')
+            if (this.skipMarksJson.length > 0) {
+              Row()
+                .width(this.skipTrackWLandscape_())
+                .height(3)
+                .position({ x: 14, y: 11.5 })
+                .linearGradient(this.skipGradient())
+                .zIndex(2)
+                .hitTestBehavior(HitTestMode.None)
+            }
+          }.width('100%').height(26)
+          .padding({ left: this.referenceLandscapeHalfScreen ? 12 : 18, right: this.referenceLandscapeHalfScreen ? 12 : 18 })
         }
 
         Row({ space: 8 }) {

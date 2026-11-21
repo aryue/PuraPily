@@ -17,7 +17,7 @@ vm.runInNewContext(ts.transpileModule(`class Controls { ${methods} } exports.Con
   compilerOptions: { target: ts.ScriptTarget.ES2020 }
 }).outputText, context);
 const controls = new context.exports.Controls();
-Object.assign(controls, { currentTime: 26.043, duration: 0, bufferedUntil: 0,
+Object.assign(controls, { currentTime: 26.043, duration: 0, bufferedUntil: 0, skipMarksJson: '',
   observeComponentCreation2(callback) { callback(1, true); },
   ifElseBranchUpdateFunction(_branch, callback) { callback(); },
   onSeekBarInteract(active, value) { interactions.push([active, value]); } });

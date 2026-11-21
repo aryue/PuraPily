@@ -63,6 +63,10 @@ import { router, curves, SegmentButton, SegmentButtonOptions, componentUtils, di
 import { logInfo, logWarn, logError, errMsg } from '../utils/Logger';
 import { isCommentPictureDragAutoScroll } from '../components/CommentContentRenderer';
 import { VideoIntroCard, VideoIntroTag, getVideoPlayUrl, invalidatePlayUrlCache, PlayUrlResult, getVideoDetail, VideoDetail, CommentItem, VideoPageItem, modifyFollow, clearFollowedMidsCache, getUserInfo, UserInfo, getPgcPlayUrl, getPgcSeasonInfo, getPgcEpisodeInfo, PgcSeasonInfo, PgcEpisode, sendDanmakuVideo, SeasonEpisode, SeasonSection, UgcSeason } from '../api/BilibiliApi';
+import { SkipSegment } from '../model/SkipSegment';
+import { SkipCallbacks, SkipSegmentEngine } from '../services/SkipSegmentEngine';
+import { SponsorBlockService } from '../services/SponsorBlockService';
+import { SponsorBlockPrefs } from '../utils/SponsorBlockPrefs';
 import { CommentImageDraft, CommentInputBarCtrl } from '../components/CommentInputBar';
 import { PlayerCommentComposer } from '../components/PlayerCommentComposer';
 import { PlayerCommentList } from '../components/PlayerCommentList';
@@ -690,6 +694,14 @@ struct VideoPlayerPage {
   private morphAspectWaitTimer: number = -1;
   @State ct: number = 0; @State dur: number = 0; @State rt: number = 1.0
   @State bufferedUntil: number = 0
+  // 空降助手：片段执行器与进度条标记（手动提示条单独持有，避免每条片段都进状态树）。
+  private skipSegments_: SkipSegmentEngine = new SkipSegmentEngine();
+  @State private skipMarksJson_: string = '';
+  @State private skipPromptVisible_: boolean = false;
+  @State private skipPromptText_: string = '';
+  @State private skipSegmentCount_: number = 0;
+  private skipPromptSegment_: SkipSegment | null = null;
+  private skipPromptTimer_: number = -1;
   private playbackProgressReporter_: PlaybackProgressReporter = new PlaybackProgressReporter();
   private videoSeekPosition: number = -1
   private seekProgressPending: boolean = false
@@ -6530,6 +6542,7 @@ struct VideoPlayerPage {
   private commitPlaybackIdentity(cid: number, bvid: string, aid?: number, epId?: number,
     video?: VC): void {
     const changed = cid !== this.vi.cid || bvid !== this.vi.bvid;
+    const cidChanged = cid !== this.vi.cid;
     if (aid && this.commentThread?.oid && this.commentThread.oid !== aid) {
       this.commentDialog = null;
       this.commentThread = null;
@@ -6545,6 +6558,7 @@ struct VideoPlayerPage {
     if (changed) {
       this.resetVideoShot_();
       this.referenceResetSubtitles();
+      if (cidChanged) this.resetSkipSegments_();
       // 新身份 = 新记录：在它真正播到 >0 之前，不许用 ct=0 覆盖它自己的历史记录。
       this.progressCommitted_ = false;
       // 新身份的续播点由 applyServerResumePoint 重新确定（取流回来之前先别拦）。
@@ -6553,6 +6567,91 @@ struct VideoPlayerPage {
       this.pendingResumeSeekMs_ = 0;
       this.pendingResumeSeekTries_ = 0;
     }
+  }
+
+  private resetSkipSegments_(): void {
+    this.skipSegments_.reset();
+    this.skipMarksJson_ = '';
+    this.skipSegmentCount_ = 0;
+    this.hideSkipPrompt_();
+  }
+
+  private skipCallbacks_(): SkipCallbacks {
+    return {
+      seek: (positionMs: number): void => {
+        this.seek(Math.max(0, positionMs) / 1000, false, true);
+      },
+      toast: (message: string): void => {
+        this.getUIContext().getPromptAction().showToast({ message: message, duration: 2000 });
+      },
+      prompt: (segment: SkipSegment): void => {
+        this.showSkipPrompt_(segment);
+      }
+    };
+  }
+
+  /** playurl 回来后先落官方 OP/ED，再异步补社区片段；两者都失败也不影响播放。 */
+  private applySkipSegments_(result: PlayUrlResult, generation: number): void {
+    logInfo(`[SponsorBlock] cfg enabled=${SponsorBlockPrefs.enabled()} seekInto=${SponsorBlockPrefs.seekIntoEnabled()}`
+      + ` modes=${SponsorBlockPrefs.modesRaw()} pgc=${SponsorBlockPrefs.pgcMode()}`);
+    this.skipSegments_.reset();
+    this.skipMarksJson_ = '';
+    const official = SponsorBlockService.fromClipInfo(result.clipInfoList ?? [],
+      SponsorBlockPrefs.pgcMode());
+    if (official.length > 0) this.skipSegments_.setOfficial(official);
+    this.refreshSkipMarks_();
+    this.skipSegmentCount_ = this.skipSegments_.count;
+
+    const bvid = this.vi.bvid;
+    const cid = this.vi.cid;
+    if (!SponsorBlockPrefs.enabled() || !bvid || cid <= 0 || /^\d+$/.test(bvid)) return;
+    SponsorBlockService.fetchSegments(bvid, cid).then((segments: SkipSegment[]): void => {
+      if (!this.referenceAlive || this.vi.cid !== cid || generation !== this.referenceSwitchGeneration) {
+        return;
+      }
+      this.skipSegments_.setRemote(segments);
+      this.skipSegmentCount_ = this.skipSegments_.count;
+      this.refreshSkipMarks_();
+      logInfo(`[SponsorBlock] 应用 ${bvid}/${cid}: 官方 ${official.length} 条, 社区 ${segments.length} 条`);
+    }).catch((error: Object): void => {
+      logWarn(`[SponsorBlock] 异步应用失败: ${errMsg(error)}`);
+    });
+  }
+
+  private refreshSkipMarks_(): void {
+    this.skipMarksJson_ = this.skipSegments_.rawMarks();
+  }
+
+  private evaluateSkipSegments_(positionMs: number): void {
+    this.skipSegments_.onPosition(positionMs, this.skipCallbacks_());
+  }
+
+  private showSkipPrompt_(segment: SkipSegment): void {
+    this.skipPromptSegment_ = segment;
+    this.skipPromptText_ = `跳过: ${SponsorBlockService.segmentLabel(segment)}`;
+    this.skipPromptVisible_ = true;
+    if (this.skipPromptTimer_ !== -1) clearTimeout(this.skipPromptTimer_);
+    this.skipPromptTimer_ = setTimeout(() => {
+      this.skipPromptTimer_ = -1;
+      this.skipPromptVisible_ = false;
+      this.skipPromptSegment_ = null;
+    }, 4000);
+  }
+
+  private hideSkipPrompt_(): void {
+    if (this.skipPromptTimer_ !== -1) {
+      clearTimeout(this.skipPromptTimer_);
+      this.skipPromptTimer_ = -1;
+    }
+    this.skipPromptVisible_ = false;
+    this.skipPromptSegment_ = null;
+  }
+
+  private onSkipPromptTap_(): void {
+    const segment = this.skipPromptSegment_;
+    if (segment === null) return;
+    this.hideSkipPrompt_();
+    this.skipSegments_.skip(segment, this.skipCallbacks_());
   }
 
   private applyPgcSeasonDetail(info: PgcSeasonInfo, episode: PgcEpisode): VideoDetail {
@@ -6646,6 +6745,7 @@ struct VideoPlayerPage {
         this.applyServerResumePoint(result);
         if (AppStorage.get<boolean>('startupFromBeginning') === true) this.initialProgress_ = 0;
         this.startupSourceDurationMs_ = result.dash?.timelength || 0;
+        this.applySkipSegments_(result, initGeneration);
         profile?.mark('resume-ms', Math.round(this.initialProgress_ * 1000));
         // 更新为服务器实际返回的画质（可能被降级）。只描述当前这条：
         // 取流上限是 preferredQn，这里绝不回写它，否则降级会沿连刷一路传染。
@@ -7382,6 +7482,11 @@ struct VideoPlayerPage {
       }
       this.playbackProgressReporter_.sample(() => this.saveLocalPlaybackProgress(),
         uiFrozen ? null : () => { LiveViewHelper.updateProgress(this.ct); });
+    }
+    // 空降助手：跳过/手动提示只跟真实播放时钟走；拖动进度条期间让位，
+    // 避免"用户刚拖到片尾又被自动跳走"。
+    if (!uiFrozen && !this.sk_ && !this.sliderDragging_ && !this.seekBarTouch_) {
+      this.evaluateSkipSegments_(t);
     }
   }
 
@@ -9889,6 +9994,7 @@ struct VideoPlayerPage {
         hidePlaybackControls: this.referenceLayout && !this.fs && !this.isLs && (this.referenceFeed || this.referenceModeAnimating),
         isPlaying: $play,
         videoTitle: this.vd?.title || this.vi.title || '',
+        skipMarksJson: $skipMarksJson_,
         videoOwnerFace: this.vd?.owner?.face ? imageUrlResize(this.vd.owner.face, 48) : '',
         videoOwnerName: this.vd?.owner?.name ?? '',
         isFollowed: this.isFollowed,
@@ -10008,6 +10114,39 @@ struct VideoPlayerPage {
         .opacity(this.fs && this.isLightsOff ? 0 : 1)
         .hitTestBehavior(this.fs && this.isLightsOff ? HitTestMode.Block : HitTestMode.Default)
         .animation(this.referenceLayout ? undefined : { duration: 300 })
+
+      // 空降助手：手动跳过提示（4 秒自动消失，点击跳到片段终点）。
+      if (this.skipPromptVisible_) {
+        Button(this.skipPromptText_)
+        .fontSize(14)
+        .fontColor('#FFFFFF')
+        .height(30)
+        .padding({ left: 12, right: 12 })
+        .backgroundColor('#CC2B2F36')
+        .borderRadius(15)
+        .position({
+          left: 16,
+          bottom: this.fs ? Math.max(75, this.ovRectH() * 0.25) : 75
+        })
+        .zIndex(100)
+        .accessibilityText(this.skipPromptText_)
+        .onClick(() => this.onSkipPromptTap_())
+      }
+
+      // 空降助手：有片段时在控制栏可见期间给出一个轻量数量提示（不拦截触摸）。
+      if (this.skipSegmentCount_ > 0 && this.cv && !this.referenceCleanViewing()) {
+        Row({ space: 4 }) {
+          Text('空降').fontSize(11).fontColor('#D8FFFFFF')
+          Text(this.skipSegmentCount_.toString()).fontSize(11).fontColor('#FFFFFF').fontWeight(FontWeight.Medium)
+        }
+        .height(22)
+        .padding({ left: 8, right: 8 })
+        .backgroundColor('#66000000')
+        .borderRadius(11)
+        .position({ right: 16, top: 140 })
+        .zIndex(20)
+        .hitTestBehavior(HitTestMode.None)
+      }
 
       // ⭐ 手势提示（原全屏/竖屏分支各自挂载，现统一在常驻层；关灯时全屏隐藏、竖屏保留原样）
       if (this.referenceLayout && (this.waitingForFirstFrame || (this.ld && !this.referenceFeed)) &&

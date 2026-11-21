@@ -25,6 +25,7 @@
     "pages/MessagesPage",
     "pages/SettingsPage",
     "pages/SettingsSectionPage",
+    "pages/SponsorBlockPage",
     "pages/LocalWallpaperPage"
   ]
 }

@@ -486,6 +486,17 @@ export default class EntryAbility extends UIAbility {
       const launchOverride = this.cellularPrefetchLaunchOverride;
       const cellularPrefetch = launchOverride === null ? savedCellularPrefetch : launchOverride;
       AppStorage.setOrCreate('cellularPrefetch', cellularPrefetch);
+      AppStorage.setOrCreate('sponsorBlockEnabled', await pref.get('sponsorBlockEnabled', false) as boolean);
+      AppStorage.setOrCreate('sponsorBlockPgcMode',
+        await pref.get('sponsorBlockPgcMode', 'skipOnce') as string);
+      AppStorage.setOrCreate('sponsorBlockModes',
+        await pref.get('sponsorBlockModes', '111111111111') as string);
+      AppStorage.setOrCreate('sponsorBlockToast', await pref.get('sponsorBlockToast', true) as boolean);
+      AppStorage.setOrCreate('sponsorBlockSeekInto',
+        await pref.get('sponsorBlockSeekInto', false) as boolean);
+      AppStorage.setOrCreate('sponsorBlockLimitMs', await pref.get('sponsorBlockLimitMs', 0) as number);
+      AppStorage.setOrCreate('sponsorBlockServer',
+        await pref.get('sponsorBlockServer', 'https://www.bsbsb.top') as string);
       hilog.info(DOMAIN, TAG, 'cellularPrefetch saved=%{public}s override=%{public}s active=%{public}s',
         String(savedCellularPrefetch), String(launchOverride), String(cellularPrefetch));
     } catch (e) {

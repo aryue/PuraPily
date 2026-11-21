@@ -23,6 +23,7 @@ import { mergeLoginCookies, hasLoginSession, loginCookiesFromUrl, classifyLoginV
   LoginVerificationState, loginCookiesFromResponse, loginHeaderValues } from '../utils/LoginCookie';
 import { PlaybackWarmPlayer } from '../services/PlaybackWarmPlayer';
 import { IjkPrewarm } from '../services/IjkPrewarm';
+import { ClipInfoItem } from '../model/SkipSegment';
 
 // ============================================
 // 限流缓解：全局请求间隔控制 + 参数轮换
@@ -279,6 +280,8 @@ interface PlayUrlData {
   timelength?: number;
   /** ⭐ 服务端记录的上次观看位置（毫秒，仅登录且该 cid 有观看记录时返回） */
   last_play_time?: number;
+  /** ⭐ 番剧/影视官方片头片尾片段（start/end 单位秒） */
+  clip_info_list?: Array<ClipInfoItem>;
 }
 
 interface PlayUrlResponse {
@@ -992,6 +995,8 @@ export interface PlayUrlResult {
    *        不依赖历史列表的 progress，也不需要跨集传参）
    */
   lastPlayTimeMs?: number;
+  /** ⭐ 番剧/影视官方片头片尾片段（start/end 单位秒；UGC 通常为空） */
+  clipInfoList?: Array<ClipInfoItem>;
 }
 
 /**
@@ -1041,6 +1046,7 @@ interface FetchPlayUrlResult {
   actualQn: number; // 实际返回的画质qn
   acceptQuality: number[]; // B站允许的画质列表
   acceptDescription: string[]; // B站允许的画质描述
+  clipInfoList?: Array<ClipInfoItem>;
   /** ⭐ 完整 DASH 元数据（供转播站拼 MPD） */
   dashInfo: DashFullInfo | null;
   route?: string;
@@ -1120,6 +1126,7 @@ async function tryFetchPlayUrl(bvid: string, cid: number, qn: number, fnval: num
     const acceptQn = jsonData.data?.accept_quality as Array<number> | undefined;
     const acceptDesc = jsonData.data?.accept_description as Array<string> | undefined;
     const actualQn = jsonData.data?.quality as number | undefined;
+    const clipInfoList: Array<ClipInfoItem> | undefined = jsonData.data?.clip_info_list;
     logInfo(`[PlayURL] 请求qn=${qn}, 实际qn=${actualQn}, 可用画质列表=${JSON.stringify(acceptQn)}, 描述=${JSON.stringify(acceptDesc)}`);
 
     let durlUrl = '';
@@ -1160,7 +1167,9 @@ async function tryFetchPlayUrl(bvid: string, cid: number, qn: number, fnval: num
       dashInfo = info;
     }
 
-    return { durlUrl, dashVideoUrl, dashAudioUrl, actualQn: actualQn ?? 0, acceptQuality: acceptQn ?? [], acceptDescription: acceptDesc ?? [], dashInfo: dashInfo };
+    return { durlUrl, dashVideoUrl, dashAudioUrl, actualQn: actualQn ?? 0,
+      acceptQuality: acceptQn ?? [], acceptDescription: acceptDesc ?? [], dashInfo: dashInfo,
+      clipInfoList: clipInfoList };
   } catch (err) {
     logError(`tryFetchPlayUrl异常: ${err}, qn=${qn}, fnval=${fnval}`);
     return { durlUrl: '', dashVideoUrl: '', dashAudioUrl: '', actualQn: 0, acceptQuality: [], acceptDescription: [], dashInfo: null };
@@ -1473,6 +1482,7 @@ async function getVideoPlayUrlRaw(bvid: string, cid: number, qn: number, probe: 
     const selected: PlayUrlResult = { url: ready.durlUrl || ready.dashVideoUrl,
       audioUrl: ready.durlUrl ? undefined : ready.dashAudioUrl,
       actualQn: ready.actualQn, acceptQuality: ready.acceptQuality, acceptDescription: ready.acceptDescription,
+      clipInfoList: ready.clipInfoList,
       mediaUserAgent: ready.route === 'app-hd' ?
         'Mozilla/5.0 BiliDroid/8.43.0 (bbcallen@gmail.com) os/android model/android mobi_app/android_hd build/8430300' : undefined,
       mediaReferer: ready.route === 'app-hd' ? '' : undefined,
@@ -1498,7 +1508,8 @@ async function getVideoPlayUrlRaw(bvid: string, cid: number, qn: number, probe: 
     if (fallback.durlUrl) {
       const metadata = catalog.acceptQuality.length > 0 ? catalog : fallback;
       return { url: fallback.durlUrl, actualQn: fallback.actualQn,
-        acceptQuality: metadata.acceptQuality, acceptDescription: metadata.acceptDescription };
+        acceptQuality: metadata.acceptQuality, acceptDescription: metadata.acceptDescription,
+        clipInfoList: fallback.clipInfoList ?? metadata.clipInfoList };
     }
   }
   return { url: '', actualQn: 0, acceptQuality: [], acceptDescription: [] };
@@ -1717,6 +1728,7 @@ export async function getPgcPlayUrl(epId: number, cid: number, qn: number = 116,
     }
     const acceptQn: Array<number> = info.accept_quality ?? [];
     const acceptDesc: Array<string> = info.accept_description ?? [];
+    const clipInfoList: Array<ClipInfoItem> | undefined = info.clip_info_list;
     // ⭐ 该集的服务端续播点（毫秒）：番剧/影视多集续播的关键——每集各有自己的进度
     const pgcProgressMs: number = jsonData.result?.play_view_business_info?.user_status?.watch_progress?.current_watch_progress ?? 0;
     if (pgcProgressMs > 0) {
@@ -1725,7 +1737,8 @@ export async function getPgcPlayUrl(epId: number, cid: number, qn: number = 116,
     // FLV 合并流（音视频一体，AVPlayer 原生支持）
     if (info.durl && info.durl.length === 1) {
       logInfo(`[getPgcPlayUrl] FLV qn=${info.quality}`);
-      return { url: preferredDurl(info.durl[0]), actualQn: info.quality || 0, acceptQuality: acceptQn, acceptDescription: acceptDesc, lastPlayTimeMs: pgcProgressMs };
+      return { url: preferredDurl(info.durl[0]), actualQn: info.quality || 0, acceptQuality: acceptQn,
+        acceptDescription: acceptDesc, lastPlayTimeMs: pgcProgressMs, clipInfoList: clipInfoList };
     }
     normalizeDashWireFields(info.dash);
     // DASH 分离流（视频轨 + 音频轨）
@@ -1752,7 +1765,9 @@ export async function getPgcPlayUrl(epId: number, cid: number, qn: number = 116,
         };
         pgcDash = fullInfo;
       }
-      return normalizeDashQuality({ url: usableList[0].baseUrl || '', audioUrl: audioUrl, actualQn: info.quality || 0, acceptQuality: acceptQn, acceptDescription: acceptDesc, dash: pgcDash, lastPlayTimeMs: pgcProgressMs }, qn);
+      return normalizeDashQuality({ url: usableList[0].baseUrl || '', audioUrl: audioUrl,
+        actualQn: info.quality || 0, acceptQuality: acceptQn, acceptDescription: acceptDesc,
+        dash: pgcDash, lastPlayTimeMs: pgcProgressMs, clipInfoList: clipInfoList }, qn);
     }
     logError('[getPgcPlayUrl] 未找到任何可用流');
     return { url: '', actualQn: 0, acceptQuality: [], acceptDescription: [] };
@@ -2947,6 +2962,7 @@ async function fetchPlayUrlEndpoint(url: string, headers: Record<string, string>
       const acceptQn = jsonData.data?.accept_quality as Array<number> | undefined;
       const acceptDesc = jsonData.data?.accept_description as Array<string> | undefined;
       const actualQn = jsonData.data?.quality as number | undefined;
+      const clipInfoList: Array<ClipInfoItem> | undefined = jsonData.data?.clip_info_list;
       logInfo(`[MobileAPI] 请求qn=${qn}, 实际qn=${actualQn}, 可用画质列表=${JSON.stringify(acceptQn)}, 描述=${JSON.stringify(acceptDesc)}`);
 
       let durlUrl = '';
@@ -2986,6 +3002,7 @@ async function fetchPlayUrlEndpoint(url: string, headers: Record<string, string>
       }
 
       return { durlUrl, dashVideoUrl, dashAudioUrl, actualQn: actualQn ?? 0, acceptQuality: acceptQn ?? [], acceptDescription: acceptDesc ?? [], dashInfo: dashInfo,
+        clipInfoList: clipInfoList,
         route: url.startsWith('https://app.bilibili.com/') ? 'app-hd' : 'web-compat' };
   } finally { httpRequest.destroy(); }
 }

@@ -28,6 +28,7 @@ export function selectDecodablePlayUrl(result: PlayUrlResult): PlayUrlResult {
     mediaReferer: result.mediaReferer,
     acceptQuality: result.acceptQuality, acceptDescription: result.acceptDescription,
     lastPlayTimeMs: result.lastPlayTimeMs,
+    clipInfoList: result.clipInfoList,
     dash: { videoStreams: result.dash.videoStreams, audioStreams: result.dash.audioStreams,
       timelength: result.dash.timelength, quality: video.id } };
 }

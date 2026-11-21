@@ -10,7 +10,8 @@ export async function preferSameQualityMerged(base: PlayUrlResult,
     if (!merged?.url || merged.audioUrl || merged.dash || merged.actualQn !== base.actualQn) return base;
     return { url: merged.url, actualQn: base.actualQn, audioUrl: undefined, dash: undefined,
       acceptQuality: base.acceptQuality?.slice(), acceptDescription: base.acceptDescription?.slice(),
-      lastPlayTimeMs: base.lastPlayTimeMs, mediaUserAgent: merged.mediaUserAgent, mediaReferer: merged.mediaReferer };
+      lastPlayTimeMs: base.lastPlayTimeMs, clipInfoList: base.clipInfoList,
+      mediaUserAgent: merged.mediaUserAgent, mediaReferer: merged.mediaReferer };
   } catch (_) { return base; }
   finally { clearTimeout(timer); }
 }
