@@ -25,6 +25,8 @@ for (const route of ['onBackPress', 'onOverlayBack_']) {
       Object.assign(p, { lk: true, fs: fullscreen, ub: unlockVisible, cv: false, ubt: 42, ovBackTs_: 0,
         cancelDelayHide() {}, resetCT() { resets++; }, sBH(_icon, text) { hints.push(text); },
         closePlaybackOptionPanel: () => false,
+        // 共享元素返回（开关关闭/未走 morph）不接管：桩返回 false，后续返回语义必须保持原样
+        beginReturnCoverMorph: () => false,
         toggleFS() { fullscreenExits++; this.fs = false; }, goBack() { exits++; } });
       const result = p[route]();
       if (route === 'onBackPress') assert.equal(result, true, 'locked back must be consumed');
@@ -45,4 +47,13 @@ for (const route of ['onBackPress', 'onOverlayBack_']) {
     }
   }
 }
-console.log('PASS: compiled system/overlay back unlocks first, restores controls and preserves subsequent back behavior.');
+// 共享元素返回：beginReturnCoverMorph 接管时，系统 Back 必须被消费（否则会直接 pop，收回动画不会播）
+{
+  const p = new context.exports.Page();
+  Object.assign(p, { lk: false, fs: false, commentSheetVisible: false, floatingMorph: false,
+    showDanmakuSheet: false, referenceSubtitlePanelOpen: false, referenceLandscapeDanmakuOpen: false,
+    closePlaybackOptionPanel: () => false, mp: false, commentThread: null, referenceFeedComments: false,
+    referenceFeed: false, isLightsOff: false, beginReturnCoverMorph: () => true });
+  assert.equal(p.onBackPress(), true, 'morph return must consume system back');
+}
+console.log('PASS: compiled system/overlay back unlocks first, restores controls and preserves subsequent back behavior (morph return consumes back).');

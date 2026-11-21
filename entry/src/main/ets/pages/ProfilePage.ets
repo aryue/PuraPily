@@ -74,6 +74,8 @@ export struct ProfilePage {
   @StorageLink('isDarkMode') isDarkMode: boolean = false;
   @StorageLink('bgp') referenceBackgroundPlay: boolean = false;
   @StorageLink('mixAudioWithOtherApps') mixAudioWithOtherApps: boolean = false;
+  /** 首页卡片封面共享元素转场（实验开关，默认关闭；Index.pageTransition 只在页面创建时求值） */
+  @StorageLink('homeCardMorph') homeCardMorph: boolean = false;
   @StorageLink('cellularPrefetch') cellularPrefetch: boolean = false;
   @StorageLink('ijkWarmSlotsWifi') ijkWarmSlotsWifi: number = 1;
   @StorageLink('ijkWarmSlotsCellular') ijkWarmSlotsCellular: number = 1;
@@ -1136,6 +1138,18 @@ export struct ProfilePage {
               Toggle({ type: ToggleType.Switch, isOn: this.mixAudioWithOtherApps }).selectedColor('#D34E7E')
                 .id('setting-mix-audio-with-other-apps')
                 .onChange((value: boolean) => this.referenceSaveBoolean('mixAudioWithOtherApps', value))
+            }.width('100%').constraintSize({ minHeight: 56 })
+              .padding({ left: 16, right: 16, top: 12, bottom: 12 })
+            Row({ space: 12 }) {
+              Column({ space: 4 }) {
+                Text('封面一镜到底').fontSize(15).fontColor(this.isDarkMode ? '#E7E9EB' : '#18191C')
+                Text('首页卡片封面放大进入播放页，替代加载黑屏 · 重启后生效')
+                  .fontSize(12)
+                  .fontColor(this.pageWallpaperEnabled ? (this.isDarkMode ? '#C9CDD3' : '#50545A') : '#757A81')
+              }.layoutWeight(1).alignItems(HorizontalAlign.Start)
+              Toggle({ type: ToggleType.Switch, isOn: this.homeCardMorph }).selectedColor('#D34E7E')
+                .id('setting-home-card-morph').accessibilityText('封面一镜到底')
+                .onChange((value: boolean) => this.referenceSaveBoolean('homeCardMorph', value))
             }.width('100%').constraintSize({ minHeight: 56 })
               .padding({ left: 16, right: 16, top: 12, bottom: 12 })
             // 画质偏好按链路分两档：Wi-Fi（含以太网/不计费）与移动网络（蜂窝、计费 Wi-Fi、手机热点）。

@@ -23,8 +23,11 @@ import { WatchHistoryHelper } from '../model/WatchHistoryHelper';
 import { sendDislikeFeedback, sendDislikeUpFeedback } from '../api/FeedbackService';
 import { UserBehaviorService } from '../services/UserBehaviorService';  // ⭐ 用于本地屏蔽过滤
 import { VideoCardComponent } from '../components/VideoCardComponent';
+import { HomeCardMorph, HomeCardMorphRect } from '../services/HomeCardMorph';
+import { resizeImageUrl } from '../utils/ImageUrl';
 import { formatPlayCountText, getPlayCountDisplayColor } from '../utils/PlayCountStyle';
 import { HdsMiniBarButton } from '../components/infra/HdsMiniBarButton';
+import { image } from '@kit.ImageKit';
 
 // ⭐ 已看视频缓存接口（带时间戳，支持7天有效期）
 interface WatchedVideoCache {
@@ -1256,12 +1259,110 @@ export struct HomePage {
     return '#999999';
   }
 
+  /**
+   * 取卡片封面的窗口矩形（vp），必须在点击的同步段调用。
+   * 另外做一次可视区校验：列表重建瞬间 getRectangleById 可能给 (0,0) 或屏幕外的旧值，
+   * 这种矩形宁可不做转场，也不能拿去当落点。
+   */
+  private readCardCoverRect(item: RecommendItem): HomeCardMorphRect | undefined {
+    try {
+      const ui = this.getUIContext();
+      const utils = ui.getComponentUtils();
+      const info = utils.getRectangleById(`home-card-cover-${item.id}`);
+      if (!info) {
+        logWarn('[HomeCardMorph] 取不到封面矩形，回退原转场');
+        return undefined;
+      }
+      const w = ui.px2vp(Number(info.size.width));
+      const h = ui.px2vp(Number(info.size.height));
+      if (!(w > 8) || !(h > 8)) {
+        logWarn(`[HomeCardMorph] 封面矩形过小 ${w.toFixed(1)}x${h.toFixed(1)}，回退原转场`);
+        return undefined;
+      }
+      // 首页根节点矩形 = 可视区；取不到就退回屏幕尺寸
+      let winW = 0;
+      let winH = 0;
+      try {
+        const root = utils.getRectangleById('home-morph-root');
+        if (root && Number(root.size.width) > 0) {
+          winW = ui.px2vp(Number(root.size.width));
+          winH = ui.px2vp(Number(root.size.height));
+        }
+      } catch (e) { }
+      if (!(winW > 0) || !(winH > 0)) {
+        const disp = display.getDefaultDisplaySync();
+        winW = ui.px2vp(disp.width);
+        winH = ui.px2vp(disp.height);
+      }
+      const x = ui.px2vp(Number(info.windowOffset.x));
+      const y = ui.px2vp(Number(info.windowOffset.y));
+      // ⚠️ 不要因为「卡片没完全显示」就放弃接管：首页滚动时半露卡片很常见，
+      //    一旦 return undefined 就 arm 不上，播放页走原 pageTransition = 用户看到的
+      //    「打开未完全显示的卡片变成推拉动画」。只要与可视区有交集就照常做，
+      //    越界那部分由窗口自然裁掉；完全不可见（点不到，防脏数据）才回退。
+      const margin = 4;
+      if (x > winW - margin || y > winH - margin || x + w < margin || y + h < margin) {
+        logWarn(`[HomeCardMorph] 卡片完全不可见 (${x.toFixed(1)},${y.toFixed(1)}) ` +
+          `${w.toFixed(1)}x${h.toFixed(1)} win=${winW.toFixed(1)}x${winH.toFixed(1)}，回退原转场`);
+        return undefined;
+      }
+      HomeCardMorph.windowW = winW;
+      HomeCardMorph.windowH = winH;
+      return { x, y, width: w, height: h, radius: 8 };
+    } catch (e) {
+      logWarn(`[HomeCardMorph] 取封面矩形失败，回退原转场: ${errMsg(e)}`);
+      return undefined;
+    }
+  }
+
+  /** 同步快照已渲染的封面图节点；成功即不再依赖网络图 decode。 */
+  private captureCardCoverPixel(item: RecommendItem): image.PixelMap | undefined {
+    try {
+      return this.getUIContext().getComponentSnapshot()
+        .getSync(`home-card-cover-image-${item.id}`);
+    } catch (e) {
+      logWarn(`[HomeCardMorph] 封面快照失败，回退网络图: ${errMsg(e)}`);
+      return undefined;
+    }
+  }
+
+  private armHomeCardMorph(item: RecommendItem, rect: HomeCardMorphRect | undefined,
+    coverPixel: image.PixelMap | undefined): boolean {
+    if (!HomeCardMorph.enabled() || rect === undefined) return false;
+    try {
+      const armed = HomeCardMorph.arm(HomeCardMorph.sharedId(item.id),
+        resizeImageUrl(item.coverUrl, this.cardCoverWidth()), rect,
+        item.playCount, item.duration, coverPixel);
+      if (!armed && coverPixel) {
+        try { coverPixel.release().catch(() => {}); } catch (_e) { }
+      }
+      return armed;
+    } catch (e) {
+      logWarn(`[HomeCardMorph] 登记失败，回退原转场: ${errMsg(e)}`);
+      if (coverPixel) {
+        try { coverPixel.release().catch(() => {}); } catch (_e) { }
+      }
+      return false;
+    }
+  }
+
   private onCardClick(item: RecommendItem) {
     this.playbackListPrefetch.pause();
     // 自动记录点击播放的视频（用于去重）
     this.autoRecordWatched(item);
     // 保存被点击的轮播索引（页面隐藏时 autoPlay 会改变 currentSwiperIndex）
     this.clickedCarouselIndex = this.animatedSwiperIndex;
+    // 矩形在点击这一帧同步取；首页 Exit 非零时长会把真实首页留在播放页下面。
+    const rect: HomeCardMorphRect | undefined =
+      HomeCardMorph.enabled() ? this.readCardCoverRect(item) : undefined;
+    const coverPixel: image.PixelMap | undefined = rect !== undefined && HomeCardMorph.enabled()
+      ? this.captureCardCoverPixel(item) : undefined;
+    this.armHomeCardMorph(item, rect, coverPixel);
+    this.openVideoPage(item);
+  }
+
+  /** 真正的跳转（原 onCardClick 后半段，参数与时机不变）。 */
+  private openVideoPage(item: RecommendItem) {
 
     // ⭐ 番剧卡片（App 推荐 feed 的 bangumi）：走 PGC 入口，
     //   避免把分集/季id当 aid 传入播放页被解析成撞号的 UGC 视频

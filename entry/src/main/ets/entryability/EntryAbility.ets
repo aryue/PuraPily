@@ -147,6 +147,9 @@ export default class EntryAbility extends UIAbility {
       const pref = preferences.getPreferencesSync(this.context, { name: 'my_app_settings' });
       AppStorage.setOrCreate('mixAudioWithOtherApps', pref.getSync('mixAudioWithOtherApps', false) === true);
       AppStorage.setOrCreate('startupCdnRace', pref.getSync('startupCdnRace', false) === true);
+      // 首页卡片 → 播放页 封面共享元素转场（实验开关，默认关闭）。
+      // ⚠️ Index 的 pageTransition 只在页面创建时求值，所以这个值必须在 loadContent 之前就位。
+      AppStorage.setOrCreate('homeCardMorph', pref.getSync('homeCardMorph', false) === true);
       for (const key of ['ijkWarmSlotsWifi', 'ijkWarmSlotsCellular']) {
         const count = pref.getSync(key, 1);
         AppStorage.setOrCreate(key, typeof count === 'number' && Number.isInteger(count) &&
@@ -154,6 +157,11 @@ export default class EntryAbility extends UIAbility {
       }
     } catch (error) {
       hilog.warn(DOMAIN, TAG, 'Playback preferences restore failed: %{public}s', errMsg(error));
+    }
+    // 必须放在偏好恢复之后：否则会被持久化的旧值覆盖。
+    // 联调开关：--ps homeCardMorph on 冷启动强制打开封面共享元素（只覆盖本次启动）。
+    if (want.parameters?.['homeCardMorph'] !== undefined) {
+      AppStorage.setOrCreate('homeCardMorph', String(want.parameters['homeCardMorph']) === 'on');
     }
     // 字体大小设置页在运行中切回「跟随系统」后要靠系统配置回调继续跟，注册一次即可（API 24+）。
     AppScaleService.watchSystemFontScale(this.context);

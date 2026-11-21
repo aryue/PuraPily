@@ -5,6 +5,7 @@ import { fmtCount } from '../utils/NumberFormat';
 import { VideoCardMoreButton } from './VideoCardMoreButton';
 import { VideoCardFeedback } from '../services/VideoCardFeedback';
 import { resizeImageUrl } from '../utils/ImageUrl';
+import { HomeCardMorph } from '../services/HomeCardMorph';
 
 @Reusable
 @Component
@@ -22,6 +23,16 @@ export struct VideoCardComponent {
 
   aboutToReuse(params: Record<string, Object>): void {
     if (params.item) this.item = params.item as RecommendItem;
+  }
+
+  /** 转场取矩形用：封面节点稳定 id */
+  private coverMorphId(): string {
+    return `home-card-cover-${this.item.id}`;
+  }
+
+  /** 快照只截封面图本身，角标/遮罩仍由播放页 overlay 单独画。 */
+  private coverMorphImageId(): string {
+    return `home-card-cover-image-${this.item.id}`;
   }
 
   private durationLabel(): string {
@@ -44,6 +55,7 @@ export struct VideoCardComponent {
       Stack({ alignContent: Alignment.Bottom }) {
         Image(resizeImageUrl(this.item.coverUrl, this.coverWidth)).width('100%').height('100%').objectFit(ImageFit.Cover)
           .draggable(false)
+          .id(this.coverMorphImageId())
         Column().width('100%').height(36)
           .linearGradient({ angle: 180, colors: [['#00000000', 0], ['#99000000', 1]] })
         Row({ space: 8 }) {
@@ -54,6 +66,9 @@ export struct VideoCardComponent {
       }
       .width('100%').aspectRatio(16 / 9)
       .clip(true)
+      // 封面是转场动画的起点：点击时按这个 id 取窗口矩形，播放页再按实际视频区插值过来。
+      // ⚠️ 不用 sharedTransition —— 播放页的目标矩形依赖布局/画幅，页面创建时还是 1x1。
+      .id(this.coverMorphId())
       .backgroundColor(this.isDarkMode ? '#242628' : '#E3E5E7')
       Column({ space: 8 }) {
         Text(this.item.title).fontSize(14).lineHeight(20).maxLines(2).height(40)

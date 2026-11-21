@@ -1,0 +1,176 @@
+/**
+ * HomeCardMorph — 首页卡片 ↔ 播放页 的封面一镜到底（几何插值 + 双页 live 叠层）。
+ *
+ * 为什么不是 `sharedTransition`：它的目标矩形在**页面创建时**读取，那一刻 `cw=0`、
+ * 画幅也还没定，只能拿到 1x1；布局完成后真实矩形才出现（竖版视频还是居中窄条），
+ * 于是封面会先飞到错误尺寸再回弹。官方「视频展开一镜到底」用 NodeController +
+ * 自定义转场，也正是为了在布局后自己算几何。
+ *
+ * 本服务负责跨页交接封面 URL、卡片封面矩形（起点）与本次是否走 morph。
+ * 播放页 Enter 瞬时到位；首页 Exit 用 380ms 的无位移转场把首页保留在播放页下面，
+ * 返回时先 back、再由播放页的非零 Exit 撑住收缩画面。这样两侧露出的都是真实页面，
+ * 不需要 componentSnapshot，也不会出现截图与实时首页不一致的接缝。
+ *
+ * ⚠️ `pageTransition()` 在页面创建时求值一次：
+ *   · 首页用字段初始化的 `primeExitInstant()` 落开关快照；
+ *   · 播放页用字段初始化的 `peekArmed()` 落「本次 push 是否真的 arm 过」快照。
+ *   返回动画由页面自己消费到的 `coverMorphOwned` 决定，不再读全局 enterInstant。
+ *   代价：开关切换后需重启一次才全量生效。
+ */
+import { logInfo, logWarn } from '../utils/Logger';
+import { image } from '@kit.ImageKit';
+
+/** 视频画面矩形（vp）；只用于播放页把自己那端占位放到正确位置，几何飞行由框架完成。 */
+export interface HomeCardMorphRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  radius: number;
+}
+
+export class HomeCardMorph {
+  /** 开关键（AppStorage / my_app_settings 同名） */
+  static readonly SWITCH_KEY: string = 'homeCardMorph';
+  /** 封面飞行时长上限：只决定飞行路径，不决定切换时刻（切换看封面/首帧谁先就绪） */
+  static readonly DURATION: number = 380;
+  /**
+   * 画幅变换占飞行进度的比例（≈160ms / 380ms）：封面飞行矩形在这一段内从
+   * 卡片 16:9 裁切变成视频真实画幅，返回收缩时也按同一比例回到卡片画幅。
+   */
+  static readonly ASPECT_PROGRESS: number = 0.42;
+  /**
+   * 飞行路径终点：最终视频画面矩形 × 该比例（绕中心缩放）。
+   * ⚠️ 它只是路径终点，**不是切换时刻**：切换在封面画幅就绪 / 首帧就绪时动态发生，
+   *    通常远早于到达这里。提前切的那一帧会把页面几何对齐到当前封面矩形。
+   */
+  static readonly HANDOFF_SCALE: number = 0.88;
+  /**
+   * 首页 Exit 的保留时长：不是视觉动画时长，而是让真实首页一直垫在播放页下面。
+   * 封面解码/播放页首帧可能晚于飞行开始，Exit 太短会在 morph 启动前把首页销毁，
+   * 裁剪窗口四周就会闪窗口黑底。多留一段不可见的 live 底页，不影响播放页盖满后的画面。
+   */
+  static readonly LIVE_BACKDROP_MS: number = 2500;
+  /** 共享元素 id 前缀（两端必须完全一致） */
+  static readonly ID_PREFIX: string = 'home-cover-morph-';
+
+  /** 本次跳转是否已登记封面（首页 arm 后置 true，播放页 consume 后置 false） */
+  static armed: boolean = false;
+  /** 首页 pageTransition 用的开关快照 */
+  static exitInstant: boolean = false;
+  /** 本次共享元素 id（首页与播放页共用） */
+  static id: string = '';
+  static cover: string = '';
+  /** 点击时截取的卡片封面 PixelMap；播放页直接上屏，不再等网络图 decode。 */
+  static coverPixel: image.PixelMap | undefined = undefined;
+  /** 卡片封面在窗口坐标系里的矩形（vp），播放页据此插值到视频区 */
+  static from: HomeCardMorphRect | undefined = undefined;
+  /** 卡片角标数据：返回时封面层要自己把播放量/时长画出来，否则落位后才蹦出 */
+  static playCount: number = 0;
+  static durationSec: number = 0;
+  /** 首页可视区（vp）：用来校验卡片矩形没被读到屏幕外，越界就不接管 */
+  static windowW: number = 0;
+  static windowH: number = 0;
+  /** arm 时刻：残留过久说明这次跳转没真正发生，consume 时作废 */
+  static armedAt: number = 0;
+  static generation: number = 0;
+
+  static enabled(): boolean {
+    return AppStorage.get<boolean>(HomeCardMorph.SWITCH_KEY) === true;
+  }
+
+  /**
+   * 页面创建期快照：这次 push 是否真的登记过封面。
+   * `pageTransition()` 在 `aboutToAppear` 之后求值，不能直接读 armed（已被 consume 清掉）；
+   * 也不能沿用进程级的「上一次卡片跳转」标记 —— 相关推荐 push 出的第二个播放页
+   * 会误走 morph 转场。所以快照只看当前这次 armed。
+   */
+  static peekArmed(): boolean {
+    return HomeCardMorph.armed && Date.now() - HomeCardMorph.armedAt <= 2500;
+  }
+
+  static sharedId(itemId: string): string {
+    return HomeCardMorph.ID_PREFIX + itemId;
+  }
+
+  /** 首页组件字段初始化时调用（早于 aboutToAppear / pageTransition）。 */
+  static primeExitInstant(): boolean {
+    HomeCardMorph.exitInstant = HomeCardMorph.enabled();
+    logInfo(`[HomeCardMorph] prime exitInstant=${HomeCardMorph.exitInstant}`);
+    return HomeCardMorph.exitInstant;
+  }
+
+  /** 首页在 push 前调用。 */
+  static arm(id: string, cover: string, from: HomeCardMorphRect,
+    playCount: number, durationSec: number, coverPixel?: image.PixelMap): boolean {
+    if (!HomeCardMorph.enabled() || !HomeCardMorph.exitInstant) {
+      logInfo(`[HomeCardMorph] skip enabled=${HomeCardMorph.enabled()} exitInstant=${HomeCardMorph.exitInstant}`);
+      return false;
+    }
+    if (id.length === 0 || cover.length === 0) {
+      logWarn('[HomeCardMorph] skip empty id/cover');
+      return false;
+    }
+    HomeCardMorph.releaseCoverPixel();
+    HomeCardMorph.armed = true;
+    HomeCardMorph.id = id;
+    HomeCardMorph.cover = cover;
+    HomeCardMorph.coverPixel = coverPixel;
+    HomeCardMorph.from = from;
+    HomeCardMorph.playCount = playCount;
+    HomeCardMorph.durationSec = durationSec;
+    HomeCardMorph.armedAt = Date.now();
+    HomeCardMorph.generation++;
+    logInfo(`[HomeCardMorph] arm id=${id} ` +
+      `from=(${from.x.toFixed(1)},${from.y.toFixed(1)}) ${from.width.toFixed(1)}x${from.height.toFixed(1)}`);
+    return true;
+  }
+
+  /**
+   * 播放页 aboutToAppear：只消费 armed。
+   * 超过 2.5s 的残留（路由失败 / 上一次点击没真正跳转）一律作废：否则会拿旧卡片矩形
+   * 去飞，落点就飘到屏幕上不相干的位置。
+   */
+  static consume(): boolean {
+    const stale = HomeCardMorph.armed && Date.now() - HomeCardMorph.armedAt > 2500;
+    const hit = HomeCardMorph.armed && !stale;
+    HomeCardMorph.armed = false;
+    if (stale) {
+      logWarn('[HomeCardMorph] stale arm dropped');
+      HomeCardMorph.from = undefined;
+      HomeCardMorph.id = '';
+      HomeCardMorph.cover = '';
+      HomeCardMorph.releaseCoverPixel();
+    }
+    return hit;
+  }
+
+  static clear(): void {
+    HomeCardMorph.armed = false;
+  }
+
+  /** 播放页取走 PixelMap 的所有权；之后由页面 dispose 时释放。 */
+  static takeCoverPixel(): image.PixelMap | undefined {
+    const pixel = HomeCardMorph.coverPixel;
+    HomeCardMorph.coverPixel = undefined;
+    return pixel;
+  }
+
+  static releaseCoverPixel(): void {
+    const pixel = HomeCardMorph.coverPixel;
+    HomeCardMorph.coverPixel = undefined;
+    if (pixel) {
+      try { pixel.release().catch(() => {}); } catch (_e) { }
+    }
+  }
+
+  static dispose(): void {
+    HomeCardMorph.armed = false;
+    HomeCardMorph.id = '';
+    HomeCardMorph.cover = '';
+    HomeCardMorph.releaseCoverPixel();
+    HomeCardMorph.from = undefined;
+    HomeCardMorph.playCount = 0;
+    HomeCardMorph.durationSec = 0;
+  }
+}

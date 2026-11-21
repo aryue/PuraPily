@@ -4,6 +4,7 @@ import { pageBackgroundColor } from '../utils/SurfaceColors';
 import { PageWallpaper } from '../components/PageWallpaper';
 import { NativeHeaderGlass } from '../components/NativeHeaderGlass';
 import { FloatingVideoTransition } from '../services/FloatingVideoTransition';
+import { HomeCardMorph } from '../services/HomeCardMorph';
 import { HOME_SEARCH_ROW_HEIGHT, HOME_CHANNEL_ROW_HEIGHT } from '../utils/HomeHeaderLayout';
 import { common } from '@kit.AbilityKit';
 import { window, uiMaterial } from '@kit.ArkUI';
@@ -68,6 +69,12 @@ struct Index {
   @StorageLink('homeChannelPosition') channelPosition: number = 2;
   @State homeTabCenters: number[] = [32, 88, 144, 200, 256, 312];
   @StorageLink('homeScrollOffset') homeScrollOffset: number = 0;
+  /**
+   * 封面共享元素转场（开关 homeCardMorph）：页面实例化时就落定首页 Exit 快照。
+   * `pageTransition()` 在页面创建后求值一次，那时 `aboutToAppear` 可能还没跑到（它是 async），
+   * 所以快照必须放在字段初始化里；pageTransition 只读这个结果。
+   */
+  private readonly morphExitLocked: boolean = HomeCardMorph.primeExitInstant();
 
   async aboutToAppear(): Promise<void> {
     this.updateHomeActivity();
@@ -435,6 +442,12 @@ struct Index {
     if (FloatingVideoTransition.active()) {
       PageTransitionEnter({ duration: FloatingVideoTransition.direction === 'minimize' ? 0 : FloatingVideoTransition.DURATION }).opacity(1)
       PageTransitionExit({ duration: FloatingVideoTransition.DURATION }).opacity(1)
+    } else if (this.morphExitLocked) {
+      // ⭐ 共享元素新路径（开关 homeCardMorph）：进入瞬时切页；退出用同样时长、无位移的
+      //    转场把真实首页留在下面。返回时先 router.back()，首页作为 live 背景立即出现，
+      //    播放页的非零 Exit 再撑住自己的收缩画面，不需要首页截图底板。
+      PageTransitionEnter({ type: RouteType.None, duration: 0 }).opacity(1)
+      PageTransitionExit({ type: RouteType.None, duration: HomeCardMorph.LIVE_BACKDROP_MS, curve: Curve.Linear }).opacity(1)
     }
   }
 
@@ -504,5 +517,7 @@ struct Index {
     .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
     }.width('100%').height('100%')
       .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
+      // 共享元素转场：用于读取首页可视区矩形，校验卡片落点。
+      .id('home-morph-root')
   }
 }

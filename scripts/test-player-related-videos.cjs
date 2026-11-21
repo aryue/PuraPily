@@ -34,10 +34,14 @@ async function main() {
   assert.equal(await stale, null, 'late errors cannot clear the active recommendations');
   assert.equal(failures.length, 0);
 
-  const oldGeneration = service.load('BVsecond', () => false);
+  const cachedItems = await service.load('BVsecond', () => true);
+  assert.deepEqual(Array.from(cachedItems), [item], 'successful results must be cached for the next page');
+  assert.equal(pending.length, 2, 'cache hit must not start another related request');
+
+  const oldGeneration = service.load('BVthird', () => false);
   pending[2].resolve([item]);
   assert.equal(await oldGeneration, null);
-  const failure = service.load('BVsecond', () => true);
+  const failure = service.load('BVfail', () => true);
   pending[3].reject(new Error('current request failed'));
   assert.deepEqual(Array.from(await failure), []);
   assert.equal(failures.length, 1);

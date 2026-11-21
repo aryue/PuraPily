@@ -67,6 +67,7 @@ function makePage(overrides) {
     waitingForFirstFrame: true,
     vi: { cid: 100 },
     geometryUpdates: 0,
+    applyMorphSafeAspect: () => false,
     updateIsLandscapeVertical() {},
     updateLSVSize() {},
     updateVideoSize() { this.geometryUpdates++; },
