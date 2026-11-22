@@ -27,7 +27,7 @@ export struct VideoCardComponent {
 
   /** 转场取矩形用：封面节点稳定 id */
   private coverMorphId(): string {
-    return `home-card-cover-${this.item.id}`;
+    return HomeCardMorph.cardCoverId(this.item.id);
   }
 
   /** 快照只截封面图本身，角标/遮罩仍由播放页 overlay 单独画。 */

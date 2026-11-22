@@ -111,7 +111,7 @@ function loadPageHandoff(detail = null, schedule = setTimeout) {
   }).outputText, context);
   Object.assign(context, context.exports);
   const identityStart = source.indexOf('  private commitPlaybackIdentity(');
-  const identityEnd = source.indexOf('  /**', identityStart);
+  const identityEnd = source.indexOf('  private applyPgcSeasonDetail(', identityStart);
   const aspectStart = source.indexOf('  private referenceFeedAspect(');
   const aspectEnd = source.indexOf('  private referencePublishStill(', aspectStart);
   const displayStart = source.indexOf('  private displayAspect(');
@@ -126,6 +126,8 @@ function loadPageHandoff(detail = null, schedule = setTimeout) {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 }
   }).outputText, context);
   const page = new context.exports.Page();
+  page.skipSegments_ = { reset() {}, rawMarks() { return ''; } };
+  page.skipPromptTimer_ = -1;
   page.surfaceRetirement_ = new context.PlaybackSurfaceRetirement();
   page.referenceCancelFeedPlayerTouch = () => {};
   page.getUIContext = () => ({ animateTo(_options, action) { action(); }, getPromptAction: () => ({

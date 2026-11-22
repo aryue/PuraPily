@@ -24,6 +24,8 @@ vm.runInNewContext(ts.transpileModule(`export class Page { ${methods} }`,{}).out
   referenceAlive:true,referenceQueuedFeedStep:0,referenceSwitchGeneration:0,referencePreviewGeneration:0,
   referencePortraitFeedActive:()=>true,vi:{bvid:'BVold'},play:false,ch:744,
   playbackProgressReporter_:{resetHeartbeat:noop},
+  skipSegments_:{reset:noop,rawMarks:()=>''},
+  skipPromptTimer_:-1,
   referenceCancelFeedPlayerTouch:noop,ensureReferenceRecommendQueue:async()=>[{id:'BVold'},next],
   referencePreviewRequestedId:'BVtarget',referenceStillFrames:new Map(),referenceStillRatios:new Map(),
   referenceDecodeRatios:new Map(),referenceFeedAspect:()=>1,referenceFeedDisplayAspect:aspect=>aspect,

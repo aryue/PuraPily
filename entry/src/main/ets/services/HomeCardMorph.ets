@@ -35,6 +35,26 @@ export class HomeCardMorph {
   /** 封面飞行时长上限：只决定飞行路径，不决定切换时刻（切换看封面/首帧谁先就绪） */
   static readonly DURATION: number = 380;
   /**
+   * 返回可见收缩时长。平台动效规范要求不少于 250ms；这里取 380ms，
+   * 与进入路径同长，返回不至于比打开更快、显得急停。
+   */
+  static readonly RETURN_DURATION: number = 380;
+  /**
+   * 播放页退出转场保留时长。必须覆盖「等首页重排 + 最短 250ms 收缩 + 收尾」，
+   * 又不能把页面留到用户已开始滑动之后太久；440ms 留出约 40~60ms 收尾。
+   */
+  static readonly RETURN_HOLD_MS: number = 440;
+  /** 换方向返回：收缩不得低于平台下限。 */
+  static readonly ROTATED_RETURN_MIN_MS: number = 250;
+  /** 换方向返回：收缩上限，避免比同方向返回更拖沓。 */
+  static readonly ROTATED_RETURN_MAX_MS: number = 360;
+  /** 换方向返回：pop 后可用于「等待重排 + 收缩」的预算。 */
+  static readonly ROTATED_RETURN_BUDGET_MS: number = 380;
+  /** 换方向返回：等首页新落点的最长时间；超时才允许推拉兜底。 */
+  static readonly ROTATED_RETURN_WAIT_MS: number = 140;
+  /** 换方向返回：真正拿不到落点时的兜底横移时长，同样不低于 250ms。 */
+  static readonly ROTATED_RETURN_FALLBACK_MS: number = 250;
+  /**
    * 画幅变换占飞行进度的比例（≈160ms / 380ms）：封面飞行矩形在这一段内从
    * 卡片 16:9 裁切变成视频真实画幅，返回收缩时也按同一比例回到卡片画幅。
    */
@@ -60,6 +80,8 @@ export class HomeCardMorph {
   static exitInstant: boolean = false;
   /** 本次共享元素 id（首页与播放页共用） */
   static id: string = '';
+  /** 首页卡片封面节点 id（返回收缩期间按它实时取最新窗口矩形） */
+  static cardElementId: string = '';
   static cover: string = '';
   /** 点击时截取的卡片封面 PixelMap；播放页直接上屏，不再等网络图 decode。 */
   static coverPixel: image.PixelMap | undefined = undefined;
@@ -71,6 +93,10 @@ export class HomeCardMorph {
   /** 首页可视区（vp）：用来校验卡片矩形没被读到屏幕外，越界就不接管 */
   static windowW: number = 0;
   static windowH: number = 0;
+  /** 点击发生时首页是否为横屏；返回前必须与播放页当前方向一致，否则几何不可复用。 */
+  static fromLandscape: boolean = false;
+  /** 首页在 pop 后完成一次布局的代数；播放页旋转返回时据此确认卡片落点已不是旧方向。 */
+  static homeLayoutReadyGeneration: number = 0;
   /** arm 时刻：残留过久说明这次跳转没真正发生，consume 时作废 */
   static armedAt: number = 0;
   static generation: number = 0;
@@ -91,6 +117,16 @@ export class HomeCardMorph {
 
   static sharedId(itemId: string): string {
     return HomeCardMorph.ID_PREFIX + itemId;
+  }
+
+  /** 首页卡片封面节点的稳定 id（两端都按 item.id 拼，返回时用于复查落点）。 */
+  static cardCoverId(itemId: string): string {
+    return 'home-card-cover-' + itemId;
+  }
+
+  /** 首页 onPageShow 完成方向重排后调用；播放页只认本次 pop 之后的新代数。 */
+  static markHomeLayoutReady(): void {
+    HomeCardMorph.homeLayoutReadyGeneration++;
   }
 
   /** 首页组件字段初始化时调用（早于 aboutToAppear / pageTransition）。 */
@@ -114,12 +150,14 @@ export class HomeCardMorph {
     HomeCardMorph.releaseCoverPixel();
     HomeCardMorph.armed = true;
     HomeCardMorph.id = id;
+    HomeCardMorph.cardElementId = '';
     HomeCardMorph.cover = cover;
     HomeCardMorph.coverPixel = coverPixel;
     HomeCardMorph.from = from;
     HomeCardMorph.playCount = playCount;
     HomeCardMorph.durationSec = durationSec;
     HomeCardMorph.armedAt = Date.now();
+    HomeCardMorph.fromLandscape = HomeCardMorph.windowW > HomeCardMorph.windowH;
     HomeCardMorph.generation++;
     logInfo(`[HomeCardMorph] arm id=${id} ` +
       `from=(${from.x.toFixed(1)},${from.y.toFixed(1)}) ${from.width.toFixed(1)}x${from.height.toFixed(1)}`);
@@ -139,6 +177,7 @@ export class HomeCardMorph {
       logWarn('[HomeCardMorph] stale arm dropped');
       HomeCardMorph.from = undefined;
       HomeCardMorph.id = '';
+      HomeCardMorph.cardElementId = '';
       HomeCardMorph.cover = '';
       HomeCardMorph.releaseCoverPixel();
     }
@@ -167,6 +206,7 @@ export class HomeCardMorph {
   static dispose(): void {
     HomeCardMorph.armed = false;
     HomeCardMorph.id = '';
+    HomeCardMorph.cardElementId = '';
     HomeCardMorph.cover = '';
     HomeCardMorph.releaseCoverPixel();
     HomeCardMorph.from = undefined;

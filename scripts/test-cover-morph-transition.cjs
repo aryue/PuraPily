@@ -15,7 +15,9 @@ const ability = read('entry/src/main/ets/entryability/EntryAbility.ets');
 // ── 1) 不用 sharedTransition，封面矩形必须在布局后自行插值 ─────────────────────
 assert.match(morph, /static readonly ID_PREFIX: string = 'home-cover-morph-';/,
   'id 前缀必须固定，两端引用同一个常量');
-assert.match(card, /private coverMorphId\(\): string \{\s*\n\s*return `home-card-cover-\$\{this\.item\.id\}`;/, 
+assert.match(morph, /static cardCoverId\(itemId: string\): string \{\s*\n\s*return 'home-card-cover-' \+ itemId;/,
+  '卡片封面节点 id 必须由服务层统一生成');
+assert.match(card, /private coverMorphId\(\): string \{\s*\n\s*return HomeCardMorph\.cardCoverId\(this\.item\.id\);/,
   '卡片封面必须带可查询的 id');
 assert.match(card, /\.id\(this\.coverMorphId\(\)\)/, '封面节点必须挂上该 id');
 assert.match(card, /private coverMorphImageId\(\): string \{\s*\n\s*return `home-card-cover-image-\$\{this\.item\.id\}`;/, 
@@ -26,6 +28,10 @@ assert.ok(!/\.sharedTransition\(/.test(page), '播放页不得用 sharedTransiti
 
 // ── 2) 跨页交接：只交封面、矩形与角标，不再交截图底板 ──────────────────────────
 assert.match(morph, /static readonly DURATION: number = 380;/, '飞行路径时长必须是 380ms');
+assert.match(morph, /static readonly RETURN_DURATION: number = 380;/, '同方向返回可见收缩必须是 380ms');
+assert.match(morph, /static readonly RETURN_HOLD_MS: number = 440;/, '退出转场必须覆盖返回收缩与收尾');
+assert.match(morph, /static readonly ROTATED_RETURN_MIN_MS: number = 250;/, '换方向返回不得低于平台 250ms 下限');
+assert.match(morph, /static readonly ROTATED_RETURN_FALLBACK_MS: number = 250;/, '推拉兜底也必须满足 250ms 下限');
 assert.match(morph, /static readonly ASPECT_PROGRESS: number = 0\.42;/, 
   '卡片裁切画幅必须在飞行前 42% 内变成视频真实画幅');
 assert.match(morph, /static readonly HANDOFF_SCALE: number = 0\.88;/, 
@@ -57,7 +63,7 @@ assert.match(home, /getRectangleById\('home-morph-root'\)/, '首页尺寸必须�
 assert.match(home, /getComponentSnapshot\(\)\s*\n?\s*\.getSync\(`home-card-cover-image-\$\{item\.id\}`\)/, 
   '首页点击必须同步快照已渲染的封面图');
 assert.ok(!/captureMorphBase|home-morph-snapshot/.test(home), '首页不得再维护整页截图底板');
-assert.match(home, /const info = utils\.getRectangleById\(`home-card-cover-\$\{item\.id\}`\);/, 
+assert.match(home, /const info = utils\.getRectangleById\(HomeCardMorph\.cardCoverId\(item\.id\)\);/,
   '点击时必须取封面窗口矩形');
 assert.match(home, /if \(x > winW - margin \|\| y > winH - margin \|\| x \+ w < margin \|\| y \+ h < margin\) \{/, 
   '卡片矩形必须校验与可视区有交集');
@@ -174,13 +180,31 @@ assert.match(coverLayer, /\.width\(this\.morphWinW\(\)\)[\s\S]{0,240}?\.clip\(tr
   '封面层必须裁剪到当前 morph 窗口内，不能盖住窗口外真实首页');
 
 // ── 5) 返回：先 back 让首页 live 激活，再由非零 Exit 撑住收缩 ─────────────────
-assert.match(page, /private beginReturnCoverMorph\(backUrl: string = ''\): boolean \{[\s\S]{0,400}?if \(this\.fs \|\| this\.isLs \|\| this\.referenceFeed\) return false;/, 
-  '全屏/横屏/连刷不能接管返回');
-assert.match(page, /const dur = this\.da \? 0 : Math\.max\(200, HomeCardMorph\.DURATION - 60\);/, 
+assert.match(page, /if \(this\.fs \|\| this\.referenceFeed\) return false;/,
+  '全屏/连刷不能接管返回；横屏同方向必须允许接管');
+assert.ok(!/if \(this\.fs \|\| this\.isLs \|\| this\.referenceFeed\) return false;/.test(page),
+  '横屏不得被静态排除');
+assert.match(page, /const rotatedReturn = !this\.coverMorphOrientationStable\(\);/,
+  '返回前必须区分同方向与中途换方向');
+assert.match(page, /private startCoverMorphRotatedReturn\(\): void \{[\s\S]{0,1600}?HomeCardMorph\.homeLayoutReadyGeneration > this\.coverMorphRotatedReadyBefore[\s\S]{0,1200}?const next = this\.readCoverMorphCardRect\(\);/,
+  '换方向返回必须先等首页完成新方向布局，再读取同一张卡片的真实落点');
+assert.match(page, /private readCoverMorphCardRect\(\): HomeCardMorphRect \| undefined \{[\s\S]{0,500}?HomeCardMorph\.cardElementId/,
+  '返回落点必须按首页卡片节点 id 实时读取');
+const followBlock = page.slice(page.indexOf('  private startCoverMorphReturnFollow()'),
+  page.indexOf('  private beginReturnCoverMorph('));
+assert.match(followBlock, /const next = this\.readCoverMorphCardRect\(\);/,
+  '首页滑动时返回落点必须逐帧读取卡片');
+assert.match(followBlock, /this\.applyCoverMorphReturnTarget\(next\);/,
+  '首页滑动时返回落点必须写回同一个目标状态');
+assert.match(home, /this\.afterHomeLayout\(\(\) => \{\s*\n\s*HomeCardMorph\.markHomeLayoutReady\(\);/,
+  '首页必须在返回布局完成后发出可复用信号');
+assert.match(morph, /static markHomeLayoutReady\(\): void \{\s*\n\s*HomeCardMorph\.homeLayoutReadyGeneration\+\+;/,
+  '布局完成信号必须使用代数，不能只置布尔量');
+assert.match(page, /const dur = this\.da \? 0 : HomeCardMorph\.RETURN_DURATION;/,
   '返回收缩时长口径必须保留');
 const returnBlock = page.slice(page.indexOf('  private beginReturnCoverMorph('),
   page.indexOf('  private disposeCoverMorph('));
-assert.match(returnBlock, /logInfo\(`\[HomeCardMorph\] back after settle frame[\s\S]{0,240}?router\.back\([\s\S]{0,220}?animateTo\(/, 
+assert.match(returnBlock, /this\.startCoverMorphRotatedReturn\(\);[\s\S]{0,200}?return;[\s\S]{0,300}?router\.back\([\s\S]{0,180}?this\.startCoverMorphReturnFollow\(\);[\s\S]{0,160}?animateTo\(/,
   '撤回打断后必须恢复先 back、再收缩的路径');
 assert.match(returnBlock, /this\.coverMorphProgress = 0;/, '返回只能补间 progress');
 assert.match(returnBlock, /const quickReturn = this\.coverMorphActive && measuredP < 0\.999;/, 
@@ -208,7 +232,7 @@ assert.match(returnBlock, /if \(!this\.coverMorphOwned\) return false;/,
   '返回必须只认本页消费过的转场，不能读全局 enterInstant');
 assert.match(page, /private disposeCoverMorph\(\): void \{[\s\S]{0,1400}?HomeCardMorph\.dispose\(\);/, 
   '页面销毁必须清理服务状态');
-assert.match(page, /private disposeCoverMorph\(\): void \{[\s\S]{0,900}?if \(this\.coverMorphOwned\) \{[\s\S]{0,120}?HomeCardMorph\.dispose\(\);/, 
+assert.match(page, /private disposeCoverMorph\(\): void \{[\s\S]{0,2400}?if \(this\.coverMorphOwned\) \{[\s\S]{0,120}?HomeCardMorph\.dispose\(\);/,
   '只有持有本次转场的页面才能清理服务状态');
 assert.match(page, /private readonly coverMorphEnterTransition: boolean = HomeCardMorph\.peekArmed\(\);/, 
   'pageTransition 必须使用页面创建期的 armed 快照');
@@ -223,7 +247,7 @@ assert.match(phTrans, /else if \(this\.coverMorphEnterTransition\) \{/,
   '播放页 morph 转场不得读取全局 enterInstant（相关推荐页会继承）');
 assert.match(phTrans, /PageTransitionEnter\(\{ type: RouteType\.None, duration: 0 \}\)\.opacity\(1\)/, 
   '播放页进入必须瞬时到位');
-assert.match(phTrans, /PageTransitionExit\(\{ type: RouteType\.None, duration: HomeCardMorph\.DURATION, curve: Curve\.Linear \}\)\.opacity\(1\)/, 
+assert.match(phTrans, /PageTransitionExit\(\{ type: RouteType\.None, duration: HomeCardMorph\.RETURN_HOLD_MS, curve: Curve\.Linear \}\)\.opacity\(1\)/,
   '播放页退出必须用非零、无位移的 Exit 撑住收缩');
 const idxTrans = index.slice(index.indexOf('  pageTransition() {'));
 assert.match(idxTrans, /PageTransitionEnter\(\{ type: RouteType\.None, duration: 0 \}\)\.opacity\(1\)/, 
@@ -260,6 +284,14 @@ assert.match(page, /\.opacity\(this\.coverMorphLayerOpacity\(\)\)/,
   '封面层显隐必须由交叉淡入/淡出方法控制');
 assert.match(returnBlock, /expectedFrameRateRange: \{ min: 60, max: 120, expected: 120 \}/, 
   '返回收缩必须声明 120Hz 帧率范围');
+assert.match(returnBlock, /this\.startCoverMorphRotatedReturn\(\);/,
+  '换方向返回必须走主路径而不是直接兜底');
+assert.match(page, /elapsed >= HomeCardMorph\.ROTATED_RETURN_WAIT_MS[\s\S]{0,500}?rotated target unavailable/,
+  '只有在等待新落点超时后才允许退化为推拉');
+assert.match(page, /Math\.max\(HomeCardMorph\.ROTATED_RETURN_MIN_MS,[\s\S]{0,120}?Math\.min\(HomeCardMorph\.ROTATED_RETURN_MAX_MS,/,
+  '换方向收缩必须先满足 250ms 下限');
+assert.match(page, /this\.coverMorphReturnEarlyHide = true;[\s\S]{0,200}?hide shrink early/,
+  '卡片滑出视口时必须提前隐藏退出窗口');
 
 // ── 9) 画幅晚到：起飞前等待、飞行中补间、返回重算画幅 ───────────────────────
 assert.match(page, /private readonly MORPH_ASPECT_WAIT_MS: number = 300;/,

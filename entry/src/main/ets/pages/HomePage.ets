@@ -494,6 +494,9 @@ export struct HomePage {
     this.isPageActive = true;
     this.syncPlaybackListPrefetch();
     await this.recheckOrientationAndColumn();
+    this.afterHomeLayout(() => {
+      HomeCardMorph.markHomeLayoutReady();
+    });
     // 每次返回时轮播切到下一张（用保存的点击索引，防止 autoPlay 干扰）
     if (this.clickedCarouselIndex >= 0 && this.banners.length > 0) {
       const nextIndex = (this.clickedCarouselIndex + 1) % this.banners.length;
@@ -1268,7 +1271,7 @@ export struct HomePage {
     try {
       const ui = this.getUIContext();
       const utils = ui.getComponentUtils();
-      const info = utils.getRectangleById(`home-card-cover-${item.id}`);
+      const info = utils.getRectangleById(HomeCardMorph.cardCoverId(item.id));
       if (!info) {
         logWarn('[HomeCardMorph] 取不到封面矩形，回退原转场');
         return undefined;
@@ -1333,6 +1336,7 @@ export struct HomePage {
       const armed = HomeCardMorph.arm(HomeCardMorph.sharedId(item.id),
         resizeImageUrl(item.coverUrl, this.cardCoverWidth()), rect,
         item.playCount, item.duration, coverPixel);
+      if (armed) HomeCardMorph.cardElementId = HomeCardMorph.cardCoverId(item.id);
       if (!armed && coverPixel) {
         try { coverPixel.release().catch(() => {}); } catch (_e) { }
       }

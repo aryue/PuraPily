@@ -578,7 +578,7 @@ struct VideoPlayerPage {
       //       第二个播放页继承，导致普通进入也走 0ms 转场、返回还朝上一张卡片收缩。
       //    ⚠️ 返回时先 back：首页立即成为 live 下层，退出页继续在上层播放收缩。
       PageTransitionEnter({ type: RouteType.None, duration: 0 }).opacity(1)
-      PageTransitionExit({ type: RouteType.None, duration: HomeCardMorph.DURATION, curve: Curve.Linear }).opacity(1)
+      PageTransitionExit({ type: RouteType.None, duration: HomeCardMorph.RETURN_HOLD_MS, curve: Curve.Linear }).opacity(1)
     }
   }
 
@@ -684,6 +684,26 @@ struct VideoPlayerPage {
   private coverMorphQuickStartP: number = 1;
   private coverMorphQuickCoverRect: HomeCardMorphRect = { x: 0, y: 0, width: 0, height: 0, radius: 8 };
   private coverMorphFallbackTimer: number = -1;
+  /**
+   * 返回落点。首页在退出转场期间仍可被用户滑动，卡片矩形会逐帧变化；
+   * 这个 @State 是返回段唯一的落点来源，采样器更新它即可让封面/窗口实时跟随。
+   */
+  @State private coverMorphReturnTarget: HomeCardMorphRect = { x: 0, y: 0, width: 0, height: 0, radius: 8 };
+  private coverMorphReturnFollowTimer: number = -1;
+  private coverMorphReturnFollowMisses: number = 0;
+  private coverMorphTargetLogAt: number = 0;
+  private coverMorphRotatedWaitTimer: number = -1;
+  private coverMorphRotatedBackAt: number = 0;
+  private coverMorphRotatedReadyBefore: number = 0;
+  private coverMorphRotatedStaleRect: HomeCardMorphRect = { x: 0, y: 0, width: 0, height: 0, radius: 8 };
+  /** 目标卡片已滑出视口：提前隐藏整页退出窗口，避免封面往屏幕外飞。 */
+  @State private coverMorphReturnEarlyHide: boolean = false;
+  /**
+   * 播放页中途换过方向时的兜底退出进度（0→1）。pageTransition 在页面创建时已固定，
+   * 无法在返回时切回系统默认转场；这里用自绘的整页右移补间模拟推拉收尾。
+   */
+  @State private coverMorphFallbackExitProgress: number = 0;
+  private coverMorphFallbackExitRunning: boolean = false;
   /**
    * 首次点击时路由尺寸可能为 0，真实画幅要等详情/解码器回来。
    * 在卡片位置最多等这么久再起飞：宁可晚 300ms，也不要先按 16:9 展开、
@@ -1858,7 +1878,8 @@ struct VideoPlayerPage {
   private coverMorphFlyRect(): HomeCardMorphRect {
     const p = Math.max(0, Math.min(1, this.coverMorphProgress));
     const a = this.coverMorphAspectProgress();
-    const from = this.coverMorphFrom;
+    // 返回段用实时落点：首页滑动时目标矩形变化，飞行/收缩路径逐帧跟着改。
+    const from = this.coverMorphReturning ? this.coverMorphReturnTarget : this.coverMorphFrom;
     const to = this.coverMorphTo;
     // p=0 必须严格等于卡片矩形。画幅比例一旦在进入后被修正，
     // 返回末帧若仍按 mediaAspect 计算高度，就会得到一张比卡片高一倍的裁切图。
@@ -1892,18 +1913,18 @@ struct VideoPlayerPage {
    *    视频在卡片里的居中由 morphContentPosY 的偏移量负责。
    */
   private morphHandoffScale(): number {
-    const q = this.coverMorphSwitchRect;
+    const q = this.coverMorphReturning ? this.coverMorphReturnTarget : this.coverMorphSwitchRect;
     return Math.max(0.01, Math.min(1,
       Math.max(1, q.width) / Math.max(1, this.morphPageW)));
   }
   /** 切换帧视频画面（页面坐标）的屏幕位置：在冻结矩形里居中，超出部分由窗口裁掉。 */
   private morphHandoffVideoX(): number {
-    const q = this.coverMorphSwitchRect;
+    const q = this.coverMorphReturning ? this.coverMorphReturnTarget : this.coverMorphSwitchRect;
     const media = this.coverMorphVideoRect();
     return q.x + (q.width - media.width * this.morphHandoffScale()) / 2;
   }
   private morphHandoffVideoY(): number {
-    const q = this.coverMorphSwitchRect;
+    const q = this.coverMorphReturning ? this.coverMorphReturnTarget : this.coverMorphSwitchRect;
     const media = this.coverMorphVideoRect();
     return q.y + (q.height - media.height * this.morphHandoffScale()) / 2;
   }
@@ -1948,13 +1969,13 @@ struct VideoPlayerPage {
    */
   private morphContentPosX(): number {
     if (!this.coverMorphActive) return 0;
-    const q = this.coverMorphSwitchRect;
+    const q = this.coverMorphReturning ? this.coverMorphReturnTarget : this.coverMorphSwitchRect;
     const t = this.coverMorphReturning ? (1 - this.coverMorphProgress) : (1 - this.coverMorphReveal);
     return (this.morphHandoffWinX() - q.x) * t;
   }
   private morphContentPosY(): number {
     if (!this.coverMorphActive) return 0;
-    const q = this.coverMorphSwitchRect;
+    const q = this.coverMorphReturning ? this.coverMorphReturnTarget : this.coverMorphSwitchRect;
     const t = this.coverMorphReturning ? (1 - this.coverMorphProgress) : (1 - this.coverMorphReveal);
     return (this.morphHandoffWinY() - q.y) * t;
   }
@@ -1987,7 +2008,7 @@ struct VideoPlayerPage {
       const start = Math.max(0.0001, this.coverMorphQuickStartP);
       const q = Math.max(0, Math.min(1, this.coverMorphProgress / start));
       const from = this.coverMorphQuickCoverRect;
-      const to = this.coverMorphFrom;
+      const to = this.coverMorphReturnTarget;
       return {
         x: to.x + (from.x - to.x) * q,
         y: to.y + (from.y - to.y) * q,
@@ -2037,28 +2058,30 @@ struct VideoPlayerPage {
   //    16:9/21:9 会因 mediaTop 把窗口上沿顶出卡片，封面层只盖卡片时就会先漏黑。
   private morphWinX(): number {
     if (this.coverMorphReturning) {
-      return this.morphWinFrom.x + (this.morphWinTo.x - this.morphWinFrom.x) * this.coverMorphProgress;
+      const t = this.coverMorphReturnTarget;
+      return t.x + (this.morphWinTo.x - t.x) * this.coverMorphProgress;
     }
     return this.coverMorphSwitchRect.x * (1 - this.coverMorphReveal);
   }
   private morphWinY(): number {
     if (this.coverMorphReturning) {
-      return this.morphWinFrom.y + (this.morphWinTo.y - this.morphWinFrom.y) * this.coverMorphProgress;
+      const t = this.coverMorphReturnTarget;
+      return t.y + (this.morphWinTo.y - t.y) * this.coverMorphProgress;
     }
     return this.coverMorphSwitchRect.y * (1 - this.coverMorphReveal);
   }
   private morphWinW(): number {
     if (this.coverMorphReturning) {
-      return Math.max(1, this.morphWinFrom.width +
-        (this.morphWinTo.width - this.morphWinFrom.width) * this.coverMorphProgress);
+      const t = this.coverMorphReturnTarget;
+      return Math.max(1, t.width + (this.morphWinTo.width - t.width) * this.coverMorphProgress);
     }
     const q = this.coverMorphSwitchRect;
     return Math.max(1, q.width + (this.morphPageW - q.width) * this.coverMorphReveal);
   }
   private morphWinH(): number {
     if (this.coverMorphReturning) {
-      return Math.max(1, this.morphWinFrom.height +
-        (this.morphWinTo.height - this.morphWinFrom.height) * this.coverMorphProgress);
+      const t = this.coverMorphReturnTarget;
+      return Math.max(1, t.height + (this.morphWinTo.height - t.height) * this.coverMorphProgress);
     }
     const q = this.coverMorphSwitchRect;
     return Math.max(1, q.height + (this.morphPageH - q.height) * this.coverMorphReveal);
@@ -2067,8 +2090,8 @@ struct VideoPlayerPage {
     if (!this.coverMorphReturning) {
       return Math.max(0, this.coverMorphSwitchRect.radius * (1 - this.coverMorphReveal));
     }
-    return Math.max(0, this.morphWinFrom.radius +
-      (this.morphWinTo.radius - this.morphWinFrom.radius) * this.coverMorphProgress);
+    const t = this.coverMorphReturnTarget;
+    return Math.max(0, t.radius + (this.morphWinTo.radius - t.radius) * this.coverMorphProgress);
   }
 
   /**
@@ -2428,6 +2451,175 @@ struct VideoPlayerPage {
   }
 
   /**
+   * 落点几何只在「进入时的首页方向 == 返回时的播放页方向」时有效。
+   * 中途横竖转换后首页会按新列数重排，不能让旧矩形直接当落点；但同一张卡片的
+   * 封面节点仍在，返回后可以等首页完成新方向布局，再取它的真实矩形继续收缩。
+   */
+  private coverMorphOrientationStable(): boolean {
+    const w = HomeCardMorph.windowW;
+    const h = HomeCardMorph.windowH;
+    if (w > 0 && h > 0 && this.cw > 0 && this.ch > 0) {
+      return (w > h) === (this.cw > this.ch);
+    }
+    return HomeCardMorph.fromLandscape === (this.cw > this.ch);
+  }
+
+  private readCoverMorphCardRect(): HomeCardMorphRect | undefined {
+    try {
+      const ui = this.getUIContext();
+      const info = ui.getComponentUtils().getRectangleById(HomeCardMorph.cardElementId);
+      if (!info || Number(info.size.width) <= 0 || Number(info.size.height) <= 0) return undefined;
+      const x = ui.px2vp(Number(info.windowOffset.x));
+      const y = ui.px2vp(Number(info.windowOffset.y));
+      const w = ui.px2vp(Number(info.size.width));
+      const h = ui.px2vp(Number(info.size.height));
+      // 页面销毁后按旧 id 可能命中整页容器；整页尺寸不是卡片，必须丢弃。
+      if (!(w > 8) || !(h > 8) || (w >= this.cw - 4 && h >= this.ch - 4)) return undefined;
+      return { x, y, width: w, height: h, radius: 8 };
+    } catch (_e) { }
+    return undefined;
+  }
+
+  private applyCoverMorphReturnTarget(next: HomeCardMorphRect): void {
+    this.coverMorphReturnTarget = next;
+    this.morphWinFrom = next;
+    this.coverMorphSwitchRect = next;
+    this.coverMorphAspectEqual = Math.abs(
+      next.width / Math.max(1, next.height) - this.coverMorphMediaAspect()) < 0.02;
+  }
+
+  private stopCoverMorphReturnFollow(): void {
+    if (this.coverMorphReturnFollowTimer >= 0) {
+      clearInterval(this.coverMorphReturnFollowTimer);
+      this.coverMorphReturnFollowTimer = -1;
+    }
+    this.coverMorphReturnFollowMisses = 0;
+  }
+
+  private stopCoverMorphRotatedWait(): void {
+    if (this.coverMorphRotatedWaitTimer >= 0) {
+      clearInterval(this.coverMorphRotatedWaitTimer);
+      this.coverMorphRotatedWaitTimer = -1;
+    }
+  }
+
+  /**
+   * 方向变化后的返回：先让路由 pop，首页随即恢复活动并按新方向重排；
+   * 等它完成本次布局（HomePage 在 afterHomeLayout 里递增代数）后，再按同一张
+   * 卡片的新矩形接上收缩。旧方向矩形只用于首帧占位，一旦新落点就绪立即替换。
+   */
+  private startCoverMorphRotatedReturn(): void {
+    this.stopCoverMorphRotatedWait();
+    this.coverMorphRotatedBackAt = Date.now();
+    const backAt = this.coverMorphRotatedBackAt;
+    this.coverMorphRotatedWaitTimer = setInterval(() => {
+      if (!this.coverMorphReturning || !this.referenceAlive) {
+        this.stopCoverMorphRotatedWait();
+        return;
+      }
+      const elapsed = Date.now() - backAt;
+      const ready = HomeCardMorph.homeLayoutReadyGeneration > this.coverMorphRotatedReadyBefore;
+      // 首页重排需要一两帧；过早拿到的还是旧列数算出的尺寸。
+      if (!ready && elapsed < 24) return;
+      const next = this.readCoverMorphCardRect();
+      if (next !== undefined) {
+        const stale = this.coverMorphRotatedStaleRect;
+        const changed = Math.abs(next.x - stale.x) > 0.5 || Math.abs(next.y - stale.y) > 0.5 ||
+          Math.abs(next.width - stale.width) > 0.5 || Math.abs(next.height - stale.height) > 0.5;
+        if (ready || changed) {
+          this.stopCoverMorphRotatedWait();
+          this.applyCoverMorphReturnTarget(next);
+          // 收缩至少 250ms（平台动效下限），最多 360ms；目标到位越晚，
+          // 越压缩等待后的余量，但绝不超过 Exit 仍持有的生命周期。
+          const dur = this.da ? 0 : Math.max(HomeCardMorph.ROTATED_RETURN_MIN_MS,
+            Math.min(HomeCardMorph.ROTATED_RETURN_MAX_MS,
+              HomeCardMorph.ROTATED_RETURN_BUDGET_MS - elapsed));
+          logInfo(`[HomeCardMorph] rotated return target ready in ${elapsed.toFixed(0)}ms ` +
+            `rect=(${next.x.toFixed(1)},${next.y.toFixed(1)}) ${next.width.toFixed(1)}x${next.height.toFixed(1)} ` +
+            `dur=${dur} readyGen=${ready}`);
+          this.startCoverMorphReturnFollow();
+          animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 },
+            duration: dur, curve: Curve.FastOutSlowIn,
+            onFinish: () => {
+              logInfo(`[HomeCardMorph] rotated shrink settled at ` +
+                `${this.morphWinW().toFixed(1)}x${this.morphWinH().toFixed(1)} ` +
+                `(${this.morphWinX().toFixed(1)},${this.morphWinY().toFixed(1)})`);
+            }
+          }, () => {
+            this.coverMorphProgress = 0;
+          });
+          return;
+        }
+      }
+      if (elapsed >= HomeCardMorph.ROTATED_RETURN_WAIT_MS) {
+        // 真拿不到新方向落点才退化：不再把整页缩向旧卡片，改用 250ms 横移收尾。
+        this.stopCoverMorphRotatedWait();
+        this.coverMorphFallbackExitRunning = true;
+        logWarn(`[HomeCardMorph] rotated target unavailable after ${elapsed.toFixed(0)}ms, short push fallback`);
+        this.coverMorphFallbackExitProgress = 0;
+        animateTo({
+          expectedFrameRateRange: { min: 60, max: 120, expected: 120 },
+          duration: this.da ? 0 : HomeCardMorph.ROTATED_RETURN_FALLBACK_MS,
+          curve: Curve.FastOutSlowIn
+        }, () => {
+          this.coverMorphFallbackExitProgress = 1;
+        });
+      }
+    }, 8);
+  }
+
+  /**
+   * 返回后首页重新成为 live 下层，用户可能立刻滑动列表。每帧按卡片封面节点 id
+   * 重新取窗口矩形并更新返回落点；封面、裁剪窗口和内容偏移都从同一个 @State 派生，
+   * 因此会逐帧跟着卡片走，而不是停在进入时截下的旧坐标。
+   */
+  private startCoverMorphReturnFollow(): void {
+    this.stopCoverMorphReturnFollow();
+    if (HomeCardMorph.cardElementId.length === 0) return;
+    const until = Date.now() + (this.da ? 0 : 520);
+    this.coverMorphReturnFollowTimer = setInterval(() => {
+      if (!this.coverMorphReturning || !this.referenceAlive) {
+        this.stopCoverMorphReturnFollow();
+        return;
+      }
+      if (Date.now() > until) {
+        this.stopCoverMorphReturnFollow();
+        return;
+      }
+      const next = this.readCoverMorphCardRect();
+      if (next === undefined) {
+        this.coverMorphReturnFollowMisses++;
+        if (this.coverMorphReturnFollowMisses >= 4) this.stopCoverMorphReturnFollow();
+        return;
+      }
+      this.coverMorphReturnFollowMisses = 0;
+      const visible = next.x < this.cw - 2 && next.x + next.width > 2 &&
+        next.y < this.ch - 2 && next.y + next.height > 2;
+      if (!visible) {
+        this.coverMorphReturnFollowMisses++;
+        if (this.coverMorphReturnFollowMisses >= 2 && !this.coverMorphReturnEarlyHide) {
+          this.coverMorphReturnEarlyHide = true;
+          logWarn('[HomeCardMorph] return target left viewport, hide shrink early');
+          this.stopCoverMorphReturnFollow();
+        }
+        return;
+      }
+      this.coverMorphReturnFollowMisses = 0;
+      const old = this.coverMorphReturnTarget;
+      if (Math.abs(next.x - old.x) > 0.5 || Math.abs(next.y - old.y) > 0.5 ||
+        Math.abs(next.width - old.width) > 0.5 || Math.abs(next.height - old.height) > 0.5) {
+        this.applyCoverMorphReturnTarget(next);
+        const now = Date.now();
+        if (now - this.coverMorphTargetLogAt >= 40) {
+          this.coverMorphTargetLogAt = now;
+          logInfo(`[HomeCardMorph] return target follow=(${next.x.toFixed(1)},${next.y.toFixed(1)}) ` +
+            `${next.width.toFixed(1)}x${next.height.toFixed(1)}`);
+        }
+      }
+    }, 8);
+  }
+
+  /**
    * 返回：先 router.back() 让首页立即成为 live 下层，再由播放页的非零 Exit 撑住画面，
    * 同步把窗口从整页收回到卡片矩形。收缩结束不做二次 pop，正常生命周期会随 Exit 销毁页面。
    */
@@ -2462,9 +2654,10 @@ struct VideoPlayerPage {
     //    第二个播放页继承：它没有卡片起点，却会朝上一个播放页记下的卡片位置收缩。
     if (!this.coverMorphOwned) return false;
     if (!(this.coverMorphFrom.width > 8) || !(this.coverMorphFrom.height > 8)) return false;
-    // 全屏/横屏/连刷不接管：落点来自竖屏首页卡片，硬套会穿帮
-    if (this.fs || this.isLs || this.referenceFeed) return false;
+    // 全屏/连刷不接管；横屏同方向可以复用首页卡片矩形完成收缩。
+    if (this.fs || this.referenceFeed) return false;
     if (this.coverMorphReturning) return true;
+    const rotatedReturn = !this.coverMorphOrientationStable();
     if (this.morphAspectWaitTimer >= 0) {
       clearTimeout(this.morphAspectWaitTimer);
       this.morphAspectWaitTimer = -1;
@@ -2527,6 +2720,14 @@ struct VideoPlayerPage {
     this.coverMorphQuickReturn = quickReturn;
     this.coverMorphQuickStartP = startP;
     this.coverMorphQuickCoverRect = quickCover;
+    this.coverMorphReturnTarget = {
+      x: to.x, y: to.y, width: to.width, height: to.height, radius: to.radius
+    };
+    this.coverMorphRotatedStaleRect = { x: to.x, y: to.y, width: to.width, height: to.height, radius: to.radius };
+    this.coverMorphReturnEarlyHide = false;
+    this.coverMorphReturnFollowMisses = 0;
+    this.coverMorphFallbackExitProgress = 0;
+    this.coverMorphFallbackExitRunning = false;
     this.coverMorphReturning = true;
     if (this.coverMorphFallbackTimer >= 0) {
       clearTimeout(this.coverMorphFallbackTimer);
@@ -2558,13 +2759,26 @@ struct VideoPlayerPage {
       `P=${startP.toFixed(3)} quick=${quickReturn} firstFrameMissing=${firstFrameMissing} ` +
       `poster=${this.coverMorphPosterOpacity.toFixed(2)} page=${this.morphPageW.toFixed(1)}x${this.morphPageH.toFixed(1)} ` +
       `to=(${to.x.toFixed(1)},${to.y.toFixed(1)}) ${to.width.toFixed(1)}x${to.height.toFixed(1)}`);
-    const dur = this.da ? 0 : Math.max(200, HomeCardMorph.DURATION - 60);
+    const dur = this.da ? 0 : HomeCardMorph.RETURN_DURATION;
     logInfo(`[HomeCardMorph] return to card (${to.x.toFixed(1)},${to.y.toFixed(1)}) ` +
       `${to.width.toFixed(1)}x${to.height.toFixed(1)} dur=${dur}`);
     setTimeout(() => {
       if (!this.coverMorphReturning) return;
       logInfo(`[HomeCardMorph] back after settle frame, exit duration=${dur}`);
+      if (rotatedReturn) {
+        // pop 前先记下首页隐藏状态下那份「新窗口 + 旧列数」的暂态尺寸，
+        // 用于拒绝返回初帧同样的旧落点；真正可用的目标必须等 HomePage 完成重排。
+        this.coverMorphRotatedStaleRect = this.readCoverMorphCardRect() ?? this.coverMorphRotatedStaleRect;
+        this.coverMorphRotatedReadyBefore = HomeCardMorph.homeLayoutReadyGeneration;
+        logInfo(`[HomeCardMorph] rotated return waiting for home reflow ` +
+          `stale=(${this.coverMorphRotatedStaleRect.x.toFixed(1)},${this.coverMorphRotatedStaleRect.y.toFixed(1)}) ` +
+          `${this.coverMorphRotatedStaleRect.width.toFixed(1)}x${this.coverMorphRotatedStaleRect.height.toFixed(1)}`);
+        if (backUrl.length > 0) router.back({ url: backUrl }); else router.back();
+        this.startCoverMorphRotatedReturn();
+        return;
+      }
       if (backUrl.length > 0) router.back({ url: backUrl }); else router.back();
+      this.startCoverMorphReturnFollow();
       animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 },
         duration: dur, curve: Curve.FastOutSlowIn,
         onFinish: () => {
@@ -2579,8 +2793,12 @@ struct VideoPlayerPage {
   }
 
   private disposeCoverMorph(): void {
+    this.stopCoverMorphReturnFollow();
+    this.stopCoverMorphRotatedWait();
     this.coverMorphReturning = false;
     this.coverMorphSwitching = false;
+    this.coverMorphReturnEarlyHide = false;
+    this.coverMorphFallbackExitRunning = false;
     if (this.coverMorphFramePollTimer >= 0) {
       clearTimeout(this.coverMorphFramePollTimer);
       this.coverMorphFramePollTimer = -1;
@@ -4213,6 +4431,11 @@ struct VideoPlayerPage {
       this.coverMorphSwitching = false;
       this.coverMorphReturning = false;
       this.coverMorphQuickReturn = false;
+      this.coverMorphReturnEarlyHide = false;
+      this.coverMorphFallbackExitProgress = 0;
+      this.coverMorphFallbackExitRunning = false;
+      this.stopCoverMorphReturnFollow();
+      this.stopCoverMorphRotatedWait();
       this.coverMorphQuickStartP = 1;
       this.coverMorphQuickCoverRect = { x: 0, y: 0, width: 0, height: 0, radius: 8 };
       this.morphAspectReady = false;
@@ -11148,6 +11371,11 @@ struct VideoPlayerPage {
     // ⭐ 首页卡片封面共享元素层：只在本次进入的 morph 期间挂载，淡出后整层移除。
     if (this.coverMorphActive) { this.HomeCoverMorphLayer() }
     }.width('100%').height('100%').backgroundColor(Color.Transparent)
+      // 方向变更时的自绘推拉兜底；平时 progress 恒 0，不产生任何位移/透明度变化。
+      .translate({ x: this.coverMorphFallbackExitProgress * this.cw })
+      // 首页滑动导致目标卡片离开视口：整页退出窗口提前消失，避免继续往屏幕外收缩。
+      .opacity(this.coverMorphReturnEarlyHide ? 0 :
+        (1 - this.coverMorphFallbackExitProgress * 0.08))
   }
 
   // ⭐ 选集弹窗内容

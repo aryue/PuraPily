@@ -34,6 +34,9 @@ function fixture(warmPool = { peekQuality: () => 0, take: async () => null }, us
     media: { createAVPlayer() { creations++; return useFactory || creations > 1 ? audio.promise : creation.promise; },
       createMediaSourceWithUrl(url, headers) { sourceHeaders.push(headers); sourceAgents.push(headers?.['User-Agent']); return url; } },
     AppStorage: { get() { return ''; } },
+    SponsorBlockPrefs: { enabled: () => false, seekIntoEnabled: () => false,
+      pgcMode: () => 'skipOnce', modesRaw: () => '111111111111' },
+    SponsorBlockService: { fromClipInfo: () => [], fetchSegments: async () => [], segmentLabel: () => '' },
     getVideoPlayUrl() { requests++; return url.promise; },
     DashPlayerBridge: class { buildAndStart(_dash, referer, ua) { bridgeReferers.push(referer); bridgeAgents.push(ua); probes++; return probe.promise; } async stopIfRunning() { stops++; } }
   };
@@ -51,6 +54,10 @@ function fixture(warmPool = { peekQuality: () => 0, take: async () => null }, us
   };
   Object.assign(page, { referenceAlive: true, referenceSwitchGeneration: 1,
     vi: { bvid: 'BVtest', cid: 2 }, qn: 116, initialProgress_: 0,
+    skipSegments_: { count: 0, reset() {}, setOfficial() {}, setRemote() {},
+      rawMarks() { return ''; }, onPosition() {} },
+    skipMarksJson_: '', skipSegmentCount_: 0, skipPromptTimer_: -1,
+    skipPromptVisible_: false, skipPromptSegment_: null,
     async release() { const retired = this.playbackResources_.video; this.playbackResources_.video = null; if (retired) await retired.release(); },
     recoverPlaybackStall() { recoveries++; },
     resetVideoShot_() {}, referenceResetSubtitles() {}, applyServerResumePoint() {}, applyAcceptQuality() {}, getQlLabel() { return '1080p'; }, setupL() {} });
