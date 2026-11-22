@@ -13,16 +13,70 @@ export struct VideoCardComponent {
   @Prop item: RecommendItem = new RecommendItem();
   /** 封面目标像素宽：卡片实际占宽，由页面按列宽换算后传入（避免直接解码原图） */
   @Prop coverWidth: number = 640;
+  @Prop entranceCenterX: number = 0;
+  revealedCardIds?: Set<string>;
   onCardClick?: (item: RecommendItem) => void;
   onLongPress?: (item: RecommendItem) => void;
   @StorageLink('isDarkMode') isDarkMode: boolean = true;
   @State private materialWidth: number = 0;
   @State private materialHeight: number = 0;
+  @State private entranceScale: number = 1;
+  private entranceRevision: number = 0;
+  private entranceRunning: boolean = false;
+  private openAfterEntrance: boolean = false;
   @StorageProp('videoCardEdgeLight') videoCardEdgeLight: boolean = false;
   @StorageLink('cardFeedbackRevision') feedbackRevision: number = 0;
 
+  aboutToAppear(): void {
+    this.resetEntrance();
+  }
+
   aboutToReuse(params: Record<string, Object>): void {
     if (params.item) this.item = params.item as RecommendItem;
+    if (params.entranceCenterX !== undefined) this.entranceCenterX = Number(params.entranceCenterX);
+    this.resetEntrance();
+  }
+
+  aboutToRecycle(): void {
+    this.entranceRevision++;
+    this.entranceRunning = false;
+    this.openAfterEntrance = false;
+  }
+
+  private resetEntrance(): void {
+    this.entranceScale = this.revealedCardIds && !this.revealedCardIds.has(this.item.id) ? 0.58 : 1;
+  }
+
+  private revealInViewport(visible: boolean): void {
+    const revealed = this.revealedCardIds;
+    if (!visible || !revealed || revealed.has(this.item.id)) return;
+    revealed.add(this.item.id);
+    const revision = ++this.entranceRevision;
+    this.entranceRunning = true;
+    this.getUIContext().animateTo({
+      duration: 260,
+      curve: Curve.EaseOut,
+      expectedFrameRateRange: { min: 60, max: 120, expected: 120 },
+      onFinish: () => {
+        if (revision !== this.entranceRevision) return;
+        this.entranceRunning = false;
+        if (this.openAfterEntrance) {
+          this.openAfterEntrance = false;
+          this.onCardClick?.(this.item);
+        }
+      }
+    }, () => {
+      this.entranceScale = 1;
+    });
+  }
+
+  private openCard(): void {
+    // 一镜到底读取已落位的封面矩形。
+    if (this.entranceRunning) {
+      this.openAfterEntrance = true;
+      return;
+    }
+    this.onCardClick?.(this.item);
   }
 
   /** 转场取矩形用：封面节点稳定 id */
@@ -45,7 +99,8 @@ export struct VideoCardComponent {
       (this.videoCardEdgeLight ? '#363B43' : '#61666D');
   }
 
-  build() {
+  @Builder
+  cardSurface() {
     Stack({ alignContent: Alignment.TopStart }) {
       if (this.videoCardEdgeLight) {
         NativeCardGlass({ surfaceWidth: this.materialWidth, surfaceHeight: this.materialHeight })
@@ -92,13 +147,23 @@ export struct VideoCardComponent {
       if (height > 0 && Math.abs(height - this.materialHeight) > 0.5) this.materialHeight = height;
     })
     }.width('100%').height(LayoutPolicy.fixAtIdealSize).borderRadius(8).clip(true)
-    .visibility(this.feedbackRevision >= 0 && VideoCardFeedback.isDismissed(this.item.id, this.item.ownerMid) ? Visibility.None : Visibility.Visible)
     .backgroundColor(this.videoCardEdgeLight ? Color.Transparent : ordinaryCardColor(this.isDarkMode))
     .clickEffect({ level: 0, scale: 0.9 })
-    .onClick(() => { if (this.onCardClick) this.onCardClick(this.item); })
+    .onClick(() => this.openCard())
     .gesture(LongPressGesture({ repeat: false }).onAction(() => {
       if (this.onLongPress) this.onLongPress(this.item);
     }))
+  }
+
+  build() {
+    Stack({ alignContent: Alignment.TopStart }) {
+      Stack({ alignContent: Alignment.TopStart }) {
+        this.cardSurface()
+      }.width('100%').height(LayoutPolicy.fixAtIdealSize)
+      .scale({ x: this.entranceScale, y: this.entranceScale, centerX: this.entranceCenterX, centerY: '50%' })
+    }.width('100%').height(LayoutPolicy.fixAtIdealSize)
+    .visibility(this.feedbackRevision >= 0 && VideoCardFeedback.isDismissed(this.item.id, this.item.ownerMid) ? Visibility.None : Visibility.Visible)
+    .onVisibleAreaChange([0], (visible: boolean) => this.revealInViewport(visible))
   }
 }
 

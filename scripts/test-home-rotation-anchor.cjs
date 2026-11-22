@@ -139,7 +139,34 @@ function subject() {
   assert.equal(extent.p.homeLayoutPending, false);
 
   const events = subject(), handlers = ctx.exports.handlers.call(events.p);
+  const appStorage = ctx.AppStorage;
+  const publishedOffsets = [];
+  let offsetReads = 0;
+  const currentOffset = events.p.externalScroller.currentOffset;
+  events.p.externalScroller.currentOffset = () => { offsetReads++; return currentOffset(); };
+  Object.defineProperty(events.p, 'homeScrollOffset', {
+    get: () => publishedOffsets.at(-1) ?? 0,
+    set: value => publishedOffsets.push(value)
+  });
+  ctx.AppStorage = {
+    get: key => key === 'homeFeedActive' ? true : 2,
+    set: key => assert.notEqual(key, 'homeScrollOffset', 'the storage link owns offset publication')
+  };
+  events.p.barScrollTracker = { update() {} };
+  events.p.showHomeCarouselPortrait = false;
   handlers.will(0, 10, 0, ctx.ScrollSource.DRAG); handlers.did();
+  assert.equal(offsetReads, 1, 'reuse the settled offset for anchor geometry');
+  assert.deepEqual(publishedOffsets, [720]);
+  handlers.did();
+  assert.deepEqual(publishedOffsets, [720], 'unchanged offsets do not publish again');
+  events.p.showHomeCarouselPortrait = true;
+  events.setOffset(20);
+  handlers.will(0, 10, 0, ctx.ScrollSource.DRAG);
+  assert.equal(events.p.carouselParallaxY, 4, 'wheel and touch retain the pre-scroll parallax sample');
+  assert.equal(events.p.carouselTitleOpacity, 0.6);
+  assert.equal(events.p.carouselDotsFade, 0.6);
+  events.setOffset(720);
+  ctx.AppStorage = appStorage;
   assert.equal(events.p.homeAnchorIndex, 9);
   events.rect(9, 51);
   handlers.stop();

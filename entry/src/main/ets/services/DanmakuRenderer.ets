@@ -169,10 +169,11 @@ export class DanmakuRenderer {
    * @param items 待渲染的弹幕列表
    * @param currentTime 当前播放时间（毫秒，用于静止弹幕淡入淡出和可见性判断）
    * @param dt 帧间增量时间（毫秒，用于滚动弹幕位置推进）
+   * @returns 是否还有在画布内或正在进场的弹幕。
    */
-  render(items: DanmakuItem[], currentTime: number, dt: number): void {
+  render(items: DanmakuItem[], currentTime: number, dt: number): boolean {
     if (!this.context || !this.config.enable) {
-      return
+      return items.length > 0
     }
 
     const ctx = this.context
@@ -184,14 +185,14 @@ export class DanmakuRenderer {
         ctx.clearRect(0, 0, this.clearWidth(), this.clearHeight())
         this.needsClear = false
       }
-      return
+      return false
     }
 
     const startTime = Date.now()
 
     // 清空画布
     ctx.clearRect(0, 0, this.clearWidth(), this.clearHeight())
-    this.needsClear = true
+    this.needsClear = false
 
     // 设置全局透明度
     ctx.globalAlpha = this.config.opacity
@@ -213,8 +214,7 @@ export class DanmakuRenderer {
 
     // 优化：单次遍历，根据类型分流渲染
     //   ⭐ 用 for 循环而不是 forEach：render 每帧都跑，forEach 每帧都会新建一个闭包。
-    let scrollCount = 0
-    let staticCount = 0
+    let hasActiveDanmaku = false
 
     for (let i = 0; i < items.length; i++) {
       const item = items[i]
@@ -231,13 +231,17 @@ export class DanmakuRenderer {
         this.advanceScrollingPosition(item, dt)
         if (this.isInViewport(item)) {
           this.drawDanmakuOptimized(item)
-          scrollCount++
+          hasActiveDanmaku = true
+          this.needsClear = true
         } else if (item.x + item.width < 0) {
           // ⭐ 只有【真正出屏】（尾巴越过左边界）才冻结。
           //   右侧（x > canvasWidth）不能冻结：画布变窄 / 刚分配时它还在右边界外，
           //   一旦置 visible=false，渲染循环会连"推进位置"一起跳过，它就永久卡在那里
           //   （控制器虽然把它保留在可见列表里，也只能等下一次时间回调才把 visible 复位）。
           item.visible = false
+        } else {
+          // 窗口收窄后尚在右侧的弹幕仍要逐帧向画布内移动。
+          hasActiveDanmaku = true
         }
       } else {
         // 静止弹幕（顶部、底部）：使用currentTime计算淡入淡出
@@ -252,7 +256,8 @@ export class DanmakuRenderer {
             alpha = (item.duration - elapsed) / fadeOutDuration
           }
           this.drawDanmaku(item, alpha)
-          staticCount++
+          hasActiveDanmaku = true
+          this.needsClear = true
         } else {
           item.visible = false
         }
@@ -262,6 +267,7 @@ export class DanmakuRenderer {
     // 更新性能统计
     this.renderTime = Date.now() - startTime
     this.updateFps()
+    return hasActiveDanmaku
   }
   
   /**

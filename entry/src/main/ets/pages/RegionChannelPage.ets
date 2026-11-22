@@ -1,4 +1,5 @@
 import { HomeInitialLoading } from '../components/HomeInitialLoading';
+import { HomeChannelCardEntrance } from '../components/HomeChannelCardEntrance';
 import { HOME_SEARCH_ROW_HEIGHT, homeHeaderTopInset } from '../utils/HomeHeaderLayout';
 import { HomeBarScrollTracker } from '../utils/HomeBarScrollTracker';
 import { HomeRefreshIndicator } from '../components/HomeRefreshIndicator';
@@ -9,6 +10,7 @@ import { prefetchVideoPlayback } from '../api/BilibiliApi';
 import { GenericDataSource } from '../model/GenericDataSource';
 import { logError } from '../utils/Logger';
 import { VideoCardFeedback } from '../services/VideoCardFeedback';
+import { publishHomeScrollOffset } from '../utils/HomeScrollOffset';
 
 class RegionContentState {
   items: RecommendItem[] = [];
@@ -24,6 +26,7 @@ class RegionContentState {
 /** 首页分区：完整左侧列表，右侧展示对应的视频或节目索引。 */
 @Component
 export struct RegionChannelPage {
+  private revealedCardIds: Set<string> = new Set<string>();
   @StorageLink('pageWallpaperEnabled') pageWallpaperEnabled: boolean = false;
   @StorageLink('isDarkMode') isDarkMode: boolean = true;
   @StorageLink('cardListMargin') cardListMargin: number = 12;
@@ -83,7 +86,7 @@ export struct RegionChannelPage {
   }
   private onRefreshFlagChange(): void { if (this.isActive()) void this.loadRanking(true); }
   private onScrollToTop(): void {
-    if (this.isActive()) this.currentScroller().scrollTo({ xOffset: 0, yOffset: 0, animation: { duration: 260 } });
+    if (this.isActive()) this.currentScroller().scrollToIndex(0, true, ScrollAlign.START);
   }
 
   private regionState(rid: number): RegionContentState {
@@ -315,18 +318,24 @@ export struct RegionChannelPage {
         }
         LazyForEach(this.paneDataSources[pane], (item: RecommendItem) => {
           ListItem() {
-            VideoListItem({ title: item.title, cover: item.coverUrl, duration: item.duration, owner: item.ownerName,
-              showDivider: false,
-              videoId: item.pgcSeasonId > 0 ? '' : item.id, ownerMid: item.ownerMid,
-              playCount: item.pgcSeasonId > 0 ? -1 : item.playCount,
-              dateText: videoListPublished(item.pubdate), detailText: item.rcmdReason,
-              onActivate: () => this.onCardClick(item) })
-              .clickEffect({ level: 0, scale: 0.9 })
+            HomeChannelCardEntrance({
+              cardKey: `${this.paneRids[pane]}:${item.id}`, gridId: `home-region-grid-${pane}`,
+              channelIndex: 0, paneActive: pane === this.activePane, revealedCardIds: this.revealedCardIds
+            }) {
+              VideoListItem({ title: item.title, cover: item.coverUrl, duration: item.duration, owner: item.ownerName,
+                showDivider: false,
+                videoId: item.pgcSeasonId > 0 ? '' : item.id, ownerMid: item.ownerMid,
+                playCount: item.pgcSeasonId > 0 ? -1 : item.playCount,
+                dateText: videoListPublished(item.pubdate), detailText: item.rcmdReason,
+                onActivate: () => this.onCardClick(item) })
+                .clickEffect({ level: 0, scale: 0.9 })
+            }
           }.width(this.contentItemWidth())
         }, (item: RecommendItem) => `${this.paneRids[pane]}:${item.id}`)
         if (pane === this.activePane && this.loadingMore) { ListItem() { LoadingProgress().width(24).height(32).color(this.customThemeColor) } }
       }.width('100%').height('100%').scrollBar(BarState.Off).cachedCount(8)
       .lanes(this.paneCounts[pane] > 0 ? this.contentColumns() : 1, this.cardListMargin)
+      .id(`home-region-grid-${pane}`)
       .padding({ left: 8, right: 8 })
       .contentStartOffset(homeHeaderTopInset(this.statusBarHeight, this.hideStatusBar, this.homeSearchRowHeight))
       .contentEndOffset(100 + this.navIndicatorHeight)
@@ -334,8 +343,9 @@ export struct RegionChannelPage {
       .onDidScroll(() => {
         if (pane !== this.activePane || !this.isActive() || this.transitionActive) return;
         const offset = Math.max(0, this.currentScroller().currentOffset().yOffset);
-        this.regionState(this.selectedRid).offset = offset;
-        AppStorage.setOrCreate('homeScrollOffset', offset);
+        const state = this.regionState(this.selectedRid);
+        if (state.offset !== offset) state.offset = offset;
+        publishHomeScrollOffset(offset);
       })
       .onWillScroll((yOffset: number, _state: ScrollState, source: ScrollSource) => {
         if (pane !== this.activePane || !this.isActive() || yOffset === 0) return;

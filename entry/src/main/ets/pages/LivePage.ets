@@ -1,4 +1,5 @@
 import { HomeInitialLoading } from '../components/HomeInitialLoading';
+import { HomeChannelCardEntrance } from '../components/HomeChannelCardEntrance';
 import { cardItemBg } from '../utils/CardStyle';
 import { CHANNEL_CARD_RADIUS, ChannelCardSurface } from '../components/ChannelCardSurface';
 import { HOME_SEARCH_ROW_HEIGHT, homeHeaderTopInset } from '../utils/HomeHeaderLayout';
@@ -6,6 +7,7 @@ import { VideoCardMoreButton } from '../components/VideoCardMoreButton';
 import { HomeBarScrollTracker } from '../utils/HomeBarScrollTracker';
 import { HomeRefreshIndicator } from '../components/HomeRefreshIndicator';
 import { VibrateUtils } from '../utils/VibrateUtils';
+import { publishHomeScrollOffset } from '../utils/HomeScrollOffset';
 /**
  * LivePage.ets — 直播信息流页面（B站风格）
  *
@@ -88,6 +90,7 @@ interface AreaTab {
 
 @Component({ freezeWhenInactive: true })
 export struct LivePage {
+  private revealedCardIds: Set<string> = new Set<string>();
   @StorageLink('pageWallpaperEnabled') pageWallpaperEnabled: boolean = false;
   @StorageLink('floatingBottomBar') floatingBottomBar: boolean = true;
   @StorageLink('navIndicatorHeight') navIndicatorHeight: number = 0;
@@ -334,6 +337,7 @@ export struct LivePage {
 
 
   private onScrollToTop(): void {
+    if (!AppStorage.get<boolean>('homeFeedActive') || AppStorage.get<number>('homeChannelIndex') !== 1) return;
     if (this.scroller) {
       this.scroller.scrollTo({ xOffset: 0, yOffset: 0, animation: { duration: this.da ? 0 : 300 } });
     }
@@ -665,12 +669,18 @@ export struct LivePage {
                 WaterFlow({ layoutMode: WaterFlowLayoutMode.SLIDING_WINDOW }) {
                   LazyForEach(this.dataSource, (room: LiveFeedRoom, index: number) => {
                     FlowItem() {
-                      this.LiveCard(room)
+                      HomeChannelCardEntrance({
+                        cardKey: String(room.roomId), gridId: 'home-live-grid',
+                        channelIndex: 1, revealedCardIds: this.revealedCardIds
+                      }) {
+                        this.LiveCard(room)
+                      }
                     }
                     .backgroundColor('transparent')
                   }, (room: LiveFeedRoom, index: number) => `${room.roomId}_${index}`)
                 }
                 .columnsTemplate({ fillType: PresetFillType.BREAKPOINT_DEFAULT })
+                .id('home-live-grid')
                 .columnsGap(this.cardListMargin).rowsGap(this.cardListMargin)
                 .padding({
                   left: 12,
@@ -711,7 +721,7 @@ export struct LivePage {
           .onWillScroll((_, yOffset: number, _state: ScrollState, source: ScrollSource) => {
             if (!AppStorage.get<boolean>('homeFeedActive') || yOffset === 0 || AppStorage.get<number>('homeChannelIndex') !== 1) return;
             const absoluteOffset = this.scroller.currentOffset().yOffset;
-            AppStorage.set('homeScrollOffset', Math.max(0, absoluteOffset));
+            publishHomeScrollOffset(absoluteOffset);
             const hidden = this.barScrollTracker.update(yOffset, source);
             if (hidden !== undefined) {
               AppStorage.set('homeBarsHidden', hidden);

@@ -28,6 +28,7 @@ import { resizeImageUrl } from '../utils/ImageUrl';
 import { formatPlayCountText, getPlayCountDisplayColor } from '../utils/PlayCountStyle';
 import { HdsMiniBarButton } from '../components/infra/HdsMiniBarButton';
 import { image } from '@kit.ImageKit';
+import { PlaybackViewportFrameCallback } from '../utils/PlaybackViewportFrameCallback';
 
 // ⭐ 已看视频缓存接口（带时间戳，支持7天有效期）
 interface WatchedVideoCache {
@@ -82,32 +83,23 @@ class VideoDataSource implements IDataSource {
     if (pos >= 0) this.listeners.splice(pos, 1);
   }
 
-  notifyDataReload(): void {
-    this.listeners.forEach(listener => listener.onDataReloaded());
-  }
-
-  notifyDataAdd(index: number): void {
-    this.listeners.forEach(listener => listener.onDataAdd(index));
-  }
-
   public addItems(newItems: RecommendItem[]): void {
     const startIdx = this.items.length;
-    this.items.push(...newItems);
-    this.notifyDataAdd(startIdx);
+    this.items = this.items.concat(newItems);
+    this.listeners.forEach(listener => listener.onDatasetChange([
+      { type: DataOperationType.ADD, index: startIdx, count: newItems.length }
+    ]));
   }
 
   public reloadItems(allItems: RecommendItem[]): void {
     this.items = allItems;
-    this.notifyDataReload();
+    this.listeners.forEach(listener => listener.onDatasetChange([{ type: DataOperationType.RELOAD }]));
   }
 
   public getRawItems(): RecommendItem[] {
     return this.items;
   }
 
-  public setRawItems(items: RecommendItem[]): void {
-    this.items = items;
-  }
 }
 
 @Component({ freezeWhenInactive: true })
@@ -191,9 +183,11 @@ export struct HomePage {
   @State landscapeCarouselMargin: number = 50;
   @StorageLink('landscapeCarouselCols') landscapeCarouselColsPref: number = 1;
   @State landscapeCarouselVisible: boolean = false;
-  @State scrollOffset: number = 0;
   @State isLoading: boolean = true;
   @State isLoadingMore: boolean = false;
+  @State private showPaginationFooter: boolean = false;
+  @State private paginationNeedsRetry: boolean = false;
+  private recommendationGeneration: number = 0;
   @State isRefreshing: boolean = false;
   @State pageNum: number = 1;
   @State refreshIdx: number = 1;  // 刷新索引，每次刷新递增
@@ -203,7 +197,12 @@ export struct HomePage {
   private onCardFeedbackChange(): void {
     const items = this.dataSource.getRawItems();
     const remaining = items.filter(item => !VideoCardFeedback.isDismissed(item.id, item.ownerMid));
-    if (remaining.length !== items.length) this.dataSource.reloadItems(remaining);
+    if (remaining.length !== items.length) {
+      this.dataSource.reloadItems(remaining);
+      this.playbackVisibleIndexes.clear();
+      this.playbackListStart = 0;
+      this.schedulePlaybackListPrefetch();
+    }
     const dismissed = AppStorage.get<Set<string>>('cardFeedbackDismissedVideos');
     if (dismissed && dismissed.size > 0) {
       dismissed.forEach(id => this.watchedVideoIds.set(id, Date.now()));
@@ -246,7 +245,6 @@ export struct HomePage {
 
   // ⭐ "上次看到这里"重新实现：刷新时保留旧视频
   private readonly REFRESH_SEPARATOR_ID: string = '__refresh_separator__';
-  private oldItems: RecommendItem[] = [];
 
   /**
    * ⭐ 从本地存储加载观看历史和滑过的视频用于去重
@@ -381,7 +379,6 @@ export struct HomePage {
    * 单独提成常量是因为这个值需要反复实机试手感 —— 调它只改这一处。
    */
   private readonly CAROUSEL_HIDDEN_SCALE: number = 0.86;
-  private maxRetryPages: number = 20;
   private windowSizeChangeListener: ((size: window.Size) => void) | null = null;
   private mainWindowRef: window.Window | null = null;
   private isPageActive: boolean = false;
@@ -390,6 +387,9 @@ export struct HomePage {
     () => 'home:recommend');
   private playbackListStart: number = 0;
   private playbackVisibleIndexes: Set<number> = new Set();
+  private playbackPrefetchScheduled: boolean = false;
+  // 懒加载重建时按视频 ID 恢复显示状态。
+  private revealedCardIds: Set<string> = new Set<string>();
   @StorageLink('homeFeedActive') @Watch('syncPlaybackListPrefetch') playbackHomeActive: boolean = false;
   @StorageLink('homeChannelIndex') @Watch('syncPlaybackListPrefetch') playbackHomeChannel: number = 2;
 
@@ -399,11 +399,24 @@ export struct HomePage {
       return;
     }
     const items = this.dataSource.getRawItems();
-    const visible = items.filter((item: RecommendItem, index: number) =>
-      item.id !== this.REFRESH_SEPARATOR_ID && this.playbackVisibleIndexes.has(index));
+    const visibleIndexes = Array.from(this.playbackVisibleIndexes).sort((left: number, right: number) => left - right);
+    const visible: RecommendItem[] = [];
+    for (const index of visibleIndexes) {
+      const item = items[index];
+      if (item !== undefined && item.id !== this.REFRESH_SEPARATOR_ID) visible.push(item);
+    }
     const nearby = items.slice(this.playbackListStart, this.playbackListStart + 8)
       .filter((item: RecommendItem) => item.id !== this.REFRESH_SEPARATOR_ID);
     this.playbackListPrefetch.updateViewport(visible, nearby, AppStorage.get<number>('defaultVideoQn') ?? 116);
+  }
+
+  private schedulePlaybackListPrefetch(): void {
+    if (this.playbackPrefetchScheduled) return;
+    this.playbackPrefetchScheduled = true;
+    this.getUIContext().postFrameCallback(new PlaybackViewportFrameCallback(() => {
+      this.playbackPrefetchScheduled = false;
+      this.syncPlaybackListPrefetch();
+    }));
   }
   private portraitSwiperController: SwiperController = new SwiperController();
   private landscapeSwiperController: SwiperController = new SwiperController();
@@ -568,6 +581,7 @@ export struct HomePage {
   }
 
   private onScrollToTop() {
+    if (!AppStorage.get<boolean>('homeFeedActive') || AppStorage.get<number>('homeChannelIndex') !== 2) return;
     this.homeAnchorIndex = -1;
     if (this.externalScroller) {
       this.externalScroller.scrollTo({ xOffset: 0, yOffset: 0, animation: { duration: this.da ? 0 : 300 } });
@@ -621,16 +635,16 @@ export struct HomePage {
 
   // Preserve the actual card's position below the header, rather than a pixel
   // scroll offset whose meaning changes with columns and the carousel.
-  private rememberHomeAnchor(): void {
+  private rememberHomeAnchor(scrollOffset?: number): void {
     if (this.homeLayoutPending || !this.externalScroller) return;
     this.homeAnchorIndex = -1;
-    if (this.externalScroller.currentOffset().yOffset <= 0) return;
+    const offset = scrollOffset ?? this.externalScroller.currentOffset().yOffset;
+    if (offset <= 0) return;
     const ui = this.getUIContext();
     const flow = ui.getFrameNodeById('home-recommend-flow');
     const viewport = ui.getFrameNodeById('home-recommend-scroll');
     if (!flow || !viewport) return;
     const origin = flow.getPositionToParent().y + viewport.getPositionToWindow().y;
-    const offset = this.externalScroller.currentOffset().yOffset;
     const header = this.headerContentHeight() + (this.hideStatusBar ? 0 : this.statusBarHeight);
     let first = Number.MAX_SAFE_INTEGER;
     for (const index of this.playbackVisibleIndexes) {
@@ -737,12 +751,21 @@ export struct HomePage {
    * 交给 resizeImageUrl 挂 `@640w` 一类的后缀，取回接近 1:1 的缩略图。
    * 向上取整到 160 的倍数，避免旋转/改列数时 URL 频繁变化导致缓存失效。
    */
-  private cardCoverWidth(): number {
+  private cardWidthVp(): number {
     const left = this.isLandscape && this.showHomeCarouselLandscape ? this.landscapeCarouselWidth : this.sidePadding;
-    const cardVp = (this.viewportWidth - left - this.sidePadding -
+    return (this.viewportWidth - left - this.sidePadding -
       (this.columnCount - 1) * this.cardListMargin) / this.columnCount;
-    const cardPx = this.getUIContext().vp2px(Math.max(cardVp, 120));
+  }
+
+  private cardCoverWidth(): number {
+    const cardPx = this.getUIContext().vp2px(Math.max(this.cardWidthVp(), 120));
     return Math.max(480, Math.min(1080, Math.ceil(cardPx / 160) * 160));
+  }
+
+  private cardEntranceCenterX(index: number): number {
+    const width = this.cardWidthVp();
+    const column = index % this.columnCount;
+    return width / 2 + ((this.columnCount - 1) / 2 - column) * (width + this.cardListMargin);
   }
 
   private onHomeHeaderHeightChange(): void {
@@ -1001,13 +1024,14 @@ export struct HomePage {
 
   async refreshData() {
     // 保持当前卡片可见，数据返回后直接替换列表。
-    // ⭐ 保存当前视频列表，刷新后放在新视频下方
-    this.oldItems = this.dataSource.getRawItems();
-
+    const generation = ++this.recommendationGeneration;
+    const oldItems = this.dataSource.getRawItems();
+    this.isLoadingMore = false;
+    this.showPaginationFooter = false;
+    this.paginationNeedsRetry = false;
     this.isLoading = true;
     this.pageNum = 1;
     this.hasMore = true;
-    this.refreshIdx++;  // 递增刷新索引
 
     // ⭐ 循环请求，直到获取足够的未观看视频
     let filteredItems: RecommendItem[] = [];
@@ -1016,7 +1040,8 @@ export struct HomePage {
     const minRequired = Math.floor(this.pageSize * 0.5);  // 至少需要一半的数量
 
     while (filteredItems.length < minRequired && attempts < maxAttempts) {
-      let newItems = await this.fetchRecommendVideos(this.refreshIdx + attempts, this.pageSize);
+      let newItems = await this.fetchRecommendVideos(++this.refreshIdx, this.pageSize);
+      if (generation !== this.recommendationGeneration) return;
 
       // ⭐ 调用服务层过滤（屏蔽UP主、已看视频）
       logInfo(`[调试] refreshData: 调用 filterRecommendList 前，原始数量: ${newItems.length}`);
@@ -1037,15 +1062,12 @@ export struct HomePage {
       }
     }
 
-    // 更新刷新索引
-    this.refreshIdx += attempts;
-
     // 去重（防止重复）
     let uniqueItems = this.mergeUnique([], filteredItems);
 
     // ⭐ 组合：新视频 + (可选分隔卡片 + 旧视频)
     const combinedItems: RecommendItem[] = [...uniqueItems];
-    if (this.showRefreshSeparator && this.oldItems.length > 0) {
+    if (this.showRefreshSeparator && oldItems.length > 0) {
       // 创建分隔卡片
       const separatorItem = new RecommendItem();
       separatorItem.id = this.REFRESH_SEPARATOR_ID;
@@ -1053,7 +1075,7 @@ export struct HomePage {
       // 追加旧视频（去重，只保留最新 20 条）
       const newIds = new Set(uniqueItems.map(item => item.id));
       let appendedCount = 0;
-      for (const old of this.oldItems) {
+      for (const old of oldItems) {
         if (appendedCount >= 20) break;
         if (!newIds.has(old.id)) {
           combinedItems.push(old);
@@ -1067,6 +1089,10 @@ export struct HomePage {
       // ⭐ 不再自动标记所有视频为已看，改为滑动/点击时自动记录
       // this.recordWatched(uniqueItems);
 
+      const retainedIds = new Set(combinedItems.map((item: RecommendItem) => item.id));
+      this.revealedCardIds.forEach((id: string) => {
+        if (!retainedIds.has(id)) this.revealedCardIds.delete(id);
+      });
       this.dataSource.reloadItems(combinedItems);
       this.playbackListStart = 0;
       this.playbackVisibleIndexes.clear();
@@ -1192,43 +1218,48 @@ export struct HomePage {
   }
 
 
-  async loadMore() {
-    if (this.isLoadingMore || !this.hasMore) return;
+  private requestMoreNearTail(index: number): void {
+    // 给网络请求留出六排卡片的滚动距离，横竖屏按各自列数计算。
+    if (this.dataSource.totalCount() - index - 1 <= this.columnCount * 6) {
+      void this.loadMore();
+    }
+  }
+
+  private async loadMore(retry: boolean = false): Promise<void> {
+    if (!this.isPageActive || !this.playbackHomeActive || this.playbackHomeChannel !== 2 ||
+      this.isLoading || this.isRefreshing || this.isLoadingMore || !this.hasMore ||
+      (this.paginationNeedsRetry && !retry)) return;
+    const generation = this.recommendationGeneration;
+    this.paginationNeedsRetry = false;
     this.isLoadingMore = true;
-
-    let addedCount = 0;
-    let attempt = 0;
-    const maxAttempt = this.maxRetryPages;
-
-    while (attempt < maxAttempt && addedCount === 0) {
-      // ⭐ 使用 refreshIdx 而不是 pageNum，确保索引一致
-      this.refreshIdx++;
-      // ⭐ 调用服务层过滤（屏蔽UP主、已看视频）
-      let items = await this.fetchRecommendVideos(this.refreshIdx, this.pageSize);
-      logInfo(`[调试] loadMore: 调用 filterRecommendList 前，原始数量: ${items.length}`);
-      items = UserBehaviorService.filterRecommendList(items);
-      logInfo(`[调试] loadMore: 调用 filterRecommendList 后，过滤数量: ${items.length}`);
-      if (items.length === 0) break;
-      // ⭐ 过滤已看过的视频
-      const filteredItems = this.filterWatched(items);
-      const beforeCount = this.dataSource.totalCount();
-      const merged = this.mergeUnique(this.dataSource.getRawItems(), filteredItems);
-      const newCount = merged.length - beforeCount;
-      if (newCount > 0) {
-        this.dataSource.setRawItems(merged);
-        this.dataSource.notifyDataAdd(beforeCount);
-        addedCount = newCount;
-        logInfo(`加载更多成功，获取到 ${newCount} 条新内容，refreshIdx=${this.refreshIdx}`);
-        break;
-      } else {
-        attempt++;
+    try {
+      // 连续几页都被过滤时交给手动重试，避免页脚一直转。
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const items = await this.fetchRecommendVideos(++this.refreshIdx, this.pageSize);
+        if (generation !== this.recommendationGeneration) return;
+        if (items.length === 0) break;
+        const filtered = this.filterWatched(UserBehaviorService.filterRecommendList(items));
+        const knownIds = new Set(this.dataSource.getRawItems().map((item: RecommendItem) => item.id));
+        const newItems = filtered.filter((item: RecommendItem) => {
+          if (knownIds.has(item.id)) return false;
+          knownIds.add(item.id);
+          return true;
+        });
+        if (newItems.length > 0) {
+          this.showPaginationFooter = false;
+          this.dataSource.addItems(newItems);
+          return;
+        }
       }
+      this.paginationNeedsRetry = true;
+    } catch (err) {
+      if (generation === this.recommendationGeneration) {
+        this.paginationNeedsRetry = true;
+        logWarn(`加载更多推荐失败: ${errMsg(err)}`);
+      }
+    } finally {
+      if (generation === this.recommendationGeneration) this.isLoadingMore = false;
     }
-
-    if (addedCount === 0) {
-      this.hasMore = false;
-    }
-    this.isLoadingMore = false;
   }
 
   async getStatusBarHeight() {
@@ -1883,6 +1914,8 @@ export struct HomePage {
                       VideoCardComponent({
                         item: item,
                         coverWidth: this.cardCoverWidth(),
+                        entranceCenterX: this.cardEntranceCenterX(index),
+                        revealedCardIds: this.revealedCardIds,
                         onCardClick: (clicked: RecommendItem): void => this.onCardClick(clicked),
                         onLongPress: (pressed: RecommendItem): void => this.showVideoMenu(pressed)
                       })
@@ -1898,10 +1931,11 @@ export struct HomePage {
                     if (visible) this.playbackVisibleIndexes.add(index);
                     else this.playbackVisibleIndexes.delete(index);
                     if (!this.playbackHomeActive || this.playbackHomeChannel !== 2) return;
+                    if (visible) this.requestMoreNearTail(index);
                     let first = index;
                     for (const candidate of this.playbackVisibleIndexes) first = Math.min(first, candidate);
                     this.playbackListStart = Math.max(0, first - 2);
-                    this.syncPlaybackListPrefetch();
+                    this.schedulePlaybackListPrefetch();
                   })
                 }, (item: RecommendItem, index: number) => `${item.id}_${index}`)
               }
@@ -1915,9 +1949,13 @@ export struct HomePage {
               .gesture(PinchGesture().onActionEnd((event: GestureEvent) => this.handlePinch(event.scale)))
               }
             }
-            if (this.isLoadingMore) {
+            if (this.showPaginationFooter && this.isLoadingMore) {
               Row() { LoadingProgress().width(24).height(24).color(this.customThemeColor); Text('努力获取新内容...').fontSize(12).fontColor(this.pageWallpaperEnabled ? (this.isDarkMode ? '#C9CDD3' : '#50545A') : '#999999').margin({ left: 8 }) }
               .width('100%').height(40).justifyContent(FlexAlign.Center).backgroundColor('transparent')
+            } else if (this.showPaginationFooter && this.paginationNeedsRetry) {
+              Text('加载未完成，点击重试')
+                .fontSize(12).fontColor(this.customThemeColor).width('100%').height(40).textAlign(TextAlign.Center)
+                .onClick(() => { void this.loadMore(true); })
             } else if (!this.hasMore && this.dataSource.totalCount() > 0) {
               Text('没有更多推荐了，试试“换一批”')
                 .fontSize(12).fontColor(this.pageWallpaperEnabled ? (this.isDarkMode ? '#C9CDD3' : '#50545A') : '#999999').width('100%').height(40).textAlign(TextAlign.Center)
@@ -1935,19 +1973,17 @@ export struct HomePage {
               source === ScrollSource.OTHER_USER_INPUT || source === ScrollSource.SCROLL_BAR ||
               source === ScrollSource.SCROLL_BAR_FLING);
           if (this.homeAnchorNeedsUpdate) this.homeUserScrollActive = true;
+          if (this.homeAnchorNeedsUpdate && yOffset < 0 && this.showPaginationFooter) {
+            this.showPaginationFooter = false;
+          }
           if (this.homeLayoutPending || !AppStorage.get<boolean>('homeFeedActive') || yOffset === 0 || AppStorage.get<number>('homeChannelIndex') !== 2) return;
-          this.scrollOffset = yOffset;
-          const absoluteOffset = this.externalScroller!.currentOffset().yOffset;
-
           if (this.showHomeCarouselPortrait && !this.isLandscape) {
+            const absoluteOffset = this.externalScroller!.currentOffset().yOffset;
             this.carouselParallaxY = absoluteOffset * 0.2;
             this.carouselTitleOpacity = Math.max(0, 1 - absoluteOffset / 50);
-
-            this.carouselDotsFade = Math.max(0, 1 - absoluteOffset / 50);
+            this.carouselDotsFade = this.carouselTitleOpacity;
           }
 
-          AppStorage.set('homeScrollOffset', Math.max(0, absoluteOffset));
-          this.homeScrollOffset = Math.max(0, absoluteOffset);
           const hidden = this.barScrollTracker.update(yOffset, source);
           if (hidden !== undefined) {
             AppStorage.set('homeBarsHidden', hidden);
@@ -1955,10 +1991,9 @@ export struct HomePage {
         })
         .onDidScroll(() => {
           const offset = Math.max(0, this.externalScroller!.currentOffset().yOffset);
-          AppStorage.set('homeScrollOffset', offset);
-          this.homeScrollOffset = offset;
+          if (this.homeScrollOffset !== offset) this.homeScrollOffset = offset;
           if (!this.homeLayoutPending && offset === 0) this.homeAnchorIndex = -1;
-          else if (this.homeAnchorNeedsUpdate) this.rememberHomeAnchor();
+          else if (this.homeAnchorNeedsUpdate) this.rememberHomeAnchor(offset);
           this.homeAnchorNeedsUpdate = false;
         })
         .onScrollStop(() => {
@@ -1972,7 +2007,9 @@ export struct HomePage {
           });
         })
         .onReachEnd(() => {
-          if (!this.isLoadingMore && !this.isLoading && !this.isRefreshing && this.hasMore) this.loadMore();
+          if (this.dataSource.totalCount() === 0 || !this.hasMore) return;
+          void this.loadMore();
+          this.showPaginationFooter = this.isLoadingMore || this.paginationNeedsRetry;
         })
       }
       .onStateChange((refreshStatus: RefreshStatus) => {

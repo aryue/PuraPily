@@ -101,6 +101,7 @@ async function checkInitialRequests() {
   for (const page of [pgc, popular]) {
     for (const count of [0, 10]) {
       Object.assign(page, { isLoadingData: false, isRefreshing: false, isLoading: count === 0,
+        syncPlaybackListPrefetch: () => {},
         dataSource: { totalCount: () => count } });
       const pending = page.loadData(true);
       assert.equal(page.isRefreshing, count > 0,

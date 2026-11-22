@@ -17,12 +17,17 @@ const c={exports:{},ViewPU,SynchedPropertySimpleOneWayPU:Box,ObservedPropertySim
  uiMaterial:{isImmersiveMaterialSupported:()=>supports,ImmersiveStyle:{ULTRA_THIN:0},ImmersiveMaterial:class{constructor(v){this.options=v;}}},
  Color:{White:'#FFFFFF',Transparent:0},BlurStyle:{COMPONENT_THICK:1},BarPosition:{End:1},TouchType:{Down:0,Move:1,Up:2,Cancel:3},
  FontWeight:{Bold:700,Medium:500},
- FlexAlign:{Center:0},HitTestMode:{None:0,Default:1,Transparent:2,BLOCK_HIERARCHY:3},Curve:{EaseIn:0,EaseOut:1,FastOutSlowIn:2},Context:{animation(){}},
+ FlexAlign:{Center:0},HitTestMode:{None:0,Default:1,Transparent:2,BLOCK_HIERARCHY:3},Curve:{EaseIn:0,EaseOut:1,FastOutSlowIn:2},Context:{animation(value){calls.push({name:'Context',key:'animation',args:[value]});}},
  $r:(name)=>({resource:name}),AppStorage:{setOrCreate:(k,v)=>storage.set(k,v)}};
 installGlassMaterial(c);
-for(const name of ['Row','Column','Tabs','TabContent','Image','Text'])c[name]=component(name);
+for(const name of ['Row','Stack','Column','Tabs','TabContent','Image','Text'])c[name]=component(name);
 vm.runInNewContext(ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020}}).outputText,c);
 const bar=new c.exports.FloatingBottomBar(null,{});bar.aboutToAppear();bar.initialRender();
+const tabsCreate = calls.findIndex(call => call.name === 'Tabs' && call.key === 'create');
+const scale = calls.findIndex(call => call.name === 'Stack' && call.key === 'scale');
+assert.ok(scale >= 0 && scale < tabsCreate, 'animate the glass and its contents on the parent surface');
+assert.equal(calls.slice(0, tabsCreate).filter(call => call.name === 'Context').at(-1).args[0], null,
+ 'native Tabs configure outside the parent surface animation');
 for(const dark of [false,true]) {
  bar.isDarkMode=dark;
  for(let selected=0;selected<3;selected++) {

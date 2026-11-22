@@ -45,7 +45,7 @@ async function main() {
     }
   }
   const methods = [
-    ['    private onTransitionFlip(', '    private onContentVisibleChange('],
+    ['    private onTransitionFlip(', '    private commentAreaVis('],
     ['    private manageSB(', '    async initW(']
   ].map(([a, b]) => {
     const from = source.indexOf(a), to = source.indexOf(b, from);

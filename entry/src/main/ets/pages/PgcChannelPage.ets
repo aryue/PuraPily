@@ -1,4 +1,5 @@
 import { HomeInitialLoading } from '../components/HomeInitialLoading';
+import { HomeChannelCardEntrance } from '../components/HomeChannelCardEntrance';
 import { GlassMaterial } from '../utils/GlassMaterial';
 import { cardItemBg } from '../utils/CardStyle';
 import { CHANNEL_CARD_RADIUS, ChannelCardSurface } from '../components/ChannelCardSurface';
@@ -6,6 +7,7 @@ import { HOME_SEARCH_ROW_HEIGHT, homeHeaderTopInset } from '../utils/HomeHeaderL
 import { VideoCardMoreButton } from '../components/VideoCardMoreButton';
 import { HomeBarScrollTracker } from '../utils/HomeBarScrollTracker';
 import { HomeRefreshIndicator } from '../components/HomeRefreshIndicator';
+import { publishHomeScrollOffset } from '../utils/HomeScrollOffset';
 /**
  * PgcChannelPage.ets — 番剧/影视频道页（首页频道体系内嵌）
  *
@@ -29,6 +31,7 @@ import { GenericDataSource } from '../model/GenericDataSource';
 
 @Component({ freezeWhenInactive: true })
 export struct PgcChannelPage {
+  private revealedCardIds: Set<string> = new Set<string>();
   @StorageLink('pageWallpaperEnabled') pageWallpaperEnabled: boolean = false;
   /** 频道类型：1=番剧 2=影视 */
   seasonType?: number = 1;
@@ -166,6 +169,7 @@ export struct PgcChannelPage {
   }
 
   private onScrollToTop(): void {
+    if (!AppStorage.get<boolean>('homeFeedActive') || AppStorage.get<number>('homeChannelIndex') !== this.channelIndex) return;
     if (this.scroller) {
       this.scroller.scrollTo({ xOffset: 0, yOffset: 0, animation: { duration: this.da ? 0 : 300 } });
     }
@@ -918,12 +922,18 @@ export struct PgcChannelPage {
       WaterFlow({ layoutMode: WaterFlowLayoutMode.SLIDING_WINDOW }) {
         LazyForEach(this.dataSource, (item: PgcSeason, index: number) => {
           FlowItem() {
-            this.PgcCard(item)
+            HomeChannelCardEntrance({
+              cardKey: String(item.seasonId), gridId: `home-pgc-grid-${this.channelIndex}`,
+              channelIndex: this.channelIndex, revealedCardIds: this.revealedCardIds
+            }) {
+              this.PgcCard(item)
+            }
           }
         }, (item: PgcSeason, index: number) => `${item.seasonId}_${index}`)
       }
       // Recalculate equal-width columns from the measured container.
       .columnsTemplate(this.getColumnTemplate())
+      .id(`home-pgc-grid-${this.channelIndex}`)
       .onSizeChange((_old: SizeOptions, size: SizeOptions) => { this.gridWidth = Number(size.width); })
       .columnsGap(this.cardListMargin).rowsGap(this.cardListMargin)
       .padding({
@@ -1029,7 +1039,7 @@ export struct PgcChannelPage {
       .onWillScroll((_, yOffset: number, _state: ScrollState, source: ScrollSource) => {
         if (!AppStorage.get<boolean>('homeFeedActive') || yOffset === 0 || AppStorage.get<number>('homeChannelIndex') !== this.channelIndex) return;
         const absoluteOffset = this.scroller.currentOffset().yOffset;
-        AppStorage.set('homeScrollOffset', Math.max(0, absoluteOffset));
+        publishHomeScrollOffset(absoluteOffset);
         const hidden = this.barScrollTracker.update(yOffset, source);
         if (hidden !== undefined) {
           AppStorage.set('homeBarsHidden', hidden);

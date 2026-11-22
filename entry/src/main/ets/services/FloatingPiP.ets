@@ -31,6 +31,8 @@ export class FloatingPiP {
     if (state === 'playing' || state === 'paused' || state === 'completed') {
       LiveViewHelper.updatePlayState(state === 'playing');
     }
+    // 页面已退出，浮窗/后台播放也到结尾：没有可控制对象了，播控中心必须一起收掉。
+    if (state === 'completed') LiveViewHelper.end();
     this.syncPlayback();
   };
   private onPlaybackTime_: (time: number) => void = (time: number): void => {

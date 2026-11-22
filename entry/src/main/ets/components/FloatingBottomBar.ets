@@ -110,6 +110,7 @@ export struct FloatingBottomBar {
   build() {
     Row() {
     Row() {
+    Stack() {
     Tabs({ index: this.activeIndex, barPosition: BarPosition.End, barModifier: this.barMaterial() }) {
       TabContent() { Column().height(0) }.tabBar(this.Item('首页', $r('app.media.ref_home'), $r('app.media.ref_home_selected'), 0))
       TabContent() { Column().height(0) }.tabBar(this.Item('动态', $r('app.media.ref_dynamic'), $r('app.media.ref_dynamic_selected'), 1))
@@ -133,6 +134,10 @@ export struct FloatingBottomBar {
       }
     })
     .onTabBarClick((index: number) => this.onSelect(index))
+    .clip(false)
+    }
+    // Keep the native Tabs configuration and selected items outside this animation scope.
+    .width('100%').height(56)
     .clip(false)
     // Shrink the complete glass surface inside a separately translated host.
     // Ease-in preserves its size and contrast during the initial downward motion.

@@ -40,6 +40,15 @@ const layerSrc = read('components/PlaybackDanmakuLayer.ets');
 
 // 假 displaySync：记录 create/start/stop 次数与声明过的帧率范围，并保留 frame 回调
 const syncs = [];
+let nextTimer = 0;
+const timers = new Map();
+function fireTimer(controller, delay) {
+  const id = controller.renderTimer;
+  const timer = timers.get(id);
+  assert.equal(timer?.delay, delay);
+  timers.delete(id);
+  timer.callback();
+}
 let failCreate = false;
 function fakeSync() {
   const s = {
@@ -67,7 +76,12 @@ function load(relative) {
   vm.runInNewContext(compiled, {
     exports: output.exports, module: output, console,
     AppStorage: { setOrCreate() {}, get() { return undefined } },
-    setTimeout, clearTimeout,
+    setTimeout(callback, delay) {
+      const id = ++nextTimer;
+      timers.set(id, { callback, delay });
+      return id;
+    },
+    clearTimeout(id) { timers.delete(id); },
     require: (name) => {
       if (name.includes('Logger')) return { logInfo() {}, logWarn() {}, logError() {} };
       if (name === '@ohos.graphics.displaySync') {
@@ -93,73 +107,142 @@ function load(relative) {
   return output.exports;
 }
 
-const { DanmakuConfig } = load('model/DanmakuItem');
+const { DanmakuConfig, DanmakuItem } = load('model/DanmakuItem');
 const { DanmakuController } = load('services/DanmakuController');
 
-// render 是纯绘制入口：这里替换成计数器，只验证"帧驱动有没有按帧调到它"
 function makeController() {
-  const c = new DanmakuController(new DanmakuConfig());
-  c.visibleDanmaku = [];
-  c.renders = 0;
-  c.render = () => { c.renders++; };
-  return c;
+  return new DanmakuController(new DanmakuConfig());
 }
 
-// 1a) 启动 → 用 displaySync 驱动，且必须显式声明 120Hz（不声明系统按 60Hz 给回调）
-const c1 = makeController();
-c1.startRendering();
-assert.equal(syncs.length, 1, 'startRendering 必须创建 displaySync 驱动');
-const s1 = syncs[0];
-assert.equal(s1.range.min, 60, '帧率范围下限 60');
-assert.equal(s1.range.max, 120, '帧率范围上限 120');
-assert.equal(s1.range.expected, 120,
-  '帧率范围只允许 60/120/120：设备 120Hz，不声明就是每 2 帧一跳');
-assert.equal(s1.running, true, 'startRendering 必须真正 start');
-assert.equal(typeof s1.cb, 'function', 'frame 回调必须挂上');
-assert.equal(c1.renderTimer, 0, '走 vsync 时不能再挂定时器，否则两条链同时推进弹幕（速度翻倍）');
+async function testDrivers() {
+  const c1 = makeController();
+  let scans = 0;
+  let available = false;
+  let lastFrameEnds = false;
+  let draws = 0;
+  c1.updateVisibleDanmaku = () => {
+    scans++;
+    c1.visibleDanmaku = available ? [{}] : [];
+  };
+  c1.renderer.render = (items) => {
+    if (items.length > 0) draws++;
+    return items.length > 0 && !lastFrameEnds;
+  };
 
-// 1b) 有可见弹幕：每个 frame 回调都推进并重绘一次（不再按 16ms 定时器）
-c1.visibleDanmaku = [{}];
-s1.cb({});
-s1.cb({});
-assert.equal(c1.renders, 2, '每个 vsync 帧都要推进一次：120Hz 下就是 8.33ms 一帧');
+  c1.startRendering();
+  assert.equal(scans, 1, '空屏开始播放先检查一次');
+  assert.equal(syncs.length, 0, '空屏不创建 displaySync');
+  assert.equal(timers.size, 1);
+  fireTimer(c1, 250);
+  assert.equal(scans, 2);
+  assert.equal(draws, 0, '空屏只轮询，不推进弹幕');
+  assert.equal(timers.size, 1);
 
-// 1c) 空闲（屏上一条都没有）：250ms 节流，不每帧扫分桶/重绘
-c1.visibleDanmaku = [];
-const beforeIdle = c1.renders;
-s1.cb({});
-assert.equal(c1.renders, beforeIdle + 1, '空闲首帧要扫一次（恢复播放时不用等 250ms）');
-s1.cb({});
-s1.cb({});
-assert.equal(c1.renders, beforeIdle + 1, '250ms 内的后续帧必须跳过（省电：不扫分桶、不清画布）');
-c1.nextIdleScanAt = 0;                       // 模拟 250ms 过去
-s1.cb({});
-assert.equal(c1.renders, beforeIdle + 2, '节流窗口过后要重新扫描');
+  available = true;
+  fireTimer(c1, 250);
+  const sync = syncs[0];
+  assert.equal(sync.range.min, 60);
+  assert.equal(sync.range.max, 120);
+  assert.equal(sync.range.expected, 120);
+  assert.equal(sync.running, true);
+  assert.equal(timers.size, 0, 'vsync 与定时器互斥');
+  sync.cb({});
+  sync.cb({});
+  assert.equal(draws, 2, '每个 vsync 推进一帧');
 
-// 1d) 停止 → 必须真的 stop，且停后帧回调不再画（保留最后一帧，不清画布）
-c1.stopRendering();
-assert.equal(s1.running, false, 'stopRendering 必须停掉 vsync 驱动');
-const afterStop = c1.renders;
-s1.cb({});
-assert.equal(c1.renders, afterStop, '已停止的驱动不能再推进弹幕');
+  available = false;
+  lastFrameEnds = true;
+  sync.cb({});
+  assert.equal(sync.running, false, '末条退场就停掉 vsync');
+  assert.equal(timers.size, 1);
+  sync.cb({});
+  assert.equal(draws, 3, '排队的旧回调不能继续渲染');
 
-// 1e) 恢复 → 复用同一个 DisplaySync 对象（不重复 create，也不重复挂回调）
-c1.startRendering();
-assert.equal(syncs.length, 1, '恢复播放复用同一个 DisplaySync（重复 create 会留下多条回调链）');
-assert.equal(s1.running, true);
-c1.stopRendering();
+  const oldTimer = timers.get(c1.renderTimer);
+  c1.stopRendering();
+  assert.equal(timers.size, 0, '暂停也停掉空屏轮询');
+  available = true;
+  lastFrameEnds = false;
+  c1.startRendering();
+  oldTimer.callback();
+  assert.equal(syncs.length, 1, '恢复播放复用同一个 displaySync');
+  assert.equal(sync.running, true);
+  assert.equal(timers.size, 0);
+  assert.equal(draws, 3, '此前取消的定时任务不能推进画面');
 
-// 1f) displaySync 不可用 → 退回定时器链（老 SDK / 极端情况不能让弹幕彻底不动）
-failCreate = true;
-const c2 = makeController();
-c2.startRendering();
-assert.equal(c2.frameSyncUnavailable, true, 'create 抛错要标记为不可用，避免每次 start 都重试');
-assert.notEqual(c2.renderTimer, 0, '不可用时必须退回 setTimeout 自调度链');
-c2.visibleDanmaku = [{}, {}];
-c2.render = () => { c2.renders++; };
-c2.stopRendering();                          // 收尾：清掉定时器，否则测试进程会被自调度链挂住
-assert.equal(c2.renderTimer, 0);
-failCreate = false;
+  c1.currentTime = 1000;
+  available = false;
+  await c1.updateTime(7000);
+  assert.equal(sync.running, false, 'seek 到空屏时停掉 vsync');
+  assert.equal(timers.size, 1);
+  available = true;
+  c1.rebuildBuckets();
+  assert.equal(sync.running, true, '分段数据到达可唤醒空屏');
+  assert.equal(timers.size, 0);
+  c1.stopRendering();
+  assert.equal(sync.running, false);
+  sync.cb({});
+  assert.equal(draws, 3, '暂停中的 vsync 回调不能继续渲染');
+
+  c1.currentTime = 7000;
+  await c1.updateTime(12050);
+  assert.equal(sync.running, false, '暂停时 seek 不唤醒任何驱动');
+  assert.equal(timers.size, 0);
+  available = false;
+  c1.visibleDanmaku = [];
+  c1.startRendering();
+  available = true;
+  await c1.updateTime(12150);
+  assert.equal(sync.running, true, '播放时钟更新可在 250ms 轮询前唤醒');
+  c1.config.enable = false;
+  sync.cb({});
+  assert.equal(sync.running, false, '禁用时停掉帧驱动');
+  assert.equal(timers.size, 0);
+  c1.config.enable = true;
+  await c1.updateTime(12250);
+  assert.equal(sync.running, true, '重开后由播放时钟恢复驱动');
+  c1.stopRendering();
+
+  const clearing = makeController();
+  let clears = 0;
+  const renderer = clearing.renderer;
+  renderer.setSize(440, 250);
+  renderer.setContext({
+    clearRect() { clears++; },
+    fillText() {},
+    strokeText() {},
+    measureText() { return { width: 44 }; },
+  });
+  const rolling = new DanmakuItem({ content: '弹幕', time: 100 });
+  Object.assign(rolling, { x: 12, y: 35, width: 44, speed: 1 });
+  assert.equal(renderer.render([rolling], 100, 0), true);
+  assert.equal(renderer.render([], 120, 0), false, '上帧有弹幕时，空列表清理最后一帧');
+  assert.equal(renderer.render([], 130, 0), false);
+  assert.equal(clears, 2, '干净画布不会被后续空屏检查反复清理');
+  rolling.x = 500;
+  assert.equal(renderer.render([rolling], 140, 0), true, '右侧进场动画仍需要帧驱动');
+  rolling.x = -45;
+  assert.equal(renderer.render([rolling], 150, 0), false, '最后一条完整滚出后结束帧驱动');
+
+  failCreate = true;
+  const fallback = makeController();
+  fallback.visibleDanmaku = [{}];
+  fallback.render = () => { draws++; };
+  fallback.startRendering();
+  assert.equal(fallback.frameSyncUnavailable, true);
+  const animationTimer = fallback.renderTimer;
+  fallback.reconcileFrameDriver();
+  assert.equal(fallback.renderTimer, animationTimer, '时间更新不能让 16ms 回退重新排队');
+  fireTimer(fallback, 16);
+  assert.equal(draws, 4);
+  fallback.visibleDanmaku = [];
+  fallback.reconcileFrameDriver();
+  assert.equal(timers.size, 1);
+  fireTimer(fallback, 250);
+  fallback.stopRendering();
+  assert.equal(timers.size, 0);
+  failCreate = false;
+}
 
 // 1g) 结构约束：destroy 必须摘掉 frame 回调（否则控制器连同整份弹幕数据被回调引用住）
 assert.match(controllerSrc, /import displaySync from '@ohos\.graphics\.displaySync'/,
@@ -294,4 +377,9 @@ assert.match(rendererSrc, /ctx\.clearRect\(0, 0, this\.clearWidth\(\), this\.cle
 assert.match(rendererSrc, /item\.x = \(this\.canvasWidth - item\.measuredWidth\) \/ 2/,
   '静止弹幕居中的口径必须是逻辑视口（用像素宽会偏出可见区）');
 
-console.log('PASS: danmaku is vsync-driven at 120Hz; landscape split keeps the canvas surface at window width while the logical viewport (geometry) follows the divider live');
+testDrivers().then(() => {
+  console.log('PASS: danmaku uses a 250ms idle poll and 120Hz active vsync; split geometry follows the divider');
+}).catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});

@@ -77,7 +77,8 @@ struct LivePlayerPage {
   private previewRelease: Promise<void> = Promise.resolve();
   private previewTask: Promise<void> = Promise.resolve();
   private userPaused: boolean = false;
-  private pageHidden: boolean = false;
+  @State private pageHidden: boolean = false;
+  @StorageLink('appInBackground') private appInBackground: boolean = false;
   private touchActive: boolean = false;
   @State sourceWidth: number = 16;
   @State sourceHeight: number = 9;
@@ -2274,7 +2275,9 @@ struct LivePlayerPage {
     Column() {
       Stack({ alignContent: Alignment.TopStart }) {
         if (this.liveFullscreen) {
-          PlayerStatusStrip()
+          PlayerStatusStrip({
+            samplingVisible: !this.pageHidden && !this.appInBackground && this.informationVisible
+          })
         }
         Column() {
           this.LiveInfoHeader(this.liveFullscreen)

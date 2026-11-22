@@ -339,7 +339,7 @@ struct VideoPlayerPage {
   @State private referenceFeedCommentProgress: number = 0
   @State private referenceFeedCommentAnimating: boolean = false
   private referenceFeedCommentGen: number = 0
-  private playerPageVisible: boolean = true;
+  @State private playerPageVisible: boolean = true;
   /**
    * ⭐ 本播放页实例的唯一编号（见文件顶部 newVideoPlayerPageInstanceId）。
    * 栈里可能同时存在多个播放页（A 点相关推荐 push 出 B），path 区分不出谁在上面，
@@ -1600,32 +1600,15 @@ struct VideoPlayerPage {
     this.manageSB(true);
     if (!this.fs || this.rotationInProgress) this.resetFullscreenVideo();
     this.onPlaybackViewportChanged();
-    // ⭐ 全屏/旋转期间暂停封面流光定时器（封面 linearGradient 每帧重算抢主线程，影响全屏动画帧率）；
-    //   转场结束后若封面仍显示（视频未就绪）则恢复流光
     if (this.fs || this.rotationInProgress) {
-      if (this.coverGlowTimer) {
-        clearInterval(this.coverGlowTimer);
-        this.coverGlowTimer = 0;
-      }
       this.commentFade = 0;
       return;
-    }
-    if (!this.coverGlowTimer && !this.contentVisible) {
-      this.coverGlowTimer = setInterval(() => { this.coverGlowAngle = (this.coverGlowAngle + 3) % 360; }, 16);
     }
     setTimeout(() => {
       this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.EaseOut }, () => {
         this.commentFade = 1;
       });
     }, 0);
-  }
-
-  /** ⭐ 视频就绪（封面永久隐藏）后停止流光定时器，避免定时器空转 */
-  private onContentVisibleChange(): void {
-    if (this.contentVisible && this.coverGlowTimer) {
-      clearInterval(this.coverGlowTimer);
-      this.coverGlowTimer = 0;
-    }
   }
 
   /** ⭐ 评论区转场可见性：转场期间（全屏/旋转中）移出布局（不参与重排），结束后渐显 */
@@ -2955,9 +2938,7 @@ struct VideoPlayerPage {
   private referenceIntroScrollState: ScrollState = ScrollState.Idle;
   @State isLandscapeVertical: boolean = false
   @StorageLink('phoneLayoutToggle') phoneLayoutToggle: boolean = false
-  @State @Watch('onContentVisibleChange') contentVisible: boolean = false;
-  @State coverGlowAngle: number = 0  // ⭐ 封面跑马灯流光角度
-  private coverGlowTimer: number = 0  // ⭐ 流光动画定时器
+  @State contentVisible: boolean = false;
   @State hdCoverReady: boolean = false  // ⭐ 1080w 封面预解码完成；未完成时封面回退原始 URL 秒显，避免黑屏
   // ⭐ 评论输入弹层（写评论/回复共用）
   @State commentThread: ObservableComment | null = null;
@@ -3425,11 +3406,11 @@ struct VideoPlayerPage {
       logInfo('[Minimize] 播放器与控制事件已移交系统小窗');
     });
 
-    // 结束实况窗（后台播放模式保留后台任务，保证切后台后继续播放）
-    if (!this.bgp) {
-      LiveViewHelper.end();
+    // 结束实况窗：只有后台播放仍在继续时才保留，暂停态随页面一起释放。
+    if (this.backgroundPlaybackOutlivesPage()) {
+      logInfo('[Minimize] 后台播放仍在继续：保留实况窗和后台任务');
     } else {
-      logInfo('[Minimize] 后台播放模式：保留实况窗和后台任务');
+      LiveViewHelper.end();
     }
 
     // ⭐ 保存观看历史再退出：关键节点绕过节流，保证退出一定落地
@@ -4541,10 +4522,6 @@ struct VideoPlayerPage {
     // ⭐ 首帧前同步重建分段按钮 options（非 @State 字段，主题色需在首次 build 前应用）
     this.rebuildSegmentOptions();
     // ⭐ 注册系统音量变化监听（音量键调节时同步 app 内滑块）
-    // ⭐ 启动封面跑马灯流光动画（setInterval 驱动 angle 持续变化；首帧后由 onContentVisibleChange 停止）
-    if (!this.referenceLayout) {
-      this.coverGlowTimer = setInterval(() => { this.coverGlowAngle = (this.coverGlowAngle + 3) % 360; }, 16);
-    }
     this.so_ = AppStorage.get<string>('screenOrientationLock') ?? '跟随系统';
     this.sh_ = AppStorage.get<boolean>('hideStatusBar') ?? false;
 
@@ -5149,6 +5126,18 @@ struct VideoPlayerPage {
     return this.referencePlaybackCompleted || this.playbackResources_.video?.state === 'completed';
   }
 
+  /**
+   * 退出播放页时是否还有后台播放需要播控中心继续托底。
+   * 唯一保留场景：后台播放开关开启、播放器已移交 PlayerService，且它真的还在往结尾播。
+   * 暂停 / 播完 / 出错 / 普通返回都会在 release() 里释放播放器，此时继续留着会话
+   * 只会得到一张指向已销毁页面的空壳卡片。
+   */
+  private backgroundPlaybackOutlivesPage(): boolean {
+    const floating = PlayerService.getInstance();
+    return this.bgp && this.play && !this.playbackIsTerminal() && floating.hasActivePlayer &&
+      floating.videoPlayer?.state === 'playing';
+  }
+
   /** 记录一次自动起播的调用点（只用于诊断，不改变行为）。 */
   private markAutoPlay(site: string): void {
     this.lastAutoPlaySite_ = site;
@@ -5473,7 +5462,6 @@ struct VideoPlayerPage {
     this.referenceSwitchGeneration++;
     this.releaseReferenceFeedPreview();
     this.resetVideoShot_();
-    if (this.coverGlowTimer) { clearInterval(this.coverGlowTimer); this.coverGlowTimer = 0; }
     // ⭐ 缩小/还原动画（animateVidShrink）：页面销毁时若动画还没收尾，弹幕是被关着的状态，
     //    必须补恢复（后台播放场景下 controller/配置可能被 PlayerService 继续持有）。
     //    非定时器动画，无需 clearInterval；代数号自增即可让迟到的 onFinish 失效。
@@ -5511,12 +5499,12 @@ struct VideoPlayerPage {
     this.playbackWindow_.cancelTransitionWait();
     // ⭐ 取消智感握持监听
     this.unsubscribeGripChanges();
-    // ⭐ 结束实况窗（后台播放模式保留后台任务和媒体会话）
-    if (!this.bgp) {
-      LiveViewHelper.end();
+    // ⭐ 播控中心只跟随「仍有后台播放」的页面退出而保留；播放已停止（暂停/播完/出错）
+    //    或播放器仍归本页所有（release() 会停掉它）时都必须释放，避免留下空壳卡片。
+    if (this.backgroundPlaybackOutlivesPage()) {
+      logInfo('[VideoPlayer] aboutToDisappear → 后台播放仍在继续，保留实况窗和后台任务');
     } else {
-      logInfo('[VideoPlayer] aboutToDisappear → 后台播放模式，保留实况窗和后台任务');
-      // 系统小窗服务持有媒体控制回调，不再引用已销毁的页面。
+      LiveViewHelper.end();
     }
     // ⭐ 清除实况窗节流定时器
     this.playbackProgressReporter_.cancel();
@@ -10207,6 +10195,8 @@ struct VideoPlayerPage {
         })
       }
       VideoControls({
+        statusStripAllowed: this.playerPageVisible && !this.appInBackground && !this.referenceCleanViewing() &&
+          !(this.fs && this.isLightsOff),
         hdrUiRatio: this.hdrUiRatio(),
         isCompleted: this.referencePlaybackCompleted,
         bufferedUntil: this.bufferedUntil,

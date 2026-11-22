@@ -10,8 +10,7 @@ import { NativeGlassInput } from './NativeGlassInput';
 import { PlayerBottomPlaybackMenu } from './PlayerBottomPlaybackMenu';
 // VideoControls.ets - 视频/直播播放控制组件
 // materialStyle: 0~4 对应 ImmersiveStyle (ULTRA_THIN=0, THIN=1, REGULAR=2, THICK=3, ULTRA_THICK=4)
-import { statistics } from '@kit.NetworkKit';
-import { batteryInfo } from '@kit.BasicServicesKit';
+import { PlayerStatusSampler } from '../utils/PlayerStatusSampler';
 import { display, curves, uiMaterial } from '@kit.ArkUI';
 import { SeekThumb } from '../model/SeekThumb';
 import { MaterialUtil } from '../utils/MaterialUtil';
@@ -109,10 +108,11 @@ export struct VideoControls {
   @Prop hdrUiRatio: number = 1;
   @StorageProp('referenceLayout') referenceLayout: boolean = true;
   // 竖屏半屏、横屏半屏使用相同控件与事件处理。
-  @Prop referenceHalfScreen: boolean = false;
-  @Prop referenceLandscapeHalfScreen: boolean = false;
-  @Prop referenceLandscapeFullscreen: boolean = false;
-  @Prop hidePlaybackControls: boolean = false;
+  @Prop @Watch('refreshStatusSampling') referenceHalfScreen: boolean = false;
+  @Prop @Watch('refreshStatusSampling') referenceLandscapeHalfScreen: boolean = false;
+  @Prop @Watch('refreshStatusSampling') referenceLandscapeFullscreen: boolean = false;
+  @Prop @Watch('refreshStatusSampling') hidePlaybackControls: boolean = false;
+  @Prop @Watch('refreshStatusSampling') statusStripAllowed: boolean = true;
   @Prop isCompleted: boolean = false;
   @Prop bufferedUntil: number = 0;
   // 空降助手：进度条上的分类标记（`start,end,#color;...`）。
@@ -125,9 +125,9 @@ export struct VideoControls {
   @Link isPlaying: boolean;
   @Link currentTime: number;
   @Link duration: number;
-  @Link isControlsVisible: boolean;
+  @Link @Watch('refreshStatusSampling') isControlsVisible: boolean;
   @Link isLocked: boolean;
-  @Link isFullscreen: boolean;
+  @Link @Watch('refreshStatusSampling') isFullscreen: boolean;
   @State seekTrackVisible: boolean = false; // 非全屏拖动/点击调节时显示未播放轨道，松手后隐藏
   // ⭐ 全屏控制栏镜像：按钮组左右整体对调（标准↔镜像）；与播放页双向绑定，弹窗跟随镜像
   @Link isMirrorControls: boolean;
@@ -272,7 +272,7 @@ export struct VideoControls {
   @Link isDanmakuEnabled: boolean;
 
   // ⭐ 直播模式
-  @Prop liveMode: boolean = false;
+  @Prop @Watch('refreshStatusSampling') liveMode: boolean = false;
   @Prop liveTitle: string = '';
   @Prop liveOnline: number = 0;
   @Prop liveUname: string = '';
@@ -364,17 +364,10 @@ export struct VideoControls {
   toggleFollow: () => void = () => {};
 
   // ⭐ 顶部中间状态（网速·时间·电量，仅点播全屏）
-  @State speedText: string = '--';
-  @State clockText: string = '';
-  @State batteryText: string = '';
-  // 顶栏宽度（vp）：过窄（竖屏全屏）时隐藏状态栏，避免把右侧按钮挤出屏幕
-  @State topBarWidth: number = 0;
-  // ⭐ 动效状态：低电/充电闪烁、网速脉冲、镜像按钮旋转、锁定脉冲、标题淡换、拖动气泡
-  @State blinkPhase: boolean = false;
-  @State isLowBattery: boolean = false;
-  @State isMediumBattery: boolean = false;
-  @State isCharging: boolean = false;
-  @State speedPulse: boolean = false;
+  @State private status: PlayerStatusSampler = new PlayerStatusSampler();
+  // 窗口太窄的横屏全屏页没有自绘状态条。
+  @State @Watch('refreshStatusSampling') topBarWidth: number = 0;
+  private statusOwnerAttached: boolean = false;
   @State mirrorIconAngle: number = 0;
   @State lockPulse: number = 1;
   @State titleFade: number = 1;
@@ -382,88 +375,20 @@ export struct VideoControls {
   @State controlsMounted: boolean = false;
   // onAreaChange 顶栏高度节流：仅变化超过 1vp 才写 AppStorage
   private lastTopBarHeight: number = -1;
-  private statusTimerId: number = -1;
-  private statusTickCount: number = 0;
-  private lastRxBytes: number = -1;
-  private lastTxBytes: number = -1;
-  private lastSampleTime: number = -1;
-
-  // ═══ ⭐ 镜像布局：顶部/底部控制栏按钮组抽成 Builder，切换时左右整体对调（组内顺序不变，手势分区不受影响）═══
-
-  // ⭐ 顶部状态定时器：每秒刷新时间+网速，每 15 秒刷新电量
-  private startStatusTimer() {
-    this.updateClock();
-    this.updateBattery();
-    void this.sampleSpeed(true);
-    if (this.statusTimerId !== -1) {
-      clearInterval(this.statusTimerId);
-    }
-    this.statusTimerId = setInterval(() => {
-      this.updateClock();
-      void this.sampleSpeed(false);
-      this.statusTickCount++;
-      if (this.statusTickCount % 15 === 0) {
-        this.updateBattery();
-      }
-      if (this.isLowBattery || this.isCharging) {
-        this.blinkPhase = !this.blinkPhase;
-      }
-    }, 1000);
+  private statusStripLayout(): string {
+    if (this.referenceLandscapeHalfScreen || this.referenceHalfScreen) return '';
+    if (this.referenceLandscapeFullscreen) return 'center';
+    if (!this.isFullscreen || this.liveMode) return '';
+    if (this.isPortraitDisplay()) return 'sides';
+    return this.topBarWidth > 600 ? 'center' : '';
   }
 
-  private stopStatusTimer() {
-    if (this.statusTimerId !== -1) {
-      clearInterval(this.statusTimerId);
-      this.statusTimerId = -1;
-    }
-  }
-
-  private updateClock() {
-    const d = new Date();
-    this.clockText = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-  }
-
-  private updateBattery() {
-    try {
-      const soc = batteryInfo.batterySOC;
-      this.isCharging = batteryInfo.chargingStatus === batteryInfo.BatteryChargeState.ENABLE;
-      this.isLowBattery = soc >= 0 && soc <= 20;
-      this.isMediumBattery = soc >= 0 && soc > 20 && soc <= 35;
-      this.batteryText = soc >= 0 ? `${soc}%` : '--';
-    } catch (_) {
-      this.batteryText = '--';
-    }
-  }
-
-  private formatSpeed(bytesPerSec: number): string {
-    if (bytesPerSec < 1024) {
-      return `${Math.max(0, Math.round(bytesPerSec))}B/s`;
-    }
-    if (bytesPerSec < 1024 * 1024) {
-      return `${(bytesPerSec / 1024).toFixed(1)}KB/s`;
-    }
-    return `${(bytesPerSec / (1024 * 1024)).toFixed(1)}MB/s`;
-  }
-
-  /** 采样系统上下行总流量差分，计算实时网速；first=true 只建立基线不更新显示 */
-  private async sampleSpeed(first: boolean): Promise<void> {
-    try {
-      const rx = await statistics.getAllRxBytes();
-      const tx = await statistics.getAllTxBytes();
-      const now = Date.now();
-      if (!first && this.lastRxBytes >= 0 && this.lastTxBytes >= 0 && this.lastSampleTime > 0) {
-        const dt = (now - this.lastSampleTime) / 1000;
-        if (dt > 0) {
-          const speed = ((rx - this.lastRxBytes) + (tx - this.lastTxBytes)) / dt;
-          this.speedText = this.formatSpeed(speed);
-          this.speedPulse = !this.speedPulse;
-        }
-      }
-      this.lastRxBytes = rx;
-      this.lastTxBytes = tx;
-      this.lastSampleTime = now;
-    } catch (_) {
-      this.speedText = '--';
+  private refreshStatusSampling(): void {
+    if (this.statusOwnerAttached && this.statusStripAllowed && this.isControlsVisible &&
+      !this.hidePlaybackControls && this.statusStripLayout() !== '') {
+      this.status.start();
+    } else {
+      this.status.stop();
     }
   }
 
@@ -1430,13 +1355,13 @@ export struct VideoControls {
           .fillColor('#FFFFFF')
           .opacity(0.85)
           .margin({ right: 2 })
-          .scale({ x: this.speedPulse ? 1.1 : 1, y: this.speedPulse ? 1.1 : 1 })
+          .scale({ x: this.status.speedPulse ? 1.1 : 1, y: this.status.speedPulse ? 1.1 : 1 })
           .animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 250, curve: Curve.Sharp })
           .transition(this.gatedT(
             TransitionEffect.OPACITY.animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 250, curve: Curve.EaseInOut })
               .combine(TransitionEffect.scale({ x: 0.92, y: 0.92 }).animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 250, curve: Curve.EaseOut }))
           ))
-        Text(this.speedText)
+        Text(this.status.speedText)
           .fontSize(14)
           .fontWeight(FontWeight.Bold)
           .fontColor('#FFFFFF')
@@ -1456,7 +1381,7 @@ export struct VideoControls {
         .opacity(0.5)
         .margin({ left: 5, right: 5 })
 
-      Text(this.clockText)
+      Text(this.status.clockText)
         .fontSize(14)
         .fontWeight(FontWeight.Bold)
         .fontColor('#FFFFFF')
@@ -1476,7 +1401,7 @@ export struct VideoControls {
 
       // 电量组（文本 + 图标，与网速组等宽 88vp，时间两侧均衡）
       Row() {
-        Text(this.batteryText)
+        Text(this.status.batteryText)
           .fontSize(14)
           .fontWeight(FontWeight.Bold)
           .fontColor('#FFFFFF')
@@ -1487,12 +1412,12 @@ export struct VideoControls {
             TransitionEffect.OPACITY.animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 250, curve: Curve.EaseInOut, delay: 40 })
               .combine(TransitionEffect.translate({ y: 6 }).animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 250, curve: Curve.EaseOut, delay: 40 }))
           ))
-        Image($r(this.isCharging ? 'app.media.battery_charge14' : 'app.media.batteryfull_32'))
+        Image($r(this.status.isCharging ? 'app.media.battery_charge14' : 'app.media.batteryfull_32'))
           .width(20)
           .height(20)
-          .fillColor(this.isLowBattery ? '#FF5A5A' : this.isMediumBattery ? '#FFB300' : this.isCharging ? '#57C15A' : '#FFFFFF')
-          .opacity(this.isLowBattery ? (this.blinkPhase ? 0.4 : 1)
-            : this.isCharging ? (this.blinkPhase ? 0.75 : 1) : 0.85)
+          .fillColor(this.status.isLowBattery ? '#FF5A5A' : this.status.isMediumBattery ? '#FFB300' : this.status.isCharging ? '#57C15A' : '#FFFFFF')
+          .opacity(this.status.isLowBattery ? (this.status.blinkPhase ? 0.4 : 1)
+            : this.status.isCharging ? (this.status.blinkPhase ? 0.75 : 1) : 0.85)
           .margin({ left: 2 })
           .animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 500, curve: Curve.Linear })
           .transition(this.gatedT(
@@ -1511,7 +1436,7 @@ export struct VideoControls {
   @Builder
   topBarStatusLeft() {
     Row() {
-      Text(this.clockText)
+      Text(this.status.clockText)
         .fontSize(14)
         .fontWeight(FontWeight.Bold)
         .fontColor('#FFFFFF')
@@ -1534,13 +1459,13 @@ export struct VideoControls {
         .fillColor('#FFFFFF')
         .opacity(0.85)
         .margin({ right: 2 })
-        .scale({ x: this.speedPulse ? 1.1 : 1, y: this.speedPulse ? 1.1 : 1 })
+        .scale({ x: this.status.speedPulse ? 1.1 : 1, y: this.status.speedPulse ? 1.1 : 1 })
         .animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 250, curve: Curve.Sharp })
         .transition(this.gatedT(
           TransitionEffect.OPACITY.animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 250, curve: Curve.EaseInOut })
             .combine(TransitionEffect.scale({ x: 0.92, y: 0.92 }).animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 250, curve: Curve.EaseOut }))
         ))
-      Text(this.speedText)
+      Text(this.status.speedText)
         .fontSize(14)
         .fontWeight(FontWeight.Bold)
         .fontColor('#FFFFFF')
@@ -1561,7 +1486,7 @@ export struct VideoControls {
   @Builder
   topBarStatusRight() {
     Row() {
-      Text(this.batteryText)
+      Text(this.status.batteryText)
         .fontSize(14)
         .fontWeight(FontWeight.Bold)
         .fontColor('#FFFFFF')
@@ -1572,12 +1497,12 @@ export struct VideoControls {
           TransitionEffect.OPACITY.animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 250, curve: Curve.EaseInOut, delay: 40 })
             .combine(TransitionEffect.translate({ y: 6 }).animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 250, curve: Curve.EaseOut, delay: 40 }))
         ))
-        Image($r(this.isCharging ? 'app.media.battery_charge14' : 'app.media.batteryfull_32'))
+        Image($r(this.status.isCharging ? 'app.media.battery_charge14' : 'app.media.batteryfull_32'))
         .width(20)
         .height(20)
-        .fillColor(this.isLowBattery ? '#FF5A5A' : this.isMediumBattery ? '#FFB300' : this.isCharging ? '#57C15A' : '#FFFFFF')
-        .opacity(this.isLowBattery ? (this.blinkPhase ? 0.4 : 1)
-          : this.isCharging ? (this.blinkPhase ? 0.75 : 1) : 0.85)
+        .fillColor(this.status.isLowBattery ? '#FF5A5A' : this.status.isMediumBattery ? '#FFB300' : this.status.isCharging ? '#57C15A' : '#FFFFFF')
+        .opacity(this.status.isLowBattery ? (this.status.blinkPhase ? 0.4 : 1)
+          : this.status.isCharging ? (this.status.blinkPhase ? 0.75 : 1) : 0.85)
         .margin({ left: 2 })
         .animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 500, curve: Curve.Linear })
         .transition(this.gatedT(
@@ -1737,7 +1662,8 @@ export struct VideoControls {
   }
 
   aboutToAppear() {
-    this.startStatusTimer();
+    this.statusOwnerAttached = true;
+    this.refreshStatusSampling();
     // 挂载完成后放行 transition（仅影响之后镜像切换、控制栏显隐等场景的过渡）
     setTimeout(() => {
       this.controlsMounted = true;
@@ -1745,7 +1671,8 @@ export struct VideoControls {
   }
 
   aboutToDisappear() {
-    this.stopStatusTimer();
+    this.statusOwnerAttached = false;
+    this.status.stop();
   }
 
   // ═══ ⭐ 镜像布局：组内顺序反序 = 子项条件排列 + 间距两侧翻转（Row 确定性布局）═══
@@ -2637,13 +2564,11 @@ export struct VideoControls {
               })
 
               // 状态条：横屏全屏→居中显示；竖屏全屏→网速·时间左上角、电量右上角
-              if (!this.liveMode) {
-                if (this.isPortraitDisplay()) {
-                  this.topBarStatusLeft();
-                  this.topBarStatusRight();
-                } else if (this.topBarWidth > 600) {
-                  this.topBarStatusInfo();
-                }
+              if (this.statusStripLayout() === 'sides') {
+                this.topBarStatusLeft();
+                this.topBarStatusRight();
+              } else if (this.statusStripLayout() === 'center') {
+                this.topBarStatusInfo();
               }
             }
           }

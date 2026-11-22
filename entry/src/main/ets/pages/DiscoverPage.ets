@@ -1,4 +1,5 @@
 import { HomeInitialLoading } from '../components/HomeInitialLoading';
+import { HomeChannelCardEntrance } from '../components/HomeChannelCardEntrance';
 import { pageBackgroundColor } from '../utils/SurfaceColors';
 import { HOME_SEARCH_ROW_HEIGHT, homeHeaderTopInset } from '../utils/HomeHeaderLayout';
 import { VideoCardMenu } from '../services/VideoCardMenu';
@@ -17,9 +18,11 @@ import { sendDislikeFeedback, sendDislikeUpFeedback } from '../api/FeedbackServi
 import { UserBehaviorService } from '../services/UserBehaviorService';
 import { GenericDataSource } from '../model/GenericDataSource';
 import { PlaybackListPrefetch } from '../services/PlaybackListPrefetch';
+import { PlaybackViewportFrameCallback } from '../utils/PlaybackViewportFrameCallback';
 
 @Component({ freezeWhenInactive: true })
 export struct DiscoverPage {
+  private revealedCardIds: Set<string> = new Set<string>();
   @StorageLink('pageWallpaperEnabled') pageWallpaperEnabled: boolean = false;
   // ★ 由父组件传入，供 Scroll 组件和 HdsNavigation.bindToScrollable 使用
   externalScroller: Scroller = new Scroller();
@@ -48,7 +51,9 @@ export struct DiscoverPage {
   @StorageLink('cardFeedbackRevision') @Watch('onCardFeedbackChange') feedbackRevision: number = 0;
 
   private onCardFeedbackChange(): void {
-    this.dataSource.removeItems(item => VideoCardFeedback.isDismissed(item.id, item.ownerMid));
+    if (this.dataSource.removeItems(item => VideoCardFeedback.isDismissed(item.id, item.ownerMid)) > 0) {
+      this.resetPlaybackViewportAfterRemoval();
+    }
   }
   @State private contentWidth: number = 360;
   private pageSize: number = 20;
@@ -57,8 +62,9 @@ export struct DiscoverPage {
   private playbackListPrefetch: PlaybackListPrefetch = new PlaybackListPrefetch(() => this.isPageActive &&
     AppStorage.get<boolean>('homeFeedActive') === true && AppStorage.get<number>('homeChannelIndex') === 3,
     () => 'home:popular');
-  private playbackVisibleIds: Set<string> = new Set();
+  private playbackVisibleIndexes: Set<number> = new Set();
   private playbackFirstIndex: number = 0;
+  private playbackPrefetchScheduled: boolean = false;
   @StorageLink('homeFeedActive') @Watch('syncPlaybackListPrefetch') playbackHomeActive: boolean = false;
   @StorageLink('homeChannelIndex') @Watch('syncPlaybackListPrefetch') playbackHomeChannel: number = 2;
 
@@ -68,12 +74,31 @@ export struct DiscoverPage {
       return;
     }
     const items = this.dataSource.getRawItems();
-    const first = items.findIndex((item: RecommendItem) => this.playbackVisibleIds.has(item.id));
-    if (first >= 0) this.playbackFirstIndex = first;
-    const start = Math.max(0, Math.min(this.playbackFirstIndex, items.length - 1));
-    const visible = items.filter((item: RecommendItem) => this.playbackVisibleIds.has(item.id));
+    const visibleIndexes = Array.from(this.playbackVisibleIndexes).sort((left: number, right: number) => left - right);
+    if (visibleIndexes.length > 0) this.playbackFirstIndex = visibleIndexes[0];
+    const start = Math.max(0, Math.min(this.playbackFirstIndex, Math.max(0, items.length - 1)));
+    const visible: RecommendItem[] = [];
+    for (const index of visibleIndexes) {
+      const item = items[index];
+      if (item !== undefined) visible.push(item);
+    }
     this.playbackListPrefetch.updateViewport(visible, items.slice(start, start + 8),
       AppStorage.get<number>('defaultVideoQn') ?? 116);
+  }
+
+  private schedulePlaybackListPrefetch(): void {
+    if (this.playbackPrefetchScheduled) return;
+    this.playbackPrefetchScheduled = true;
+    this.getUIContext().postFrameCallback(new PlaybackViewportFrameCallback(() => {
+      this.playbackPrefetchScheduled = false;
+      this.syncPlaybackListPrefetch();
+    }));
+  }
+
+  private resetPlaybackViewportAfterRemoval(): void {
+    this.playbackVisibleIndexes.clear();
+    this.playbackFirstIndex = 0;
+    this.schedulePlaybackListPrefetch();
   }
 
   // 底部弹窗相关状态
@@ -135,8 +160,9 @@ export struct DiscoverPage {
   }
 
   private onScrollToTop() {
+    if (!AppStorage.get<boolean>('homeFeedActive') || AppStorage.get<number>('homeChannelIndex') !== 3) return;
     if (this.externalScroller) {
-      this.externalScroller.scrollTo({ xOffset: 0, yOffset: 0, animation: { duration: this.da ? 0 : 300 } });
+      this.externalScroller.scrollToIndex(0, !this.da, ScrollAlign.START);
     }
   }
 
@@ -219,7 +245,7 @@ export struct DiscoverPage {
     const filteredItems = UserBehaviorService.filterBlockedUploadersOnly(newItems);
     if (filteredItems.length > 0) {
       if (refresh) {
-        this.playbackVisibleIds.clear();
+        this.playbackVisibleIndexes.clear();
         this.playbackFirstIndex = 0;
         this.dataSource.reloadItems(filteredItems);
       } else {
@@ -354,14 +380,18 @@ export struct DiscoverPage {
    * ⭐ 从列表中移除单个视频
    */
   private removeVideoFromList(bvid: string) {
-    this.dataSource.removeItem((item: RecommendItem) => item.id === bvid);
+    if (this.dataSource.removeItem((item: RecommendItem) => item.id === bvid)) {
+      this.resetPlaybackViewportAfterRemoval();
+    }
   }
 
   /**
    * ⭐ 移除某UP主的所有视频
    */
   private removeVideosByUploader(mid: string) {
-    this.dataSource.removeItems((item: RecommendItem) => item.ownerMid === mid);
+    if (this.dataSource.removeItems((item: RecommendItem) => item.ownerMid === mid) > 0) {
+      this.resetPlaybackViewportAfterRemoval();
+    }
   }
 
   @State refreshReady: boolean = false;
@@ -443,18 +473,26 @@ export struct DiscoverPage {
       // Keep the viewport full-height; the header clearance scrolls with the items.
       List({ scroller: this.externalScroller, space: 0 }) {
         ListItemGroup({ footer: this.listFooter }) {
-          LazyForEach(this.dataSource, (item: RecommendItem) => {
-            ListItem() { this.VideoCard(item) }
+          LazyForEach(this.dataSource, (item: RecommendItem, index: number) => {
+            ListItem() {
+              HomeChannelCardEntrance({
+                cardKey: item.id, gridId: 'home-popular-grid',
+                channelIndex: 3, revealedCardIds: this.revealedCardIds
+              }) {
+                this.VideoCard(item)
+              }
+            }
               .width(Math.max(0, (this.contentWidth - 24 - (this.columnCount - 1) * this.cardListMargin) / this.columnCount))
               .onVisibleAreaChange([0], (visible: boolean) => {
-                if (visible) this.playbackVisibleIds.add(item.id);
-                else this.playbackVisibleIds.delete(item.id);
-                if (visible || this.playbackVisibleIds.size > 0) this.syncPlaybackListPrefetch();
+                if (visible) this.playbackVisibleIndexes.add(index);
+                else this.playbackVisibleIndexes.delete(index);
+                if (visible || this.playbackVisibleIndexes.size > 0) this.schedulePlaybackListPrefetch();
               })
           }, (item: RecommendItem) => item.id)
         }
       }
       .lanes(this.columnCount, this.cardListMargin)
+      .id('home-popular-grid')
       .contentStartOffset(homeHeaderTopInset(this.statusBarHeight, this.hideStatusBar, this.homeSearchRowHeight))
       .padding({ left: 12, right: 12 })
       .width('100%').height('100%')
@@ -462,11 +500,13 @@ export struct DiscoverPage {
       .scrollBar(BarState.Off).edgeEffect(EdgeEffect.Spring)
       .onWillScroll((yOffset: number, _state: ScrollState, source: ScrollSource) => {
         if (!AppStorage.get<boolean>('homeFeedActive') || yOffset === 0 || AppStorage.get<number>('homeChannelIndex') !== 3) return;
-        const absoluteOffset = this.externalScroller.currentOffset().yOffset;
-        this.homeScrollOffset = absoluteOffset;
-        AppStorage.set('homeScrollOffset', absoluteOffset);
         const hidden = this.barScrollTracker.update(yOffset, source);
         if (hidden !== undefined) AppStorage.set('homeBarsHidden', hidden);
+      })
+      .onDidScroll(() => {
+        if (!AppStorage.get<boolean>('homeFeedActive') || AppStorage.get<number>('homeChannelIndex') !== 3) return;
+        const offset = Math.max(0, this.externalScroller.currentOffset().yOffset);
+        if (this.homeScrollOffset !== offset) this.homeScrollOffset = offset;
       })
       .onReachEnd(() => {
         if (!this.isLoadingMore && !this.isLoading && !this.isRefreshing && this.hasMore) this.loadMore();

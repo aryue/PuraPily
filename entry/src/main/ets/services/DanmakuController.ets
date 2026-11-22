@@ -70,12 +70,9 @@ export class DanmakuController {
   // 帧间增量时间：每帧按真实时间差推进弹幕位置，独立于currentTime的更新频率
   private lastFrameTimestamp: number = 0
 
-  // 渲染定时器
+  // 空屏轮询与不支持 displaySync 时的帧回退共用一个定时器。
   private renderTimer: number = 0
-  private lastRenderTime: number = 0
-  // ⭐ 渲染自调度链是否存活。必须与 renderTimer 分开记录：
-  //   renderTimer 是 setTimeout 返回的 id，链终止后这个值【不会被清零】，
-  //   若只靠它判断"是否已在渲染"，链一旦停掉就永远无法重启（见 startRendering 注释）。
+  private renderTimerDelay: number = 0
   private renderActive: boolean = false
 
   // ⭐ vsync 帧驱动（取代原来的 setTimeout(16) 自调度链）。
@@ -86,8 +83,7 @@ export class DanmakuController {
   private frameSync: displaySync.DisplaySync | null = null
   // displaySync 不可用（老 SDK / 极端情况下 create 抛错）时退回定时器驱动，行为与改造前一致
   private frameSyncUnavailable: boolean = false
-  // 空闲（无可见弹幕）扫描节流：vsync 每帧都扫分桶纯属浪费，250ms 一次足够
-  private nextIdleScanAt: number = 0
+  private frameSyncRunning: boolean = false
 
 
   // 统计信息
@@ -142,7 +138,9 @@ export class DanmakuController {
     this.cachedCandidates = []
     this.timeBuckets.clear()
     this.lastUpdateTime = -1
-    
+    this.renderer.render(this.visibleDanmaku, this.currentTime, 0)
+    this.reconcileFrameDriver()
+
     this.cid = cid
     this.aid = aid
     this.videoDuration = duration
@@ -365,6 +363,13 @@ export class DanmakuController {
       }
       bucket.push(item)
     }
+
+    // 新分段可能包含当前位置的弹幕，即使播放时间暂时不变也要使候选缓存失效。
+    this.cachedCandidates = []
+    if (this.renderActive && this.config.enable && this.visibleDanmaku.length === 0) {
+      this.updateVisibleDanmaku()
+      this.reconcileFrameDriver()
+    }
   }
 
   /**
@@ -509,14 +514,17 @@ export class DanmakuController {
     //   阈值取 5 秒（而不是 2 秒）：正常播放的 timeUpdate 间隔通常 100ms~1s，
     //   但卡顿时可能拉长到数秒，阈值太小会把卡顿误判成 seek、把弹幕反复清空。
     const prev = this.currentTime
+    this.currentTime = time
     if (prev > 0 && Math.abs(time - prev) > 5000) {
       this.resetScrollingState()
+      this.renderer.render(this.visibleDanmaku, this.currentTime, 0)
+      this.lastFrameTimestamp = 0
+      this.runFrame(true)
     }
-
-    this.currentTime = time
 
     // 检查是否需要加载新分段
     await this.checkSegmentLoading()
+    if (time !== this.currentTime) return;
 
     // 更新轨道状态（释放过期轨道）
     this.trackManager.updateTracks(time)
@@ -532,9 +540,9 @@ export class DanmakuController {
       this.startRendering()
     }
 
-    // 在时间变化时更新可见弹幕列表，而非每帧重算
-    // 避免 filter + track assignment 在 render 循环（60fps）中反复执行
+    // 播放时钟变化立即检查新弹幕；250ms 轮询只补足没有时间回调的空屏间隔。
     this.updateVisibleDanmaku()
+    this.reconcileFrameDriver()
   }
 
   /**
@@ -841,172 +849,130 @@ export class DanmakuController {
     this.stats.totalCount = this.allDanmaku.length
   }
 
-  /**
-   * 开始渲染
-   * vsync 帧驱动：有可见弹幕时每帧推进并重绘；无弹幕时按 250ms 节流扫描（空屏不重绘）
-   */
   startRendering(): void {
-    // ⚠️ 这里原先判断的是 `if (this.renderTimer) return`，而 renderTimer 是 setTimeout 的 id，
-    //    自调度链一旦终止，renderTimer 仍留着上一次的旧 id（非 0）→ 本方法会永远直接 return，
-    //    渲染链再也无法恢复。实测后果就是：视频一直在播、updateTime 每秒触发 10 次，
-    //    但画布不再重绘 —— 停在 x=canvasWidth 的弹幕永远滞留在右边缘（"右侧挤成一堆"），
-    //    同时它们把每条轨道判成"放不下"，后续弹幕全被丢弃（"有时没有弹幕"）。
-    //    改用独立的 renderActive 标志判断，保证链停掉后仍可重新拉起。
-    if (this.renderActive) {
-      return
-    }
+    if (this.renderActive) return;
+    this.isPlaying = true
+    if (!this.config.enable) return;
 
     this.renderActive = true
-    this.isPlaying = true
-    this.lastRenderTime = Date.now()
-    this.lastFrameTimestamp = 0  // 重置帧时间，避免恢复播放时产生大dt跳帧
-    this.nextIdleScanAt = 0      // 首帧立刻扫一次可见列表（恢复播放时不用等 250ms）
+    this.lastFrameTimestamp = 0
+    if (this.visibleDanmaku.length === 0) {
+      this.runFrame(true)
+    } else {
+      this.reconcileFrameDriver()
+    }
 
-    this.startFrameDriver()
-
-    logInfo('[DanmakuController] 开始渲染 (vsync)')
+    logInfo('[DanmakuController] 开始渲染')
   }
 
   /**
-   * 启动帧驱动。首选 displaySync（跟随屏幕刷新，并显式声明 120Hz）；
-   * 拿不到时退回原来的 setTimeout 自调度链，保证任何设备上弹幕都还能动。
-   *
-   * ⚠️ 必须声明 expectedFrameRateRange：不声明时系统按 60Hz 给回调，
-   *    在 120Hz 屏上依然是"每 2 帧一跳"，等于没修。
+   * 有弹幕时首选 120Hz displaySync；空屏只保留 250ms 候选检查。
+   * 两条驱动链在切换前先停掉旧的一条，避免同时推进弹幕。
    */
-  private startFrameDriver(): void {
-    if (!this.frameSyncUnavailable) {
-      try {
-        if (this.frameSync === null) {
-          const sync = displaySync.create()
-          sync.setExpectedFrameRateRange({ min: 60, max: 120, expected: 120 })
-          sync.on('frame', this.onFrameTick)
-          this.frameSync = sync
-        }
-        this.frameSync.start()
-        return
-      } catch (e) {
-        this.frameSyncUnavailable = true
-        logWarn(`[DanmakuController] displaySync 不可用，退回定时器驱动: ${JSON.stringify(e)}`)
-      }
-    }
-    this.scheduleNextFrame()
-  }
-
-  /** vsync 帧回调：帧里任何异常都不能中断驱动链（链一断就是"弹幕整体静止"） */
-  private onFrameTick = (_info: displaySync.IntervalInfo): void => {
-    if (!this.renderActive || !this.isPlaying || !this.config.enable) {
+  private reconcileFrameDriver(): void {
+    if (!this.renderActive) return;
+    if (!this.config.enable) {
+      this.renderActive = false
+      this.stopFrameSync()
+      this.cancelRenderTimer()
       return
     }
+
+    if (this.visibleDanmaku.length === 0) {
+      this.stopFrameSync()
+      if (this.renderTimerDelay !== 250) {
+        // 末条弹幕可能是从播放时间回调剔除的，交给 renderer 的脏标记清掉上一帧。
+        this.renderer.render(this.visibleDanmaku, this.currentTime, 0)
+      }
+      this.lastFrameTimestamp = 0
+      this.scheduleRenderTimer(250)
+      return
+    }
+    if (this.frameSyncRunning) return;
+    if (!this.frameSyncUnavailable) {
+      this.cancelRenderTimer()
+      if (this.startFrameSync()) return;
+    }
+    this.scheduleRenderTimer(16)
+  }
+
+  private startFrameSync(): boolean {
+    if (this.frameSyncUnavailable) return false;
     try {
-      this.tick()
+      if (this.frameSync === null) {
+        this.frameSync = displaySync.create()
+        this.frameSync.setExpectedFrameRateRange({ min: 60, max: 120, expected: 120 })
+        this.frameSync.on('frame', this.onFrameTick)
+      }
+      this.frameSync.start()
+      this.frameSyncRunning = true
+      return true
+    } catch (e) {
+      this.frameSyncUnavailable = true
+      logWarn(`[DanmakuController] displaySync 不可用，退回定时器驱动: ${JSON.stringify(e)}`)
+      return false
+    }
+  }
+
+  private stopFrameSync(): void {
+    if (!this.frameSyncRunning) return;
+    this.frameSyncRunning = false
+    try {
+      this.frameSync?.stop()
+    } catch (e) {
+      logWarn(`[DanmakuController] 停止 vsync 驱动失败: ${JSON.stringify(e)}`)
+    }
+  }
+
+  private onFrameTick = (_info: displaySync.IntervalInfo): void => {
+    if (this.frameSyncRunning) this.runFrame(false)
+  }
+
+  private runFrame(checkCandidates: boolean): void {
+    try {
+      if (!this.renderActive || !this.config.enable) return;
+      if (checkCandidates) {
+        this.updateVisibleDanmaku()
+      } else if (this.visibleDanmaku.length > 0) {
+        this.render()
+      }
     } catch (e) {
       logError(`[DanmakuController] 渲染帧异常（已捕获，不影响后续帧）: ${JSON.stringify(e)}`)
+    } finally {
+      this.reconcileFrameDriver()
     }
   }
 
-  /**
-   * 一帧的实际工作。
-   *
-   * 空闲（屏上一条都没有）时不必每帧扫分桶：250ms 扫一次就够（原来 60fps 循环里的
-   * "空弹幕 250ms 低频轮询"就是这件事，换到 vsync 后由这里节流）。
-   */
-  private tick(): void {
-    const now = Date.now()
-    if (this.visibleDanmaku.length === 0) {
-      if (now < this.nextIdleScanAt) {
-        // 节流期间也要把帧时间跟上，否则下次真有弹幕时 dt 会一次性补上几百毫秒
-        this.lastFrameTimestamp = now
-        return
-      }
-      this.nextIdleScanAt = now + 250
-    }
-    this.render()
-  }
-
-  /**
-   * 调度下一帧（仅 displaySync 不可用时的兜底路径）
-   * 有可见弹幕：16ms（约60fps）流畅渲染
-   * 无可见弹幕：250ms 低频轮询，仅刷新可见列表检查新弹幕，避免 60fps 空转耗电
-   */
-  private scheduleNextFrame(): void {
-    // 走 displaySync 时不能再挂定时器，否则两条链同时推进弹幕（速度翻倍 + 画布互踩）
-    if (this.frameSync !== null && !this.frameSyncUnavailable) {
-      return
-    }
-    // 不再继续调度时必须把 renderActive 与 renderTimer 一并复位，
-    // 否则渲染链处于"已死但标志未清"的状态，之后永远无法重启。
-    if (!this.isPlaying || !this.config.enable) {
-      this.renderActive = false
+  private scheduleRenderTimer(delay: number): void {
+    if (this.renderTimer !== 0 && this.renderTimerDelay === delay) return;
+    this.cancelRenderTimer()
+    const timer = setTimeout(() => {
+      if (this.renderTimer !== timer) return;
       this.renderTimer = 0
-      return
-    }
-
-    const interval = this.visibleDanmaku.length > 0 ? 16 : 250
-
-    this.renderTimer = setTimeout(() => {
-      // ⭐ 帧回调必须包住异常：render() 里任何一处抛错都会中断自调度链，
-      //   而链中断是静默的（没有崩溃弹窗、日志里也看不到），排查成本极高。
-      //   catch 里只记录一次，finally 保证链继续往下走。
-      try {
-        this.tick()
-      } catch (e) {
-        logError(`[DanmakuController] 渲染帧异常（已捕获，不影响后续帧）: ${JSON.stringify(e)}`)
-      } finally {
-        this.scheduleNextFrame()
-      }
-    }, interval)
+      this.runFrame(delay === 250)
+    }, delay)
+    this.renderTimer = timer
+    this.renderTimerDelay = delay
   }
 
-  /**
-   * 停止渲染
-   */
+  private cancelRenderTimer(): void {
+    if (this.renderTimer !== 0) clearTimeout(this.renderTimer)
+    this.renderTimer = 0
+    this.renderTimerDelay = 0
+  }
+
   stopRendering(): void {
-    if (this.renderTimer) {
-      clearTimeout(this.renderTimer)
-      this.renderTimer = 0
-    }
-    // ⚠️ 必须显式 stop：不停的话暂停后回调照旧每帧进来（虽然有 isPlaying 守卫不画，
-    //    但白白占着 vsync 回调，且回前台恢复时 start() 会被重复调用）
-    if (this.frameSync !== null) {
-      try {
-        this.frameSync.stop()
-      } catch (e) {
-        logWarn(`[DanmakuController] 停止 vsync 驱动失败: ${JSON.stringify(e)}`)
-      }
-    }
-
     this.renderActive = false
     this.isPlaying = false
-    this.lastFrameTimestamp = 0  // 重置帧时间，避免恢复播放时产生大dt跳帧
-    // 注意：不清空画布，保留最后一帧弹幕，便于暂停时仍可见
-
+    this.cancelRenderTimer()
+    this.stopFrameSync()
+    this.lastFrameTimestamp = 0
+    // 暂停保留最后一帧弹幕。
     logInfo('[DanmakuController] 停止渲染')
   }
 
-  /**
-   * 执行渲染
-   */
   private render(): void {
-    if (!this.isPlaying || !this.config.enable) {
-      return
-    }
-
     const now = Date.now()
-
-    // 空弹幕（低频轮询模式）：只刷新可见列表检查新弹幕，不重绘画布
-    if (this.visibleDanmaku.length === 0) {
-      this.updateVisibleDanmaku()
-      if (this.visibleDanmaku.length === 0) {
-        // 仍无弹幕：清掉已滚出屏幕的残留画面（250ms 一次，成本可忽略）
-        this.renderer.render(this.visibleDanmaku, this.currentTime, 16)
-        this.lastFrameTimestamp = now  // 保持帧时间连续，恢复 60fps 时 dt 正常
-        return
-      }
-      // 刷新后有弹幕出现：fall through 走正常渲染
-      this.lastFrameTimestamp = now
-    }
-
     // 计算帧间增量时间(dt)：用真实时间差推进弹幕位置
     // 独立于 currentTime 的更新频率，保证60fps流畅滚动
     const dt = this.lastFrameTimestamp > 0 ? now - this.lastFrameTimestamp : 16
@@ -1021,7 +987,10 @@ export class DanmakuController {
     const startTime = now
 
     // 使用增量时间(dt)推进滚动位置，每帧移动固定像素量
-    this.renderer.render(this.visibleDanmaku, this.currentTime, cappedDt)
+    if (this.renderer.render(this.visibleDanmaku, this.currentTime, cappedDt) === false) {
+      this.visibleDanmaku = []
+      this.stats.displayedCount = 0
+    }
 
     // 更新统计信息
     this.stats.renderTime = Date.now() - startTime
@@ -1059,6 +1028,7 @@ export class DanmakuController {
 
     // 添加到可见列表
     this.visibleDanmaku.push(item)
+    this.reconcileFrameDriver()
 
     logInfo(`[DanmakuController] 添加弹幕: ${item.content}`)
   }
@@ -1164,6 +1134,7 @@ export class DanmakuController {
     this.stats.displayedCount = kept.length
     // dt=0：只重画，不推进位置
     this.renderer.render(kept, this.currentTime, 0)
+    this.reconcileFrameDriver()
   }
 
   /** 轨道类型（决定 y 的排布方向）：滚动/顶部自上而下，底部自下而上 */
@@ -1183,6 +1154,7 @@ export class DanmakuController {
       this.renderer.getPerformanceStats().canvasHeight)
     this.filter.updateConfig(config)
     this.renderer.updateConfig(config)
+    this.reconcileFrameDriver()
 
     logInfo('[DanmakuController] 配置已更新')
   }
@@ -1214,6 +1186,7 @@ export class DanmakuController {
     })
     this.trackManager.clearTracks()
     this.renderer.clear()
+    this.reconcileFrameDriver()
 
     logInfo('[DanmakuController] 清空所有弹幕')
   }
