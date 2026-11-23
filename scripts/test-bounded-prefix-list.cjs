@@ -2,7 +2,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const ts = require('D:/Program Files/Huawei/DevEco Studio/sdk/default/openharmony/ets/build-tools/ets-loader/node_modules/typescript');
-let metered = false, requests = 0, viewport;
+let metered = false, requests = 0, viewport, now = 1000;
 const warmed = [], instances = [], settings = new Map();
 const imports = {
   '../utils/NetworkGate': { NetworkGate: { allowsBoundedPrefix: () => !metered } },
@@ -21,7 +21,7 @@ const imports = {
   '@kit.PerformanceAnalysisKit': { hilog: { debug() {} } }
 };
 const context = vm.createContext({ exports: {}, require: name => imports[name] || {},
-  AppStorage: { get: key => settings.get(key) },
+  AppStorage: { get: key => settings.get(key) }, Date: { now: () => now },
   setInterval: () => assert.fail('idle home must not schedule polling'),
   setTimeout: fn => { viewport = fn; return 1; }, clearTimeout() {} });
 vm.runInContext(ts.transpileModule(fs.readFileSync('entry/src/main/ets/services/PlaybackListPrefetch.ets', 'utf8'), {
@@ -62,5 +62,28 @@ const tick = () => new Promise(setImmediate);
   home.updateViewport(items.slice(1), items, 80);
   viewport(); await tick();
   assert.equal(instances.length, count, 'an unchanged viewport does not rewarm');
+  const next = { id: 'BVtest5', cid: 5 };
+  home.noteHomeScroll();
+  home.updateViewport([next], [], 80);
+  viewport(); await tick();
+  assert.ok(warmed.includes(next.id), 'scrolling can still prepare media prefixes');
+  assert.equal(instances.length, count, 'the decoder waits for the viewport to settle');
+  now += 200;
+  home.noteHomeScroll();
+  now += 120;
+  viewport(); await tick();
+  assert.equal(instances.length, count, 'continued scrolling postpones the same decoder start');
+  now += 200;
+  viewport(); await tick();
+  assert.equal(instances.at(-1), 5, 'the settled visible card gets a decoder');
+  const afterSettling = instances.length;
+  home.noteHomeScroll();
+  home.updateViewport([{ id: 'BVtest6', cid: 6 }], [], 80);
+  viewport(); await tick();
+  const pendingDecoder = viewport;
+  home.pause();
+  now += 400;
+  pendingDecoder(); await tick();
+  assert.equal(instances.length, afterSettling, 'pausing invalidates even a queued decoder timer');
   console.log('Bounded visible prefix scheduling passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });

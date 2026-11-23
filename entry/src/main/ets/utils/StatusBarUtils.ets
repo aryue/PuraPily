@@ -9,11 +9,12 @@ export class StatusBarUtils {
 
   /** Retain the measured inset when the indicator is hidden or a fullscreen page reports zero. */
   static updateNavigationInset(measured: number = 0): void {
-    if (measured > 0 && !(AppStorage.get<boolean>('hideNavigationIndicator') ?? false)) {
+    const hidden = AppStorage.get<boolean>('hideNavigationIndicator') ?? false;
+    const cached = AppStorage.get<number>('realNavIndicatorHeight') ?? 0;
+    if (measured > 0 && (!hidden || cached === 0)) {
       AppStorage.setOrCreate('realNavIndicatorHeight', measured);
     }
     const actual = AppStorage.get<number>('realNavIndicatorHeight') ?? measured;
-    const hidden = AppStorage.get<boolean>('hideNavigationIndicator') ?? false;
     AppStorage.setOrCreate('navIndicatorHeight', hidden ? Math.max(0, actual - 12) : actual);
   }
 
@@ -32,10 +33,9 @@ export class StatusBarUtils {
     const apply = async (): Promise<void> => {
       if (status) AppStorage.setOrCreate('statusBarHeight', StatusBarUtils.statusBarInset(win));
       const showIndicator = navigation && !(AppStorage.get<boolean>('hideNavigationIndicator') ?? false);
-      // 按栏分别设置，避免整体恢复系统栏时先把手势提示条打开。
+      // HarmonyOS 通过 navigationIndicator 控制小白条。
       if (!showIndicator) await win.setSpecificSystemBarEnabled('navigationIndicator', false, false);
       await win.setSpecificSystemBarEnabled('status', status, false);
-      await win.setSpecificSystemBarEnabled('navigation', navigation, false);
       if (showIndicator) await win.setSpecificSystemBarEnabled('navigationIndicator', true, false);
       if (status) AppStorage.setOrCreate('statusBarHeight', StatusBarUtils.statusBarInset(win));
     };

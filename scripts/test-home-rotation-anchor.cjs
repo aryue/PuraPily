@@ -153,6 +153,7 @@ function subject() {
     set: key => assert.notEqual(key, 'homeScrollOffset', 'the storage link owns offset publication')
   };
   events.p.barScrollTracker = { update() {} };
+  events.p.playbackListPrefetch = { noteHomeScroll() {} };
   events.p.showHomeCarouselPortrait = false;
   handlers.will(0, 10, 0, ctx.ScrollSource.DRAG); handlers.did();
   assert.equal(offsetReads, 1, 'reuse the settled offset for anchor geometry');

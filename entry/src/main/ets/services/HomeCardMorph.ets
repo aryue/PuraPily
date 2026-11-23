@@ -1,3 +1,4 @@
+import { CoverFlight } from '../components/HomeCoverNode';
 /**
  * HomeCardMorph — 首页卡片 ↔ 播放页 的封面一镜到底（几何插值 + 双页 live 叠层）。
  *
@@ -19,6 +20,7 @@
  */
 import { logInfo, logWarn } from '../utils/Logger';
 import { image } from '@kit.ImageKit';
+import { CubicBezierControlPoints } from '../utils/CubicBezierSplit';
 
 /** 视频画面矩形（vp）；只用于播放页把自己那端占位放到正确位置，几何飞行由框架完成。 */
 export interface HomeCardMorphRect {
@@ -59,6 +61,12 @@ export class HomeCardMorph {
    * 卡片 16:9 裁切变成视频真实画幅，返回收缩时也按同一比例回到卡片画幅。
    */
   static readonly ASPECT_PROGRESS: number = 0.42;
+  /** 返回时已走过的位移比例（0 < progress < 1）。到这里裁剪窗口贴合封面。 */
+  static readonly RETURN_JOIN_PROGRESS: number = 0.63;
+  static readonly CLIP_JOIN_PROGRESS: number = 1 - HomeCardMorph.RETURN_JOIN_PROGRESS;
+  /** 返回的整段速度曲线。当前交接位移下，约 79.5% 的时间用于收回详情区。 */
+  static readonly RETURN_CURVE: CubicBezierControlPoints = { x1: 0.608848, y1: 0, x2: 0.958848, y2: 1 };
+  static readonly CARD_RADIUS: number = 8;
   /**
    * 飞行路径终点：最终视频画面矩形 × 该比例（绕中心缩放）。
    * ⚠️ 它只是路径终点，**不是切换时刻**：切换在封面画幅就绪 / 首帧就绪时动态发生，
@@ -75,6 +83,7 @@ export class HomeCardMorph {
   static readonly ID_PREFIX: string = 'home-cover-morph-';
 
   /** 本次跳转是否已登记封面（首页 arm 后置 true，播放页 consume 后置 false） */
+  static liveCover?: CoverFlight;
   static armed: boolean = false;
   /** 首页 pageTransition 用的开关快照 */
   static exitInstant: boolean = false;
@@ -147,6 +156,7 @@ export class HomeCardMorph {
       logWarn('[HomeCardMorph] skip empty id/cover');
       return false;
     }
+    HomeCardMorph.liveCover = undefined;
     HomeCardMorph.releaseCoverPixel();
     HomeCardMorph.armed = true;
     HomeCardMorph.id = id;
@@ -179,6 +189,7 @@ export class HomeCardMorph {
       HomeCardMorph.id = '';
       HomeCardMorph.cardElementId = '';
       HomeCardMorph.cover = '';
+      HomeCardMorph.liveCover = undefined;
       HomeCardMorph.releaseCoverPixel();
     }
     return hit;
@@ -208,6 +219,7 @@ export class HomeCardMorph {
     HomeCardMorph.id = '';
     HomeCardMorph.cardElementId = '';
     HomeCardMorph.cover = '';
+    HomeCardMorph.liveCover = undefined;
     HomeCardMorph.releaseCoverPixel();
     HomeCardMorph.from = undefined;
     HomeCardMorph.playCount = 0;

@@ -6,12 +6,14 @@ import { PageWallpaper } from '../components/PageWallpaper';
 import { FloatingVideoTransition } from '../services/FloatingVideoTransition';
 import { VideoListItem } from '../components/VideoListItem';
 import { VideoCardFeedback } from '../services/VideoCardFeedback';
+import { resizeImageUrl } from '../utils/ImageUrl';
 // WatchHistoryPage.ets - 观看历史页面
 import { router, mediaquery, window, LengthMetrics, curves } from '@kit.ArkUI';
 import { logInfo, logWarn, logError } from '../utils/Logger';
 import { common } from '@kit.AbilityKit';
 import { preferences } from '@kit.ArkData';
 import { WatchHistoryItem } from '../model/WatchHistoryItem';
+import { FirstScreenDataSource } from '../model/FirstScreenDataSource';
 import { WatchHistoryHelper } from '../model/WatchHistoryHelper';
 import { getVideoInfo, getPgcEpIdByBvid, prefetchVideoPlayback } from '../api/BilibiliApi';
 import { VibrateUtils } from '../utils/VibrateUtils';
@@ -33,24 +35,6 @@ class HistoryFirstFrameCallback extends FrameCallback {
     if (this.done) return;
     this.done = true;
     this.start();
-  }
-}
-
-class HistoryDataSource implements IDataSource {
-  private items: WatchHistoryItem[] = [];
-  private listeners: DataChangeListener[] = [];
-  totalCount(): number { return this.items.length; }
-  getData(index: number): WatchHistoryItem { return this.items[index]; }
-  registerDataChangeListener(listener: DataChangeListener): void {
-    if (this.listeners.indexOf(listener) < 0) this.listeners.push(listener);
-  }
-  unregisterDataChangeListener(listener: DataChangeListener): void {
-    const index = this.listeners.indexOf(listener);
-    if (index >= 0) this.listeners.splice(index, 1);
-  }
-  reload(items: WatchHistoryItem[]): void {
-    this.items = items;
-    this.listeners.forEach((listener: DataChangeListener) => listener.onDataReloaded());
   }
 }
 
@@ -116,8 +100,10 @@ struct WatchHistoryPage {
   @State showSearchBar: boolean = false;  // 是否显示搜索栏
   @State searchText: string = '';
   @State @Watch('onFilteredItemsChanged') filteredItems: WatchHistoryItem[] = [];
-  private historyDataSource: HistoryDataSource = new HistoryDataSource();
-  private onFilteredItemsChanged(): void { this.historyDataSource.reload(this.filteredItems); }
+  private historyDataSource: FirstScreenDataSource<WatchHistoryItem> = new FirstScreenDataSource<WatchHistoryItem>();
+  private onFilteredItemsChanged(): void {
+    this.historyDataSource.replaceForViewport(this.filteredItems, 2, this.getUIContext());
+  }
   @State showClearButton: boolean = false; // 是否显示清除按钮
   @State searchBarOpacity: number = 0;  // 搜索栏透明度（动画）
   @State searchBarTranslateY: number = -20;  // 搜索栏垂直位移（动画）
@@ -653,7 +639,7 @@ struct WatchHistoryPage {
   @Builder
   HistoryItemBuilder(item: WatchHistoryItem, index: number) {
     VideoListItem({
-      title: item.title, cover: item.coverUrl, duration: item.totalDuration,
+      title: item.title, cover: resizeImageUrl(item.coverUrl, 640), duration: item.totalDuration,
       videoId: item.isPgc ? '' : item.bvid, ownerMid: String(item.ownerMid),
       owner: item.ownerName, dateText: item.watchedAtText,
       progress: item.totalDuration > 0 ? item.playProgress / item.totalDuration * 100 : -1,

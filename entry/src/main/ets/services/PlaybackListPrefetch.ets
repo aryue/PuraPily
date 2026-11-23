@@ -6,6 +6,8 @@ import { IjkWarmPool } from './IjkWarmPool';
 import { RecommendItem } from '../model/RecommendItem';
 import { PlaybackProgress } from '../utils/PlaybackProgress';
 
+const HOME_INSTANCE_IDLE_MS: number = 320;
+
 interface PlaybackListJob {
   item: RecommendItem;
   key: string;
@@ -33,6 +35,8 @@ export class PlaybackListPrefetch {
   private visibleIds: Set<string> = new Set();
   private viewportTimer: number = -1;
   private viewportOrder: string[] = [];
+  private homeInstanceReadyAt: number = 0;
+  private homeInstanceTimer: number = -1;
 
   constructor(enabled: () => boolean = () => true, warmScene: () => string = () => 'home') {
     this.enabled = enabled;
@@ -60,6 +64,22 @@ export class PlaybackListPrefetch {
       }
       this.update([...ordered, ...nearby], qn, 0, ordered.length);
     }, 100);
+  }
+
+  noteHomeScroll(): void {
+    this.homeInstanceReadyAt = Date.now() + HOME_INSTANCE_IDLE_MS;
+  }
+
+  private homeInstanceMayStart(): boolean {
+    const delay = this.homeInstanceReadyAt - Date.now();
+    if (delay <= 0) return true;
+    if (this.homeInstanceTimer === -1) {
+      this.homeInstanceTimer = setTimeout(() => {
+        this.homeInstanceTimer = -1;
+        this.prepareVisiblePrefixes();
+      }, delay);
+    }
+    return false;
   }
 
   private scatter(items: RecommendItem[]): RecommendItem[] {
@@ -110,6 +130,9 @@ export class PlaybackListPrefetch {
   pause(): void {
     if (this.viewportTimer !== -1) clearTimeout(this.viewportTimer);
     this.viewportTimer = -1;
+    if (this.homeInstanceTimer !== -1) clearTimeout(this.homeInstanceTimer);
+    this.homeInstanceTimer = -1;
+    this.homeInstanceReadyAt = 0;
     this.visibleIds.clear();
     this.viewportOrder = [];
     this.epoch++;
@@ -163,7 +186,7 @@ export class PlaybackListPrefetch {
       const source = this.sources.get(key);
       if (!source) continue;
       const preparePrefix = !this.prefixAttempted.has(key);
-      const prepareInstance = instanceCandidate && !this.instanceAttempted.has(key);
+      const prepareInstance = instanceCandidate && !this.instanceAttempted.has(key) && this.homeInstanceMayStart();
       if (!preparePrefix && !prepareInstance) continue;
       const resumeSec = PlaybackProgress.prewarmPosition(item.id, item.cid || 0, source.lastPlayTimeMs ?? 0);
       // Each candidate gets one media attempt while it stays in the prefetch window.

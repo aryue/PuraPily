@@ -1,3 +1,4 @@
+import { FirstScreenDataSource } from '../model/FirstScreenDataSource';
 import { FollowGlassButton } from '../components/FollowGlassButton';
 import { HeaderGlassControl } from '../components/HeaderGlassControl';
 import { NativeGlassInput } from '../components/NativeGlassInput';
@@ -16,6 +17,7 @@ import { router, mediaquery, window } from '@kit.ArkUI';
 import { GlassMaterial } from '../utils/GlassMaterial';
 import { deviceInfo } from '@kit.BasicServicesKit';
 import { LengthMetrics } from '@kit.ArkUI';
+import { FrameCallback } from '@ohos.arkui.UIContext';
 import { logInfo, logWarn, logError, errMsg } from '../utils/Logger';
 import { common } from '@kit.AbilityKit';
 import { pasteboard } from '@kit.BasicServicesKit';
@@ -49,6 +51,19 @@ const ORDER_OPTIONS: OrderOption[] = [
   { key: 'click', label: '最多播放' },
   { key: 'stow', label: '最多收藏' }
 ];
+
+class SpaceShellFrameCallback extends FrameCallback {
+  private readonly prepare: () => void;
+
+  constructor(prepare: () => void) {
+    super();
+    this.prepare = prepare;
+  }
+
+  onIdle(_timeLeftInNano: number): void {
+    this.prepare();
+  }
+}
 
 /**
  * 图片 URL 追加压缩参数（hdslb 图床）：列表加载缩略图，避免直接解码原图导致内存峰值过高闪退
@@ -114,7 +129,8 @@ struct UpSpacePage {
 
   // 加载状态
   @State isInfoLoaded: boolean = false;
-  @State initialSpaceReady: boolean = false;
+  @State @Watch('syncSpaceLists') initialSpaceReady: boolean = false;
+  @State private spaceShellMounted: boolean = false;
   @State isListLoaded: boolean = false;
   @State loadError: string = '';
 
@@ -125,9 +141,12 @@ struct UpSpacePage {
   @State relationStat: UpRelationStat | null = null;
 
   // 视频列表
-  @State videos: UpSpaceVideoItem[] = [];
-  @State videoPairs: UpSpaceVideoItem[][] = []; // A1 竖屏 2 列网格：两两分组
-  @State videoTriples: UpSpaceVideoItem[][] = []; // A1 横屏 3 列网格：三三分组
+  private readonly spaceVideoSource = new FirstScreenDataSource<UpSpaceVideoItem>();
+  private readonly spaceGridSource = new FirstScreenDataSource<UpSpaceVideoItem[]>();
+  private readonly spaceDynamicSource = new FirstScreenDataSource<SpaceDynamicItem>();
+  @State @Watch('syncSpaceLists') videos: UpSpaceVideoItem[] = [];
+  @State @Watch('syncSpaceLists') videoPairs: UpSpaceVideoItem[][] = []; // A1 竖屏 2 列网格：两两分组
+  @State @Watch('syncSpaceLists') videoTriples: UpSpaceVideoItem[][] = []; // A1 横屏 3 列网格：三三分组
   @State currentPage: number = 1;
   @State totalCount: number = -1; // -1 表示尚未取得统计，不能冒充真实的零投稿
   @State hasMore: boolean = true;
@@ -135,7 +154,16 @@ struct UpSpacePage {
   @State order: string = 'pubdate'; // 排序：pubdate最新/click播放/stow收藏
 
   // 动态列表
-  @State dynamics: SpaceDynamicItem[] = [];
+  @State @Watch('syncSpaceLists') dynamics: SpaceDynamicItem[] = [];
+
+  private syncSpaceLists(): void {
+    if (!this.initialSpaceReady) return;
+    const ui = this.getUIContext();
+    if (this.spaceVideoSource.getRawItems() !== this.videos) this.spaceVideoSource.replaceForViewport(this.videos, 2, ui);
+    const grid = this.isLandscape ? this.videoTriples : this.videoPairs;
+    if (this.spaceGridSource.getRawItems() !== grid) this.spaceGridSource.replaceForViewport(grid, 1, ui);
+    if (this.spaceDynamicSource.getRawItems() !== this.dynamics) this.spaceDynamicSource.replaceForViewport(this.dynamics, 1, ui);
+  }
   @State dynOffset: string = '';
   @State dynHasMore: boolean = false;
   @State dynLoading: boolean = false;
@@ -198,7 +226,7 @@ struct UpSpacePage {
   @State previewOriginY: number = 0;
   @State previewOriginW: number = 0;
   @State previewOriginH: number = 0;
-  @State isLandscape: boolean = false;
+  @State @Watch('syncSpaceLists') isLandscape: boolean = false;
   // ⭐ 状态栏高度走 EntryAbility 维护的全局值（vp，0=隐藏/横屏；本页自测 getWindowAvoidArea 实测会拿到 0）
   @StorageLink('statusBarHeight') statusBarHeight: number = 40;
   // ⭐ 关注状态
@@ -235,6 +263,9 @@ struct UpSpacePage {
     // 但全局值可能被"全屏播放退出 / 上次横屏持久化"等路径留成 0（状态栏其实可见）⇒ 竖屏进页时按 SearchPage 同口径自愈一次
     this.refreshStatusBarHeight();
     this.listenOrientationChange();
+    this.getUIContext().postFrameCallback(new SpaceShellFrameCallback(() => {
+      if (this.isPageActive && !this.initialSpaceReady) this.spaceShellMounted = true;
+    }));
     // 加载数据
     await this.loadAllData();
   }
@@ -303,9 +334,7 @@ struct UpSpacePage {
       this.loadError = '资料加载失败，点击重试';
       return;
     }
-    this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 180, curve: Curve.EaseOut }, () => {
-      this.initialSpaceReady = true;
-    });
+    this.initialSpaceReady = true;
   }
 
   private async loadProfileData(): Promise<void> {
@@ -790,37 +819,43 @@ struct UpSpacePage {
       }
 
       Stack({ alignContent: Alignment.TopStart }) {
-        if (this.initialSpaceReady) {
+        // Prepare the actual layout under the loading view. Keep unknown profile
+        // values hidden and reuse this same subtree when the response is ready.
+        if (this.spaceShellMounted || this.initialSpaceReady) {
           Stack({ alignContent: Alignment.TopStart }) {
-      if (this.isLandscape) {
-        Row() {
-          this.railSection()
-          Column() {
-            this.sectionRow(0, 0)
-            this.spaceTabPager()
-          }.layoutWeight(1).height('100%')
-        }.width('100%').height('100%')
-          .padding({ top: this.statusBarHeight })
-      } else {
-        // 共用可折叠资料区，三页只横向推拉内容；列表通过嵌套滚动收起/展开资料区。
-        Scroll(this.spaceHeaderScroller) {
-          Column() {
-            this.spaceHeader()
-            this.sectionRow(0, 0)
-            this.spaceTabPager()
-          }.width('100%')
-        }.width('100%').height('100%').scrollBar(BarState.Off)
-          .edgeEffect(EdgeEffect.None)
-          .onDidScroll(() => {
-            this.videoSticky = this.spaceHeaderScroller.currentOffset().yOffset >=
-              Math.max(0, this.headerH - this.statusBarHeight - 44) - 1;
-          })
-        Column() { this.spaceToolbar() }.width('100%')
-      }
-
+            if (this.isLandscape) {
+              Row() {
+                this.railSection()
+                Column() {
+                  this.sectionRow(0, 0)
+                  this.spaceTabPager()
+                }.layoutWeight(1).height('100%')
+              }.width('100%').height('100%')
+                .padding({ top: this.statusBarHeight })
+            } else {
+              // 列表通过嵌套滚动收起/展开共用资料区，三页只横向推拉内容。
+              Scroll(this.spaceHeaderScroller) {
+                Column() {
+                  this.spaceHeader()
+                  this.sectionRow(0, 0)
+                  this.spaceTabPager()
+                }.width('100%')
+              }.width('100%').height('100%').scrollBar(BarState.Off)
+                .edgeEffect(EdgeEffect.None)
+                .onDidScroll(() => {
+                  this.videoSticky = this.spaceHeaderScroller.currentOffset().yOffset >=
+                    Math.max(0, this.headerH - this.statusBarHeight - 44) - 1;
+                })
+            }
           }.width('100%').height('100%')
-            .transition(TransitionEffect.OPACITY /* MOTION-EXEMPT: 裸 TransitionEffect 无 AnimateParam 对象，补动画参数会改默认时长，须真机确认 */)
-        } else {
+            .opacity(this.initialSpaceReady ? 1 : 0)
+            .animation({
+              expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 180, curve: Curve.EaseOut
+            })
+            .hitTestBehavior(this.initialSpaceReady ? HitTestMode.Default : HitTestMode.None)
+            .accessibilityLevel(this.initialSpaceReady ? 'auto' : 'no-hide-descendants')
+        }
+        if (!this.initialSpaceReady) {
           Column({ space: 12 }) {
             if (!this.loadError) {
               LoadingProgress().width(28).height(28).color(this.customThemeColor)
@@ -828,8 +863,12 @@ struct UpSpacePage {
             Text(this.loadError || '加载中…').fontSize(13).fontColor(this.muted())
               .onClick(() => { if (this.loadError) this.loadAllData(); })
           }.width('100%').height('100%').justifyContent(FlexAlign.Center)
-            .transition(TransitionEffect.OPACITY /* MOTION-EXEMPT: 裸 TransitionEffect 无 AnimateParam 对象，补动画参数会改默认时长，须真机确认 */)
+            .transition(TransitionEffect.OPACITY.animation({
+              expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 180, curve: Curve.EaseOut
+            }))
             .id('space-initial-loading')
+        }
+        if (!this.isLandscape || !this.initialSpaceReady) {
           Column() { this.spaceToolbar() }.width('100%')
         }
       }.width('100%').height('100%')
@@ -870,7 +909,7 @@ struct UpSpacePage {
 
   private hasLoadedSpaceHeaderImage(): boolean {
     const imageUrl = this.spaceHeaderImage();
-    return imageUrl.length > 0 && this.loadedSpaceHeaderImage === imageUrl;
+    return this.initialSpaceReady && imageUrl.length > 0 && this.loadedSpaceHeaderImage === imageUrl;
   }
 
   @Builder
@@ -1170,7 +1209,8 @@ struct UpSpacePage {
         Math.max(120, this.spaceViewportHeight - this.statusBarHeight - 44 - 40))
       .onContentDidScroll((_selected: number, index: number, position: number, _length: number) => {
         this.spaceTabProgress = Math.max(0, Math.min(2, index - position));
-        if (this.spaceTabProgress > 0 && this.spaceTabProgress < 2 && !this.isDynLoaded && !this.dynLoading) {
+        if (this.initialSpaceReady && this.spaceTabProgress > 0 && this.spaceTabProgress < 2 &&
+          !this.isDynLoaded && !this.dynLoading) {
           this.loadDynamics('');
         }
       })
@@ -1412,7 +1452,7 @@ struct UpSpacePage {
                 .width('100%').textAlign(TextAlign.Center).padding(40)
             }
           } else {
-            ForEach(this.dynamics, (item: SpaceDynamicItem) => {
+            LazyForEach(this.spaceDynamicSource, (item: SpaceDynamicItem) => {
               ListItem() {
                 Row() { this.dynamicCard(item) }.width('100%').padding({ left: 14, right: 14 })
               }
@@ -1445,7 +1485,7 @@ struct UpSpacePage {
           } else if (this.videos.length === 0) {
             ListItem() { this.emptyVideos() }
           } else if (index === 0) {
-            ForEach(this.isLandscape ? this.videoTriples : this.videoPairs, (pair: UpSpaceVideoItem[]) => {
+            LazyForEach(this.spaceGridSource, (pair: UpSpaceVideoItem[]) => {
               ListItem() {
                 Row({ space: 10 }) {
                   Column() { this.gridVideoCard(pair[0]) }.layoutWeight(1)
@@ -1458,9 +1498,9 @@ struct UpSpacePage {
                   }
                 }.width('100%').alignItems(VerticalAlign.Top).padding({ left: 12, right: 12, bottom: 16 })
               }
-            }, (pair: UpSpaceVideoItem[]) => 'home-' + pair[0].bvid)
+            }, (pair: UpSpaceVideoItem[]) => 'home-' + pair.map(item => item.bvid).join(':'))
           } else {
-            ForEach(this.videos, (item: UpSpaceVideoItem) => {
+            LazyForEach(this.spaceVideoSource, (item: UpSpaceVideoItem) => {
               ListItem() { this.submissionVideoRow(item) }
             }, (item: UpSpaceVideoItem) => 'submission-' + item.bvid)
           }
@@ -1469,8 +1509,12 @@ struct UpSpacePage {
       }.width('100%').height('100%').padding({ top: index === 1 ? 8 : 0 })
         .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true }).cachedCount(4)
         .onReachEnd(() => {
-          if (index === 1) this.loadMoreDynamics();
-          else this.loadMore();
+          if (!this.initialSpaceReady) return;
+          if (index === 1) {
+            if (!this.spaceDynamicSource.isPublishing()) this.loadMoreDynamics();
+          } else if (!(index === 0 ? this.spaceGridSource : this.spaceVideoSource).isPublishing()) {
+            this.loadMore();
+          }
         })
         .nestedScroll({ scrollForward: NestedScrollMode.PARENT_FIRST, scrollBackward: NestedScrollMode.SELF_FIRST })
     }.width('100%').height('100%').onRefreshing(() => { this.onRefresh(); })
@@ -1515,7 +1559,7 @@ struct UpSpacePage {
       if (item.video) {
         Column() {
           Stack({ alignContent: Alignment.BottomStart }) {
-            Image(item.video.cover)
+            Image(resizeImageUrl(item.video.cover, 960)).autoResize(true)
               .width('100%')
               .height('100%')
               .objectFit(ImageFit.Cover)
@@ -1651,7 +1695,7 @@ struct UpSpacePage {
       if (item.orig) {
         Row() {
           if (item.orig.video) {
-            Image(item.orig.video.cover)
+            Image(resizeImageUrl(item.orig.video.cover, 480)).autoResize(true)
               .width(64).height(40)
               .objectFit(ImageFit.Cover)
               .borderRadius(6)
@@ -1861,7 +1905,7 @@ struct UpSpacePage {
       if (item.common) {
         Row() {
           if (item.common.cover) {
-            Image(item.common.cover)
+            Image(resizeImageUrl(item.common.cover, 480)).autoResize(true)
               .width(84).height(56)
               .objectFit(ImageFit.Cover)
               .borderRadius(6)

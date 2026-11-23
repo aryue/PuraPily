@@ -12,7 +12,10 @@ import { PageWallpaper } from '../components/PageWallpaper';
 import { FloatingVideoTransition } from '../services/FloatingVideoTransition';
 import { VideoListItem, videoListPublished } from '../components/VideoListItem';
 import { VideoCardFeedback } from '../services/VideoCardFeedback';
-import { router, curves, display } from '@kit.ArkUI';
+import { router, curves, display, LazyColumnLayout, LazyColumnLayoutAttribute, LazyVWaterFlowLayout,
+  LazyVWaterFlowLayoutAttribute, LengthMetrics } from '@kit.ArkUI';
+import { FirstScreenDataSource } from '../model/FirstScreenDataSource';
+import { resizeImageUrl } from '../utils/ImageUrl';
 import { logInfo, logWarn, logError } from '../utils/Logger';
 import { searchByType, searchLive, SearchType, SearchOrder, SEARCH_ORDER_KEYS, getSearchOrderLabel, getSearchTypeLabel, SearchTypeLabelMap, getFollowStatus, modifyFollow, prefetchVideoPlayback, prefetchPlayUrlsOnly } from '../api/BilibiliApi';
 import { fetchRecommendedLiveRooms, LiveFeedRoom } from '../api/LiveFeedApi';
@@ -66,7 +69,12 @@ struct SearchPage {
   private sceneVersion: number = 0;
   @State hasActiveSearch: boolean = false;  // 用户是否主动搜索过（0结果时留在搜索结果页，不回到初始页以避开ImmersiveLightWrapper崩溃）
   @State activeOrder: string = 'totalrank';
-  @State activeResults: RecommendItem[] = [];
+  private readonly resultDataSource = new FirstScreenDataSource<RecommendItem>();
+  @State @Watch('syncResultDataSource') activeResults: RecommendItem[] = [];
+
+  private syncResultDataSource(): void {
+    this.resultDataSource.replaceForViewport(this.activeResults, 2, this.getUIContext());
+  }
   @StorageLink('cardFeedbackRevision') @Watch('onCardFeedbackChange') feedbackRevision: number = 0;
 
   private onCardFeedbackChange(): void {
@@ -574,7 +582,6 @@ struct SearchPage {
       this.cachedResults.set(tab, this.activeResults);
       this.cachedPages.set(tab, this.activePage);
       this.cachedHasMore.set(tab, this.activeHasMore);
-      this.hideHistoryWithAnimation();
       if (tab === 'bili_user') await this.initFollowedUsers();
     } catch (error) {
       if (request !== this.searchRequestVersion) return;
@@ -1385,32 +1392,16 @@ struct SearchPage {
         .transition(TransitionEffect.translate({ x: -this.currentWindowW }) /* MOTION-EXEMPT: 裸 TransitionEffect 无 AnimateParam 对象，补动画参数会改默认时长，须真机确认 */)
       } else {
         Scroll(this.scroller) {
-          Column() {
+          LazyColumnLayout() {
             // 顶部占位恒定为「搜索栏 + 筛选栏整高」：筛选栏收起时，列表整体上移补齐这段空间，
             // 不再让占位跟着高度变化（本页高度类变更拿不到补间，会留下一条空白并单帧跳变）。
             Column()
               .width('100%')
               .height((this.hideStatusBar ? 0 : this.globalStatusBarHeight) + this.SEARCH_BAR_SPACER +
                 this.SEARCH_BAR_STACK_HEIGHT + this.getResultOptionsFullHeight())
-            Column() {
-              if (this.showSkeleton) {
-              // 骨架屏
-              WaterFlow() {
-                ForEach([0, 1, 2, 3, 4], (idx: number) => {
-                  FlowItem() { this.SkeletonCard(idx) }
-                })
-              }
-              .columnsTemplate(this.activeTab === 'live_user'
-                ? (this.isLandscape ? '1fr 1fr 1fr' : '1fr 1fr')
-                : (this.isLandscape ? '1fr 1fr' : '1fr'))
-              .columnsGap(this.cardListMargin)
-              .rowsGap(this.activeTab === 'video' || this.activeTab === 'media_bangumi' || this.activeTab === 'media_ft' ? 0 : (this.activeTab === 'bili_user' || this.activeTab === 'article' ? Math.max(8, this.cardListMargin) : this.cardListMargin))
-              .padding({ left: 14, right: 14, top: 4 })
-              .backgroundColor('transparent')
-
-            } else {
+            LazyColumnLayout() {
               // ────────── 直播搜索结果 — 主播区（折叠/展开） ──────────
-              if (this.activeTab === 'live_user' && this.liveStreamers.length > 0) {
+              if (!this.showSkeleton && this.activeTab === 'live_user' && this.liveStreamers.length > 0) {
                 Column() {
                   // 区头
                   Row() {
@@ -1437,7 +1428,7 @@ struct SearchPage {
                         ImmersiveLightWrapper({ radius: 18, materialStyle: 0, lightIntensity: 2.0 }) {
                           Row() {
                             if (streamer.ownerFace) {
-                              Image(streamer.ownerFace)
+                              Image(resizeImageUrl(streamer.ownerFace, 96)).autoResize(true)
                                 .width(28).height(28)
                                 .borderRadius(14)
                                 .objectFit(ImageFit.Cover)
@@ -1475,7 +1466,7 @@ struct SearchPage {
               }
 
               // ────────── 直播搜索结果 — 直播间区头 ──────────
-              if (this.activeTab === 'live_user' && this.activeResults.length > 0) {
+              if (!this.showSkeleton && this.activeTab === 'live_user' && this.activeResults.length > 0) {
                 Row() {
                   Text('直播间').fontSize(16).fontWeight(FontWeight.Bold)
                     .fontColor(this.isDarkMode ? Color.White : Color.Black)
@@ -1487,36 +1478,43 @@ struct SearchPage {
                 .padding({ left: 14, right: 14, bottom: 8 })
               }
 
-              // 搜索结果——竖屏单列 / 横屏双列
-              WaterFlow() {
-                ForEach(this.activeResults, (item: RecommendItem, index: number) => {
-                  FlowItem() {
-                    if (this.activeTab === 'video') {
-                      this.VideoCard(item, index)
-                    } else if (this.activeTab === 'bili_user') {
-                      this.UserCard(item)
-                    } else if (this.activeTab === 'article') {
-                      this.ArticleSearchCard(item)
-                    } else if (this.activeTab === 'live_user') {
-                      this.LiveSearchCard(item)
-                    } else if (this.activeTab === 'media_bangumi' || this.activeTab === 'media_ft') {
-                      this.VideoCard(item, index)
-                    } else {
-                      this.LiveSearchCard(item)
-                    }
-                  }
-                }, (item: RecommendItem) => item.id)
+              // 骨架与真实条目沿用同一个瀑布流，结果到达时只换数据节点。
+              LazyVWaterFlowLayout() {
+                if (this.showSkeleton) {
+                  ForEach([0, 1, 2, 3, 4], (index: number) => {
+                    Stack() { this.SkeletonCard(index) }.width('100%')
+                  }, (index: number) => index.toString())
+                } else {
+                  LazyForEach(this.resultDataSource, (item: RecommendItem, index: number) => {
+                    Stack() {
+                      if (this.activeTab === 'video') {
+                        this.VideoCard(item, index)
+                      } else if (this.activeTab === 'bili_user') {
+                        this.UserCard(item)
+                      } else if (this.activeTab === 'article') {
+                        this.ArticleSearchCard(item)
+                      } else if (this.activeTab === 'live_user') {
+                        this.LiveSearchCard(item)
+                      } else if (this.activeTab === 'media_bangumi' || this.activeTab === 'media_ft') {
+                        this.VideoCard(item, index)
+                      } else {
+                        this.LiveSearchCard(item)
+                      }
+                    }.width('100%')
+                  }, (item: RecommendItem, index: number) => this.activeTab + ':' + item.id + ':' + index)
+                }
               }
               .columnsTemplate(this.activeTab === 'live_user'
                 ? (this.isLandscape ? '1fr 1fr 1fr' : '1fr 1fr')
                 : (this.isLandscape ? '1fr 1fr' : '1fr'))
-              .columnsGap(this.cardListMargin)
-              .rowsGap(this.activeTab === 'video' || this.activeTab === 'media_bangumi' || this.activeTab === 'media_ft' ? 0 : (this.activeTab === 'bili_user' || this.activeTab === 'article' ? Math.max(8, this.cardListMargin) : this.cardListMargin))
+              .columnsGap(LengthMetrics.vp(this.cardListMargin))
+              .rowsGap(LengthMetrics.vp(this.activeTab === 'video' || this.activeTab === 'media_bangumi' || this.activeTab === 'media_ft'
+                ? 0 : (this.activeTab === 'bili_user' || this.activeTab === 'article' ? Math.max(8, this.cardListMargin) : this.cardListMargin)))
               .padding({ left: 14, right: 14, top: 4 })
               .backgroundColor('transparent')
 
               // ⭐ 空结果提示：搜索无结果时显示
-              if (this.activeResults.length === 0 && !this.isLoading) {
+              if (!this.showSkeleton && this.activeResults.length === 0 && !this.isLoading) {
                 Column() {
                   Text(this.searchError || '未找到相关内容')
                     .fontSize(16)
@@ -1528,7 +1526,7 @@ struct SearchPage {
               }
 
               // 加载更多指示器
-              if (this.isLoading) {
+              if (!this.showSkeleton && this.isLoading) {
                 Column() {
                   LoadingProgress()
                     .width(32).height(32)
@@ -1542,7 +1540,7 @@ struct SearchPage {
                 .alignItems(HorizontalAlign.Center)
                 .padding(24)
                 .width('100%')
-              } else if (!this.activeHasMore && this.activeResults.length > 0) {
+              } else if (!this.showSkeleton && !this.activeHasMore && this.activeResults.length > 0) {
                 Row() {
                   Divider().strokeWidth(1)
                     .color(this.isDarkMode ? '#444444' : '#E0E0E0')
@@ -1559,7 +1557,6 @@ struct SearchPage {
                 .width('100%')
               }
             }
-            }
           .opacity(this.contentOpacity)
           // 筛选栏收起时列表整体上移补齐那段空间；补间由 setResultOptionsHidden 的 animateTo 提供。
           .translate({ y: this.contentTranslateY - (1 - this.resultOptionsProgress) * this.getResultOptionsFullHeight() })
@@ -1575,7 +1572,8 @@ struct SearchPage {
       // 内容始终从搜索栏下方开始，避免短列表整体居中。
       .align(Alignment.Top)
       .onReachEnd(() => {
-        if (this.hasActiveSearch && this.activeResults.length > 0 && !this.isLoading && this.activeHasMore) {
+        if (this.hasActiveSearch && this.activeResults.length > 0 && !this.isLoading && this.activeHasMore &&
+          !this.resultDataSource.isPublishing()) {
           this.loadMore();
         }
       })
@@ -2164,7 +2162,7 @@ struct SearchPage {
 
     Row({ space: 12 }) {
       if (item.coverUrl) {
-        Image(item.coverUrl).width(120).height(80).objectFit(ImageFit.Cover).borderRadius(6)
+        Image(resizeImageUrl(item.coverUrl, 480)).autoResize(true).width(120).height(80).objectFit(ImageFit.Cover).borderRadius(6)
       }
       Column({ space: 8 }) {
         Text(item.title).fontSize(14)
@@ -2194,7 +2192,7 @@ struct SearchPage {
   @Builder
   VideoCard(item: RecommendItem, index: number) {
     VideoListItem({
-      title: item.title, cover: item.coverUrl, duration: item.duration,
+      title: item.title, cover: resizeImageUrl(item.coverUrl, 640), duration: item.duration,
       videoId: this.activeTab === 'video' ? item.id : '', ownerMid: item.ownerMid,
       owner: item.ownerName,
       playCount: this.activeTab === 'media_bangumi' || this.activeTab === 'media_ft' ? -1 : item.playCount,
@@ -2219,7 +2217,8 @@ struct SearchPage {
     Column() {
       // ---- 封面区 ----
       Stack() {
-        Image(item.coverUrl)
+        Image(resizeImageUrl(item.coverUrl, 960))
+          .autoResize(true)
           .width('100%')
           .aspectRatio(16 / 9)
           .objectFit(ImageFit.Cover)

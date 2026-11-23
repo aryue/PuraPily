@@ -1,3 +1,4 @@
+import { resizeImageUrl } from '../utils/ImageUrl';
 import { HomeInitialLoading } from '../components/HomeInitialLoading';
 import { HomeChannelCardEntrance } from '../components/HomeChannelCardEntrance';
 import { pageBackgroundColor } from '../utils/SurfaceColors';
@@ -16,7 +17,7 @@ import { getPopularVideos, blacklistUploader, prefetchVideoPlayback } from '../a
 import { RecommendItem } from '../model/RecommendItem';
 import { sendDislikeFeedback, sendDislikeUpFeedback } from '../api/FeedbackService';
 import { UserBehaviorService } from '../services/UserBehaviorService';
-import { GenericDataSource } from '../model/GenericDataSource';
+import { FirstScreenDataSource } from '../model/FirstScreenDataSource';
 import { PlaybackListPrefetch } from '../services/PlaybackListPrefetch';
 import { PlaybackViewportFrameCallback } from '../utils/PlaybackViewportFrameCallback';
 
@@ -41,7 +42,7 @@ export struct DiscoverPage {
   // 滚动隐藏底栏相关
   private barScrollTracker: HomeBarScrollTracker = new HomeBarScrollTracker();
   @StorageLink('statusBarHeight') statusBarHeight: number = 0;
-  private dataSource: GenericDataSource<RecommendItem> = new GenericDataSource();
+  private dataSource: FirstScreenDataSource<RecommendItem> = new FirstScreenDataSource<RecommendItem>();
   @State isLoading: boolean = true;
   @State isLoadingMore: boolean = false;
   @State isRefreshing: boolean = false;
@@ -247,7 +248,7 @@ export struct DiscoverPage {
       if (refresh) {
         this.playbackVisibleIndexes.clear();
         this.playbackFirstIndex = 0;
-        this.dataSource.reloadItems(filteredItems);
+        this.dataSource.replaceForViewport(filteredItems, this.columnCount, this.getUIContext());
       } else {
         this.dataSource.addItems(filteredItems);
       }
@@ -422,11 +423,15 @@ export struct DiscoverPage {
       .onClick(() => onClick())
   }
 
+  private cardWidth(): number {
+    return Math.max(0, (this.contentWidth - 24 - (this.columnCount - 1) * this.cardListMargin) / this.columnCount);
+  }
+
   @Builder
   VideoCard(item: RecommendItem) {
     VideoListItem({
-      showDivider: false,
-      title: item.title, cover: item.coverUrl, duration: item.duration,
+      availableWidth: this.cardWidth(), showDivider: false,
+      title: item.title, cover: resizeImageUrl(item.coverUrl, 640), homeChannel: 3, duration: item.duration,
       videoId: item.pgcSeasonId > 0 ? '' : item.id, ownerMid: item.ownerMid,
       owner: item.ownerName, playCount: item.playCount,
       dateText: videoListPublished(item.pubdate), tag: item.rcmdReason,
@@ -482,7 +487,7 @@ export struct DiscoverPage {
                 this.VideoCard(item)
               }
             }
-              .width(Math.max(0, (this.contentWidth - 24 - (this.columnCount - 1) * this.cardListMargin) / this.columnCount))
+              .width(this.cardWidth())
               .onVisibleAreaChange([0], (visible: boolean) => {
                 if (visible) this.playbackVisibleIndexes.add(index);
                 else this.playbackVisibleIndexes.delete(index);
@@ -492,6 +497,8 @@ export struct DiscoverPage {
         }
       }
       .lanes(this.columnCount, this.cardListMargin)
+      // 保留快滑的预布局余量，避免按整屏预创建热门卡片。
+      .cachedCount(4)
       .id('home-popular-grid')
       .contentStartOffset(homeHeaderTopInset(this.statusBarHeight, this.hideStatusBar, this.homeSearchRowHeight))
       .padding({ left: 12, right: 12 })
@@ -500,6 +507,7 @@ export struct DiscoverPage {
       .scrollBar(BarState.Off).edgeEffect(EdgeEffect.Spring)
       .onWillScroll((yOffset: number, _state: ScrollState, source: ScrollSource) => {
         if (!AppStorage.get<boolean>('homeFeedActive') || yOffset === 0 || AppStorage.get<number>('homeChannelIndex') !== 3) return;
+        this.playbackListPrefetch.noteHomeScroll();
         const hidden = this.barScrollTracker.update(yOffset, source);
         if (hidden !== undefined) AppStorage.set('homeBarsHidden', hidden);
       })
@@ -509,7 +517,8 @@ export struct DiscoverPage {
         if (this.homeScrollOffset !== offset) this.homeScrollOffset = offset;
       })
       .onReachEnd(() => {
-        if (!this.isLoadingMore && !this.isLoading && !this.isRefreshing && this.hasMore) this.loadMore();
+        if (!this.isLoadingMore && !this.isLoading && !this.isRefreshing && !this.dataSource.isPublishing() &&
+          this.hasMore) this.loadMore();
       })
     }
     .onStateChange((refreshStatus: RefreshStatus) => {

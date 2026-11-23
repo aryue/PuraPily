@@ -1,3 +1,5 @@
+import { splitCubicBezierAtProgress } from '../utils/CubicBezierSplit';
+import { CoverFlight } from '../components/HomeCoverNode';
 import { setBackgroundPlayback } from '../services/BackgroundPlaybackPreference';
 import { createSentDanmaku } from '../services/DanmakuService';
 import { DanmakuDisplaySettings } from '../services/DanmakuDisplaySettings';
@@ -41,6 +43,7 @@ import { AppContinuation, ContinuationPage } from '../services/AppContinuation';
 import { DanmakuInputBar } from '../components/DanmakuInputBar';
 import { FloatingVideoTransition, FloatingVideoRect } from '../services/FloatingVideoTransition';
 import { HomeCardMorph, HomeCardMorphRect } from '../services/HomeCardMorph';
+import { PlaybackViewportFrameCallback } from '../utils/PlaybackViewportFrameCallback';
 import { fmtCount } from '../utils/NumberFormat';
 import { FloatingPiP } from '../services/FloatingPiP';
 import { FloatingVideoSurface } from '../services/FloatingVideoSurface';
@@ -595,7 +598,7 @@ struct VideoPlayerPage {
   private mw: window.Window | null = null
   /** 进入页面时的原始窗口亮度，-1 = 系统自动亮度，>=0 = 手动亮度值 */
   private playbackWindow_: PlaybackWindow = new PlaybackWindow();
-  @State ld: boolean = true; @State err: string = ''; @Watch('onPlayChanged') @State play: boolean = true
+  @State ld: boolean = true; @State @Watch('onCoverPlaybackError') err: string = ''; @Watch('onPlayChanged') @State play: boolean = true
   @State @Watch('onWaitingFirstFrameChanged') waitingForFirstFrame: boolean = true;
   // ═══ 首页卡片封面共享元素转场（新路径，开关 homeCardMorph）═══
   // 旧路径（开关关闭）这些状态恒为 false/0，build 里不挂任何节点。
@@ -622,7 +625,7 @@ struct VideoPlayerPage {
   private morphPageW: number = 0;
   private morphPageH: number = 0;
   /** 0 → 1：封面从卡片矩形插值到视频画面矩形（返回时反向） */
-  @State coverMorphProgress: number = 0;
+  @State @Watch('updateLiveCoverBadge') coverMorphProgress: number = 0;
   /** 0 → 1：飞行/切换完成后，把裁剪窗口从视频画面展开到整页（露出顶栏与详情区） */
   @State coverMorphReveal: number = 0;
   /**
@@ -634,7 +637,7 @@ struct VideoPlayerPage {
   /** 返回时如果进入动画还没结束，封面已经在场，就直接保持可见，避免瞬隐再淡入 */
   @State private coverMorphReturnCoverInstant: boolean = false;
   /** 封面飞行是否已启动；封面未解码时只显示真实首页卡片，不提前露出播放页黑底 */
-  private coverMorphStarted: boolean = false;
+  @State private coverMorphStarted: boolean = false;
   private coverMorphStartFallbackTimer: number = -1;
   /** 切换（封面→播放页）只允许触发一次 */
   @State coverMorphSwitching: boolean = false;
@@ -655,10 +658,22 @@ struct VideoPlayerPage {
   private coverMorphTo: HomeCardMorphRect = { x: 0, y: 0, width: 0, height: 0, radius: 0 };
   private coverMorphCover: string = '';
   /** 点击时同步截下的封面图；有它就不等网络图 decode */
+  @State private coverFramePending: boolean = false;
+  private liveCover?: CoverFlight;
+  private morphCardId: string = '';
+  private morphGeneration: number = 0;
+
+  private showHomeCover(show: boolean): void {
+    if (!this.morphCardId || this.morphGeneration !== HomeCardMorph.generation) return;
+    AppStorage.setOrCreate('homeMorphFlyingCard', show ? '' : this.morphCardId);
+  }
+
+  private updateLiveCoverBadge(): void { this.liveCover?.setBadge(this.coverMorphBadgeOpacity()); }
+
   private coverMorphPixel: image.PixelMap | undefined = undefined;
   /** 快照直出首帧：快照层保留到首帧就绪，不再经过页内 poster */
   private coverMorphDirectFrame: boolean = false;
-  private coverMorphRevealDone: boolean = false;
+  @State private coverMorphRevealDone: boolean = false;
   private coverMorphOverlayFading: boolean = false;
   private coverMorphFramePollTimer: number = -1;
   /**
@@ -689,7 +704,7 @@ struct VideoPlayerPage {
    * 这个 @State 是返回段唯一的落点来源，采样器更新它即可让封面/窗口实时跟随。
    */
   @State private coverMorphReturnTarget: HomeCardMorphRect = { x: 0, y: 0, width: 0, height: 0, radius: 8 };
-  private coverMorphReturnFollowTimer: number = -1;
+  private coverMorphReturnFollowFrame?: PlaybackViewportFrameCallback;
   private coverMorphReturnFollowMisses: number = 0;
   private coverMorphTargetLogAt: number = 0;
   private coverMorphRotatedWaitTimer: number = -1;
@@ -1847,9 +1862,9 @@ struct VideoPlayerPage {
    * 封面画幅进度：由飞行进度派生，不另起第二条补间（同帧多个 animateTo 会被合并时长）。
    * 进入段切换在起飞同帧发生，实际主要影响返回收缩时封面从视频画幅回到卡片画幅。
    */
-  private coverMorphAspectProgress(): number {
+  private coverMorphAspectProgress(progress: number): number {
     if (this.coverMorphAspectEqual) return 1;
-    return Math.max(0, Math.min(1, this.coverMorphProgress / HomeCardMorph.ASPECT_PROGRESS));
+    return Math.max(0, Math.min(1, progress / HomeCardMorph.ASPECT_PROGRESS));
   }
 
   /**
@@ -1858,9 +1873,9 @@ struct VideoPlayerPage {
    *  · 画幅在 ASPECT_DURATION 内先变成视频真实画幅（卡片封面是 16:9 裁切）。
    * 这样「飞行放大」和「变成实际比例」可以同时发生，而切换只等画幅就绪，不必等飞完。
    */
-  private coverMorphFlyRect(): HomeCardMorphRect {
-    const p = Math.max(0, Math.min(1, this.coverMorphProgress));
-    const a = this.coverMorphAspectProgress();
+  private coverMorphFlyRect(progress: number = this.coverMorphProgress): HomeCardMorphRect {
+    const p = Math.max(0, Math.min(1, progress));
+    const a = this.coverMorphAspectProgress(p);
     // 返回段用实时落点：首页滑动时目标矩形变化，飞行/收缩路径逐帧跟着改。
     const from = this.coverMorphReturning ? this.coverMorphReturnTarget : this.coverMorphFrom;
     const to = this.coverMorphTo;
@@ -1918,13 +1933,14 @@ struct VideoPlayerPage {
   private morphHandoffWinY(): number {
     return this.morphHandoffVideoY() - this.coverMorphVideoRect().y * this.morphHandoffScale();
   }
-  /** 当前播放页里视频画面的屏幕矩形（封面层切换后按它逐帧对齐）。 */
-  private coverMorphVideoScreenRect(): HomeCardMorphRect {
+  /** 进入时播放画面的位置用整页展开进度，裁剪窗口单独揭开下方内容。 */
+  private coverMorphEnterVideoRect(reveal: number): HomeCardMorphRect {
     const media = this.coverMorphVideoRect();
-    const s = this.morphPageScale();
+    const s0 = this.morphHandoffScale();
+    const s = s0 + (1 - s0) * reveal;
     return {
-      x: this.morphWinX() + this.morphContentPosX() + media.x * s,
-      y: this.morphWinY() + this.morphContentPosY() + media.y * s,
+      x: this.morphHandoffWinX() * (1 - reveal) + media.x * s,
+      y: this.morphHandoffWinY() * (1 - reveal) + media.y * s,
       width: Math.max(1, media.width * s),
       height: Math.max(1, media.height * s),
       radius: 0
@@ -1940,7 +1956,9 @@ struct VideoPlayerPage {
   private morphPageScale(): number {
     if (!this.coverMorphActive) return 1;
     if (this.coverMorphReturning) {
-      return Math.max(0.01, Math.min(1, this.morphWinW() / Math.max(1, this.morphPageW)));
+      const cover = this.coverMorphReturnCoverRect(this.coverMorphProgress);
+      const media = this.coverMorphTo;
+      return Math.max(cover.width / media.width, cover.height / media.height);
     }
     const s0 = this.morphHandoffScale();
     return s0 + (1 - s0) * this.coverMorphReveal;
@@ -1952,15 +1970,23 @@ struct VideoPlayerPage {
    */
   private morphContentPosX(): number {
     if (!this.coverMorphActive) return 0;
-    const q = this.coverMorphReturning ? this.coverMorphReturnTarget : this.coverMorphSwitchRect;
-    const t = this.coverMorphReturning ? (1 - this.coverMorphProgress) : (1 - this.coverMorphReveal);
-    return (this.morphHandoffWinX() - q.x) * t;
+    if (this.coverMorphReturning) {
+      const cover = this.coverMorphReturnCoverRect(this.coverMorphProgress);
+      const media = this.coverMorphTo;
+      const scale = this.morphPageScale();
+      return cover.x - this.morphWinX() + cover.width / 2 - (media.x + media.width / 2) * scale;
+    }
+    return (this.morphHandoffWinX() - this.coverMorphSwitchRect.x) * (1 - this.coverMorphReveal);
   }
   private morphContentPosY(): number {
     if (!this.coverMorphActive) return 0;
-    const q = this.coverMorphReturning ? this.coverMorphReturnTarget : this.coverMorphSwitchRect;
-    const t = this.coverMorphReturning ? (1 - this.coverMorphProgress) : (1 - this.coverMorphReveal);
-    return (this.morphHandoffWinY() - q.y) * t;
+    if (this.coverMorphReturning) {
+      const cover = this.coverMorphReturnCoverRect(this.coverMorphProgress);
+      const media = this.coverMorphTo;
+      const scale = this.morphPageScale();
+      return cover.y - this.morphWinY() + cover.height / 2 - (media.y + media.height / 2) * scale;
+    }
+    return (this.morphHandoffWinY() - this.coverMorphSwitchRect.y) * (1 - this.coverMorphReveal);
   }
   /**
    * 外层封面不透明度：
@@ -1972,10 +1998,10 @@ struct VideoPlayerPage {
     if (!this.coverMorphActive) return 1;
     if (this.coverMorphReturning) {
       if (this.coverMorphReturnCoverInstant) return 1;
-      // 先让当前画面完整保留约 8% 进度，再用 55% 进度（≈176ms）淡入封面；
-      // 不能一按返回就变封面 —— 用户会看不到正在播放的画面被收回的过程。
-      const elapsed = 1 - this.coverMorphProgress;
-      return Math.max(0, Math.min(1, (elapsed - 0.08) / 0.55));
+      // 先裁掉详情，再在同一个裁剪窗口内从视频交接到封面。
+      const start = this.coverMorphQuickReturn ? this.coverMorphQuickStartP : 1;
+      const join = start * HomeCardMorph.CLIP_JOIN_PROGRESS;
+      return Math.max(0, Math.min(1, 1 - this.coverMorphProgress / join));
     }
     return this.coverMorphOverlayOpacity;
   }
@@ -1986,10 +2012,16 @@ struct VideoPlayerPage {
    *    同时跟着页面放大，全程不会出现封面与播放页画面各飞各的。
    */
   private coverMorphLayerRect(): HomeCardMorphRect {
-    if (this.coverMorphReturning && this.coverMorphQuickReturn) {
+    if (this.coverMorphReturning) return this.coverMorphReturnCoverRect(this.coverMorphProgress);
+    if (!this.coverMorphSwitching) return this.coverMorphFlyRect();
+    return this.coverMorphEnterCoverRect(this.coverMorphReveal);
+  }
+
+  private coverMorphReturnCoverRect(progress: number): HomeCardMorphRect {
+    if (this.coverMorphQuickReturn) {
       // 进入中途按返回：从当前封面矩形直接反缩到卡片，不能再走一遍「卡片→视频区」。
       const start = Math.max(0.0001, this.coverMorphQuickStartP);
-      const q = Math.max(0, Math.min(1, this.coverMorphProgress / start));
+      const q = Math.max(0, Math.min(1, progress / start));
       const from = this.coverMorphQuickCoverRect;
       const to = this.coverMorphReturnTarget;
       return {
@@ -2000,13 +2032,13 @@ struct VideoPlayerPage {
         radius: Math.max(0, to.radius + (from.radius - to.radius) * q)
       };
     }
-    if (!this.coverMorphSwitching) return this.coverMorphFlyRect();
-    // 快照矩形要比窗口 reveal 跑得更快：前 50%（≈150ms）就从卡片贴到视频区，
-    // 之后直接跟随当前视频区缩放。否则 reveal 75% 开始淡首帧时，快照还停在
-    // 「卡片 → 视频区」的路上，会明显慢半拍、拖着首帧。
-    const f = Math.max(0, Math.min(1, this.coverMorphReveal / 0.5));
+    return this.coverMorphFlyRect(progress);
+  }
+
+  private coverMorphEnterCoverRect(reveal: number): HomeCardMorphRect {
+    const f = Math.max(0, Math.min(1, reveal / 0.5));
     const q = this.coverMorphSwitchRect;
-    const v = this.coverMorphVideoScreenRect();
+    const v = this.coverMorphEnterVideoRect(reveal);
     if (f >= 1) return v;
     return {
       x: q.x + (v.x - q.x) * f,
@@ -2040,47 +2072,89 @@ struct VideoPlayerPage {
   //    切换帧窗口必须严格等于卡片：宽高不能由视频矩形反推，否则 9:16 会左右变窄、
   //    16:9/21:9 会因 mediaTop 把窗口上沿顶出卡片，封面层只盖卡片时就会先漏黑。
   private morphWinX(): number {
-    if (this.coverMorphReturning) {
-      const t = this.coverMorphReturnTarget;
-      return t.x + (this.morphWinTo.x - t.x) * this.coverMorphProgress;
-    }
-    return this.coverMorphSwitchRect.x * (1 - this.coverMorphReveal);
+    if (this.coverMorphReturning) return this.coverMorphReturnWindowRect().x;
+    return this.coverMorphEnterWindowRect().x;
   }
   private morphWinY(): number {
-    if (this.coverMorphReturning) {
-      const t = this.coverMorphReturnTarget;
-      return t.y + (this.morphWinTo.y - t.y) * this.coverMorphProgress;
-    }
-    return this.coverMorphSwitchRect.y * (1 - this.coverMorphReveal);
+    if (this.coverMorphReturning) return this.coverMorphReturnWindowRect().y;
+    return this.coverMorphEnterWindowRect().y;
   }
   private morphWinW(): number {
-    if (this.coverMorphReturning) {
-      const t = this.coverMorphReturnTarget;
-      return Math.max(1, t.width + (this.morphWinTo.width - t.width) * this.coverMorphProgress);
-    }
-    const q = this.coverMorphSwitchRect;
-    return Math.max(1, q.width + (this.morphPageW - q.width) * this.coverMorphReveal);
+    if (this.coverMorphReturning) return this.coverMorphReturnWindowRect().width;
+    return this.coverMorphEnterWindowRect().width;
   }
   private morphWinH(): number {
-    if (this.coverMorphReturning) {
-      const t = this.coverMorphReturnTarget;
-      return Math.max(1, t.height + (this.morphWinTo.height - t.height) * this.coverMorphProgress);
-    }
-    const q = this.coverMorphSwitchRect;
-    return Math.max(1, q.height + (this.morphPageH - q.height) * this.coverMorphReveal);
+    if (this.coverMorphReturning) return this.coverMorphReturnWindowRect().height;
+    return this.coverMorphEnterWindowRect().height;
   }
+
   private morphWinRadius(): number {
-    if (!this.coverMorphReturning) {
-      return Math.max(0, this.coverMorphSwitchRect.radius * (1 - this.coverMorphReveal));
+    return this.coverMorphReturning ? this.coverMorphReturnWindowRect().radius : this.coverMorphEnterWindowRect().radius;
+  }
+  private coverMorphEnterWindowRect(reveal: number = this.coverMorphReveal): HomeCardMorphRect {
+    const card = this.coverMorphSwitchRect;
+    return {
+      x: card.x * (1 - reveal),
+      y: card.y * (1 - reveal),
+      width: Math.max(1, card.width + (this.morphPageW - card.width) * reveal),
+      height: Math.max(1, card.height + (this.morphPageH - card.height) * reveal),
+      radius: card.radius * (1 - reveal)
+    };
+  }
+
+  private coverMorphReturnWindowRect(): HomeCardMorphRect {
+    const p = this.coverMorphProgress;
+    const start = this.coverMorphQuickReturn ? this.coverMorphQuickStartP : 1;
+    const join = start * HomeCardMorph.CLIP_JOIN_PROGRESS;
+    // 收尾共用封面的窗口坐标、宽高和圆角，下方详情区随裁剪边界收回。
+    if (p <= join) return this.coverMorphReturnCoverRect(p);
+    const cover = this.coverMorphReturnCoverRect(join);
+    const window = this.morphWinTo;
+    const t = Math.min(1, (p - join) / (start - join));
+    return {
+      x: cover.x + (window.x - cover.x) * t,
+      y: cover.y + (window.y - cover.y) * t,
+      width: cover.width + (window.width - cover.width) * t,
+      height: cover.height + (window.height - cover.height) * t,
+      radius: cover.radius + (window.radius - cover.radius) * t
+    };
+  }
+
+  private animateCoverMorphReturn(duration: number, onFinish: () => void): void {
+    if (duration === 0) {
+      this.coverMorphProgress = 0;
+      onFinish();
+      return;
     }
-    const t = this.coverMorphReturnTarget;
-    return Math.max(0, t.radius + (this.morphWinTo.radius - t.radius) * this.coverMorphProgress);
+    // 在裁剪窗口贴合封面的位置切开同一条曲线，保持交接处速度连续。
+    const split = splitCubicBezierAtProgress(HomeCardMorph.RETURN_CURVE, HomeCardMorph.RETURN_JOIN_PROGRESS);
+    const firstDuration = Math.round(duration * split.timeFraction);
+    const endAt = Date.now() + duration;
+    const start = this.coverMorphQuickReturn ? this.coverMorphQuickStartP : 1;
+    animateTo({
+      duration: firstDuration,
+      curve: curves.cubicBezierCurve(split.first.x1, split.first.y1, split.first.x2, split.first.y2),
+      expectedFrameRateRange: { min: 60, max: 120, expected: 120 },
+      onFinish: () => {
+        if (!this.coverMorphReturning || !this.referenceAlive) return;
+        animateTo({
+          duration: Math.max(0, endAt - Date.now()),
+          curve: curves.cubicBezierCurve(split.second.x1, split.second.y1, split.second.x2, split.second.y2),
+          expectedFrameRateRange: { min: 60, max: 120, expected: 120 },
+          onFinish
+        }, () => {
+          this.coverMorphProgress = 0;
+        });
+      }
+    }, () => {
+      this.coverMorphProgress = start * HomeCardMorph.CLIP_JOIN_PROGRESS;
+    });
   }
 
   /**
    * 播放页内容透明度 = 切换进度。飞行阶段恒 0（窗口里只有封面；未解码时透出首页真实卡片），
    * 只有封面解码 + 首帧就绪后才从 0 交叉到 1。这样首帧没到之前不会露出加载页/黑底。
-   * 返回阶段内容必须始终可见（封面层只负责收缩那一段）。
+   * 返回时播放页随裁剪窗口收回，封面继续承接落位。
    */
   private morphContentOpacity(): number {
     if (!this.coverMorphActive) return 1;
@@ -2185,6 +2259,11 @@ struct VideoPlayerPage {
       clearTimeout(this.morphAspectWaitTimer);
       this.morphAspectWaitTimer = -1;
     }
+    if (this.liveCover) {
+      const current = this.readCoverMorphCardRect();
+      if (current) this.coverMorphFrom = current;
+    }
+    this.showHomeCover(false);
     this.coverMorphStarted = true;
     this.coverMorphSwitching = false;
     this.coverMorphReveal = 0;
@@ -2283,7 +2362,7 @@ struct VideoPlayerPage {
     this.coverMorphOverlayOpacity = 1;
     // 快照直出首帧：不再铺页内 poster；无首帧时由外层快照一直顶着。
     this.coverMorphPosterOpacity = !this.coverMorphDirectFrame && this.waitingForFirstFrame ? 1 : 0;
-    if (this.coverMorphDirectFrame && !this.waitingForFirstFrame) {
+    if (this.coverMorphDirectFrame && !this.coverFramePending && !this.waitingForFirstFrame) {
       this.scheduleCoverMorphFirstFrameFade();
     }
     if (this.coverMorphFallbackTimer >= 0) {
@@ -2308,7 +2387,7 @@ struct VideoPlayerPage {
           this.coverMorphRevealDone = true;
           logInfo(`[HomeCardMorph] reveal done reveal=${this.coverMorphReveal.toFixed(3)} ` +
             `progress=${this.coverMorphProgress.toFixed(3)} overlayDone=${this.coverMorphOverlayFading ? 'fading' : 'idle'}`);
-          if (this.coverMorphDirectFrame && this.waitingForFirstFrame) {
+          if (this.coverFramePending) {
             // 快照已经是唯一封面：首帧没到就保持，不让中间再插一层播放页封面。
             logInfo('[HomeCardMorph] snapshot holds until first frame');
             return;
@@ -2369,10 +2448,27 @@ struct VideoPlayerPage {
     }
     this.coverMorphSwitching = true;
     this.snapMorphToFullPage();
+    this.coverMorphRevealDone = true;
+    if (this.coverFramePending && !this.err) return;
+    this.liveCover?.restore();
     this.coverMorphActive = false;
+    this.showHomeCover(true);
+  }
+
+  private onCoverPlaybackError(): void {
+    if (!this.err || !this.coverMorphActive || this.coverMorphReturning) return;
+    this.coverFramePending = false;
+    this.finishCoverMorph();
+  }
+
+  private coverFrameRendered(): void {
+    if (!this.coverFramePending) return;
+    this.coverFramePending = false;
+    if (!this.waitingForFirstFrame) this.onWaitingFirstFrameChanged();
   }
 
   private onWaitingFirstFrameChanged(): void {
+    if (this.waitingForFirstFrame || this.coverFramePending || this.coverMorphReturning) return;
     if (this.coverMorphPosterOpacity > 0) {
       // 首帧到了：视频区替身淡出，露出的就是真实画面（此时页面通常已在展开途中）。
       logInfo('[HomeCardMorph] first frame ready, fade poster');
@@ -2388,7 +2484,7 @@ struct VideoPlayerPage {
       // 首帧到达时画幅才最终确定；先校准飞行终点，再判断能不能切换。
       this.syncCoverMorphTarget();
       this.trySwitchCoverMorph();
-      if (this.coverMorphDirectFrame && this.coverMorphSwitching) {
+      if (this.coverMorphSwitching && (this.coverMorphDirectFrame || this.coverMorphRevealDone)) {
         this.scheduleCoverMorphFirstFrameFade();
       }
     }
@@ -2396,8 +2492,7 @@ struct VideoPlayerPage {
 
   /**
    * 快照直出模式：首帧已就绪时，不等 reveal 完全到 1 再淡。
-   * reveal 到 75% 后快照画幅已基本贴近视频区，提前 160ms 交叉到首帧；
-   * 实际起播仍由页面正常流程决定，不受这里影响。
+   * 窗口和视频对齐后才交叉到首帧，避免对齐途中露出播放器底色。
    */
   private scheduleCoverMorphFirstFrameFade(): void {
     if (!this.coverMorphActive || !this.coverMorphSwitching ||
@@ -2428,7 +2523,9 @@ struct VideoPlayerPage {
       this.fadeCoverMorphOverlay();
       return;
     }
+    this.liveCover?.restore();
     this.coverMorphActive = false;
+    this.showHomeCover(true);
     HomeCardMorph.clear();
     logInfo('[HomeCardMorph] enter complete');
   }
@@ -2450,7 +2547,7 @@ struct VideoPlayerPage {
   private readCoverMorphCardRect(): HomeCardMorphRect | undefined {
     try {
       const ui = this.getUIContext();
-      const info = ui.getComponentUtils().getRectangleById(HomeCardMorph.cardElementId);
+      const info = ui.getComponentUtils().getRectangleById(this.morphCardId);
       if (!info || Number(info.size.width) <= 0 || Number(info.size.height) <= 0) return undefined;
       const x = ui.px2vp(Number(info.windowOffset.x));
       const y = ui.px2vp(Number(info.windowOffset.y));
@@ -2458,7 +2555,7 @@ struct VideoPlayerPage {
       const h = ui.px2vp(Number(info.size.height));
       // 页面销毁后按旧 id 可能命中整页容器；整页尺寸不是卡片，必须丢弃。
       if (!(w > 8) || !(h > 8) || (w >= this.cw - 4 && h >= this.ch - 4)) return undefined;
-      return { x, y, width: w, height: h, radius: 8 };
+      return { x, y, width: w, height: h, radius: HomeCardMorph.CARD_RADIUS };
     } catch (_e) { }
     return undefined;
   }
@@ -2472,10 +2569,7 @@ struct VideoPlayerPage {
   }
 
   private stopCoverMorphReturnFollow(): void {
-    if (this.coverMorphReturnFollowTimer >= 0) {
-      clearInterval(this.coverMorphReturnFollowTimer);
-      this.coverMorphReturnFollowTimer = -1;
-    }
+    this.coverMorphReturnFollowFrame = undefined;
     this.coverMorphReturnFollowMisses = 0;
   }
 
@@ -2521,15 +2615,11 @@ struct VideoPlayerPage {
             `rect=(${next.x.toFixed(1)},${next.y.toFixed(1)}) ${next.width.toFixed(1)}x${next.height.toFixed(1)} ` +
             `dur=${dur} readyGen=${ready}`);
           this.startCoverMorphReturnFollow();
-          animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 },
-            duration: dur, curve: Curve.FastOutSlowIn,
-            onFinish: () => {
-              logInfo(`[HomeCardMorph] rotated shrink settled at ` +
-                `${this.morphWinW().toFixed(1)}x${this.morphWinH().toFixed(1)} ` +
-                `(${this.morphWinX().toFixed(1)},${this.morphWinY().toFixed(1)})`);
-            }
-          }, () => {
-            this.coverMorphProgress = 0;
+          this.animateCoverMorphReturn(dur, () => {
+            this.restoreSettledCover();
+            logInfo(`[HomeCardMorph] rotated shrink settled at ` +
+              `${this.morphWinW().toFixed(1)}x${this.morphWinH().toFixed(1)} ` +
+              `(${this.morphWinX().toFixed(1)},${this.morphWinY().toFixed(1)})`);
           });
           return;
         }
@@ -2558,48 +2648,53 @@ struct VideoPlayerPage {
    */
   private startCoverMorphReturnFollow(): void {
     this.stopCoverMorphReturnFollow();
-    if (HomeCardMorph.cardElementId.length === 0) return;
-    const until = Date.now() + (this.da ? 0 : 520);
-    this.coverMorphReturnFollowTimer = setInterval(() => {
-      if (!this.coverMorphReturning || !this.referenceAlive) {
+    if (this.morphCardId.length === 0 || this.da) return;
+    const until = Date.now() + 520;
+    const ui = this.getUIContext();
+    const frame: PlaybackViewportFrameCallback = new PlaybackViewportFrameCallback(() => {
+      if (this.coverMorphReturnFollowFrame !== frame) return;
+      if (!this.coverMorphReturning || !this.referenceAlive || Date.now() > until) {
         this.stopCoverMorphReturnFollow();
         return;
       }
-      if (Date.now() > until) {
+      // 跟首页实际出帧同步，避免 8ms 定时器在同一帧重复读取卡片几何。
+      this.updateCoverMorphReturnFollow();
+      if (this.coverMorphReturnFollowFrame === frame) ui.postFrameCallback(frame);
+    });
+    this.coverMorphReturnFollowFrame = frame;
+    ui.postFrameCallback(frame);
+  }
+
+  private updateCoverMorphReturnFollow(): void {
+    const next = this.readCoverMorphCardRect();
+    if (next === undefined) {
+      this.coverMorphReturnFollowMisses++;
+      if (this.coverMorphReturnFollowMisses >= 4) this.stopCoverMorphReturnFollow();
+      return;
+    }
+    const visible = next.x < this.cw - 2 && next.x + next.width > 2 &&
+      next.y < this.ch - 2 && next.y + next.height > 2;
+    if (!visible) {
+      this.coverMorphReturnFollowMisses++;
+      if (this.coverMorphReturnFollowMisses >= 2 && !this.coverMorphReturnEarlyHide) {
+        this.coverMorphReturnEarlyHide = true;
+        logWarn('[HomeCardMorph] return target left viewport, hide shrink early');
         this.stopCoverMorphReturnFollow();
-        return;
       }
-      const next = this.readCoverMorphCardRect();
-      if (next === undefined) {
-        this.coverMorphReturnFollowMisses++;
-        if (this.coverMorphReturnFollowMisses >= 4) this.stopCoverMorphReturnFollow();
-        return;
+      return;
+    }
+    this.coverMorphReturnFollowMisses = 0;
+    const old = this.coverMorphReturnTarget;
+    if (Math.abs(next.x - old.x) > 0.5 || Math.abs(next.y - old.y) > 0.5 ||
+      Math.abs(next.width - old.width) > 0.5 || Math.abs(next.height - old.height) > 0.5) {
+      this.applyCoverMorphReturnTarget(next);
+      const now = Date.now();
+      if (now - this.coverMorphTargetLogAt >= 40) {
+        this.coverMorphTargetLogAt = now;
+        logInfo(`[HomeCardMorph] return target follow=(${next.x.toFixed(1)},${next.y.toFixed(1)}) ` +
+          `${next.width.toFixed(1)}x${next.height.toFixed(1)}`);
       }
-      this.coverMorphReturnFollowMisses = 0;
-      const visible = next.x < this.cw - 2 && next.x + next.width > 2 &&
-        next.y < this.ch - 2 && next.y + next.height > 2;
-      if (!visible) {
-        this.coverMorphReturnFollowMisses++;
-        if (this.coverMorphReturnFollowMisses >= 2 && !this.coverMorphReturnEarlyHide) {
-          this.coverMorphReturnEarlyHide = true;
-          logWarn('[HomeCardMorph] return target left viewport, hide shrink early');
-          this.stopCoverMorphReturnFollow();
-        }
-        return;
-      }
-      this.coverMorphReturnFollowMisses = 0;
-      const old = this.coverMorphReturnTarget;
-      if (Math.abs(next.x - old.x) > 0.5 || Math.abs(next.y - old.y) > 0.5 ||
-        Math.abs(next.width - old.width) > 0.5 || Math.abs(next.height - old.height) > 0.5) {
-        this.applyCoverMorphReturnTarget(next);
-        const now = Date.now();
-        if (now - this.coverMorphTargetLogAt >= 40) {
-          this.coverMorphTargetLogAt = now;
-          logInfo(`[HomeCardMorph] return target follow=(${next.x.toFixed(1)},${next.y.toFixed(1)}) ` +
-            `${next.width.toFixed(1)}x${next.height.toFixed(1)}`);
-        }
-      }
-    }, 8);
+    }
   }
 
   /**
@@ -2660,13 +2755,17 @@ struct VideoPlayerPage {
     if (to === undefined) return false;
     // 进入动画中途返回：从**实际渲染矩形**接上，不能只看 reveal 状态量。
     // 模拟器/系统动画缩放会把状态值提前写成 1，但窗口仍在半途；
-    // 用当前窗口宽度反算 P 才能保证首帧不跳回整页。窗口宽度对 P 是线性的。
+    // 用窗口宽度估算返回进度，起始几何则直接承接当前渲染窗口。
     const utils = this.getUIContext().getComponentUtils();
     let actualWinW = 0;
+    let actualWindow: HomeCardMorphRect | undefined;
     try {
       const winInfo = utils.getRectangleById('home-morph-window');
       if (winInfo && Number(winInfo.size.width) > 0) {
-        actualWinW = this.getUIContext().px2vp(Number(winInfo.size.width));
+        const ui = this.getUIContext();
+        actualWinW = ui.px2vp(Number(winInfo.size.width));
+        actualWindow = { x: ui.px2vp(Number(winInfo.windowOffset.x)), y: ui.px2vp(Number(winInfo.windowOffset.y)),
+          width: actualWinW, height: ui.px2vp(Number(winInfo.size.height)), radius: 0 };
       }
     } catch (_e) { }
     const spanW = Math.max(1, this.morphPageW - to.width);
@@ -2674,9 +2773,14 @@ struct VideoPlayerPage {
       ? Math.max(0, Math.min(1, (actualWinW - to.width) / spanW))
       : Math.max(0, Math.min(1, this.coverMorphReveal));
     const quickReturn = this.coverMorphActive && measuredP < 0.999;
-    const startP = quickReturn ? measuredP : 1;
+    const startP = quickReturn ? Math.max(0.0001, measuredP) : 1;
+    let quickWindow: HomeCardMorphRect | undefined;
     let quickCover: HomeCardMorphRect = { x: to.x, y: to.y, width: to.width, height: to.height, radius: to.radius };
     if (quickReturn) {
+      const estimatedWindow = this.coverMorphEnterWindowRect(measuredP);
+      quickWindow = actualWindow ?? estimatedWindow;
+      quickWindow.radius = estimatedWindow.radius;
+      const estimatedCover = this.coverMorphEnterCoverRect(measuredP);
       try {
         const coverInfo = utils.getRectangleById('home-morph-cover');
         if (coverInfo && Number(coverInfo.size.width) > 0) {
@@ -2685,19 +2789,19 @@ struct VideoPlayerPage {
             y: this.getUIContext().px2vp(Number(coverInfo.windowOffset.y)),
             width: this.getUIContext().px2vp(Number(coverInfo.size.width)),
             height: this.getUIContext().px2vp(Number(coverInfo.size.height)),
-            radius: 0
+            radius: estimatedCover.radius
           };
         } else {
-          quickCover = this.coverMorphLayerRect();
+          quickCover = estimatedCover;
         }
       } catch (_e) {
-        quickCover = this.coverMorphLayerRect();
+        quickCover = estimatedCover;
       }
     }
     // 首帧还没到，页内视频区只有 poster（或黑板）；不能在这里把 poster 清掉，
     // 也不能让外层封面按「视频→封面」的慢淡入走 —— 否则返回时是一块空加载页
     // 整体缩到卡片角落。此时封面必须从返回第一帧就接管。
-    const firstFrameMissing = this.waitingForFirstFrame || this.coverMorphPosterOpacity > 0.01;
+    const firstFrameMissing = this.coverFramePending || this.waitingForFirstFrame || this.coverMorphPosterOpacity > 0.01;
     this.coverMorphReturnCoverInstant = firstFrameMissing ||
       (this.coverMorphActive && this.coverMorphOverlayOpacity > 0.01);
     this.coverMorphQuickReturn = quickReturn;
@@ -2711,6 +2815,7 @@ struct VideoPlayerPage {
     this.coverMorphReturnFollowMisses = 0;
     this.coverMorphFallbackExitProgress = 0;
     this.coverMorphFallbackExitRunning = false;
+    this.showHomeCover(false);
     this.coverMorphReturning = true;
     if (this.coverMorphFallbackTimer >= 0) {
       clearTimeout(this.coverMorphFallbackTimer);
@@ -2724,7 +2829,7 @@ struct VideoPlayerPage {
     //    反过来设 from/to 会让 p=1 取到 to（卡片），第一帧就跳到落点。
     this.syncMorphPageSize();
     this.morphWinFrom = { x: to.x, y: to.y, width: to.width, height: to.height, radius: to.radius };
-    this.morphWinTo = { x: 0, y: 0, width: this.morphPageW, height: this.morphPageH, radius: 0 };
+    this.morphWinTo = quickWindow ?? { x: 0, y: 0, width: this.morphPageW, height: this.morphPageH, radius: 0 };
     this.coverMorphFrom = { x: to.x, y: to.y, width: to.width, height: to.height, radius: to.radius };
     this.coverMorphTo = this.coverMorphVideoRect();
     // 进入时的画幅可能被详情/解码器修正过；返回必须按**当前**视频画幅重算这个快照，
@@ -2762,17 +2867,20 @@ struct VideoPlayerPage {
       }
       if (backUrl.length > 0) router.back({ url: backUrl }); else router.back();
       this.startCoverMorphReturnFollow();
-      animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 },
-        duration: dur, curve: Curve.FastOutSlowIn,
-        onFinish: () => {
-          logInfo(`[HomeCardMorph] shrink settled at ${this.morphWinW().toFixed(1)}x${this.morphWinH().toFixed(1)} ` +
-            `(${this.morphWinX().toFixed(1)},${this.morphWinY().toFixed(1)})`);
-        }
-      }, () => {
-        this.coverMorphProgress = 0;
+      this.animateCoverMorphReturn(dur, () => {
+        this.restoreSettledCover();
+        logInfo(`[HomeCardMorph] shrink settled at ${this.morphWinW().toFixed(1)}x${this.morphWinH().toFixed(1)} ` +
+          `(${this.morphWinX().toFixed(1)},${this.morphWinY().toFixed(1)})`);
       });
     }, 16);
     return true;
+  }
+
+  private restoreSettledCover(): void {
+    this.coverMorphReturnEarlyHide = true;
+    this.liveCover?.restore();
+    this.showHomeCover(true);
+    this.stopCoverMorphReturnFollow();
   }
 
   private disposeCoverMorph(): void {
@@ -2790,6 +2898,10 @@ struct VideoPlayerPage {
       try { this.coverMorphPixel.release().catch(() => {}); } catch (_e) { }
       this.coverMorphPixel = undefined;
     }
+    this.liveCover?.restore();
+    this.showHomeCover(true);
+    this.liveCover = undefined;
+    this.coverFramePending = false;
     this.coverMorphDirectFrame = false;
     if (this.coverMorphStartFallbackTimer >= 0) {
       clearTimeout(this.coverMorphStartFallbackTimer);
@@ -2828,10 +2940,14 @@ struct VideoPlayerPage {
   @Builder
   HomeCoverMorphLayer() {
     Stack({ alignContent: Alignment.TopStart }) {
-      if (this.coverMorphPixel !== undefined || this.coverMorphCover.length > 0) {
+      if (this.liveCover || this.coverMorphPixel !== undefined || this.coverMorphCover.length > 0) {
         // 封面 + 卡片角标一起飞：落点就是首页卡片，内容和卡片必须完全一致
         Stack({ alignContent: Alignment.Bottom }) {
-          if (this.coverMorphPixel !== undefined) {
+          if (this.liveCover) {
+            if (this.coverMorphStarted || this.coverMorphReturning) {
+              NodeContainer(this.liveCover).width('100%').height('100%')
+            }
+          } else if (this.coverMorphPixel !== undefined) {
             // 点击时同步截下的已渲染封面，不再走网络图 decode。
             Image(this.coverMorphPixel)
               .width('100%').height('100%')
@@ -2857,22 +2973,31 @@ struct VideoPlayerPage {
               setTimeout(() => this.tryStartCoverMorph(), 16);
             })
           }
-          Stack({ alignContent: Alignment.Bottom }) {
-            Column().width('100%').height(36)
-              .linearGradient({ angle: 180, colors: [['#00000000', 0], ['#99000000', 1]] })
-            Row({ space: 8 }) {
-              Row({ space: 3 }) {
-                Image($r('app.media.ref_play')).width(14).height(14).fillColor('#FFFFFF')
-                Text(fmtCount(this.coverMorphPlayCount)).fontSize(10).fontColor('#FFFFFF')
-              }
-              Blank()
-              Text(this.coverMorphDurationLabel()).fontSize(10).fontColor('#FFFFFF')
-            }.width('100%').padding({ left: 6, right: 6, bottom: 6 })
+          if (!this.liveCover) {
+            Stack({ alignContent: Alignment.Bottom }) {
+              Column().width('100%').height(36)
+                .linearGradient({ angle: 180, colors: [['#00000000', 0], ['#99000000', 1]] })
+              Row({ space: 8 }) {
+                Row({ space: 3 }) {
+                  Image($r('app.media.ref_play')).width(14).height(14).fillColor('#FFFFFF')
+                  Text(fmtCount(this.coverMorphPlayCount)).fontSize(10).fontColor('#FFFFFF')
+                }
+                Blank()
+                Text(this.coverMorphDurationLabel()).fontSize(10).fontColor('#FFFFFF')
+              }.width('100%').padding({ left: 6, right: 6, bottom: 6 })
+            }
+            .width('100%').height('100%')
+            // 封面图未解码时不能画角标：底部 36vp 的渐变会压在下面透出的真实卡片封面上，
+            // 看起来就是「封面底部变黑」。此时下层首页本来就是同一张封面，不画反而一致。
+            .opacity(this.coverMorphCoverPaintable ? this.coverMorphBadgeOpacity() : 0)
           }
-          .width('100%').height('100%')
-          // 封面图未解码时不能画角标：底部 36vp 的渐变会压在下面透出的真实卡片封面上，
-          // 看起来就是「封面底部变黑」。此时下层首页本来就是同一张封面，不画反而一致。
-          .opacity(this.coverMorphCoverPaintable ? this.coverMorphBadgeOpacity() : 0)
+          if (this.coverFramePending && this.coverMorphRevealDone && !this.coverMorphReturning && !this.err) {
+            Stack({ alignContent: Alignment.Center }) {
+              LoadingProgress().width(40).height(40).padding(8).color(Color.White)
+                .borderRadius(20).backgroundColor('#66000000').id('home-cover-loading')
+                .accessibilityText('视频加载中')
+            }.width('100%').height('100%').hitTestBehavior(HitTestMode.None)
+          }
         }
         .width(this.coverMorphLayerRect().width)
         .height(this.coverMorphLayerRect().height)
@@ -2880,19 +3005,15 @@ struct VideoPlayerPage {
         // 不能直接用屏幕坐标，否则返回收缩时封面会跑到窗口外去盖住首页。
         .position({ x: this.coverMorphLayerRect().x - this.morphWinX(),
           y: this.coverMorphLayerRect().y - this.morphWinY() })
-        .borderRadius(this.coverMorphLayerRect().radius)
+        .borderRadius(this.coverMorphReturning ? 0 : this.coverMorphLayerRect().radius)
         .clip(true)
         .opacity(this.coverMorphLayerOpacity())
         .hitTestBehavior(HitTestMode.None)
         .id('home-morph-cover')
       }
     }
-    // 封面层始终贴着裁剪窗口：窗口外是真实首页，绝不能被封面/角标覆盖。
-    .width(this.morphWinW())
-    .height(this.morphWinH())
-    .position({ x: this.morphWinX(), y: this.morphWinY() })
-    .borderRadius(this.morphWinRadius())
-    .clip(true)
+    .width('100%').height('100%')
+    .position({ x: 0, y: 0 })
     .zIndex(1000)
     .hitTestBehavior(HitTestMode.None)
   }
@@ -3838,7 +3959,6 @@ struct VideoPlayerPage {
           //    任何修改都会静默失效（连弹幕开关用的 config.enable 都传不进去）。
           this.danmakuConfig.apiSource = savedApiSource;
         }
-        AppStorage.set('danmakuApiSource', savedApiSource);
         logInfo(`[VideoPlayer] 弹幕数据源异步校正: ${savedApiSource}`);
       }
     } catch (e) {
@@ -4392,11 +4512,16 @@ struct VideoPlayerPage {
     //    之前 —— 首次 build 就要挂上与首页卡片同 id 的封面占位，框架才会把它当成共享元素。
     const coverMorphConsumed: boolean = HomeCardMorph.consume();
     this.coverMorphOwned = coverMorphConsumed;
+    this.coverFramePending = coverMorphConsumed;
     this.coverMorphActive = coverMorphConsumed;
     if (this.coverMorphActive && HomeCardMorph.id.length > 0) {
       this.coverMorphCover = HomeCardMorph.cover;
       this.coverMorphPixel = HomeCardMorph.takeCoverPixel();
-      this.coverMorphDirectFrame = this.coverMorphPixel !== undefined;
+      this.morphCardId = HomeCardMorph.cardElementId;
+      this.morphGeneration = HomeCardMorph.generation;
+      this.liveCover = HomeCardMorph.liveCover;
+      HomeCardMorph.liveCover = undefined;
+      this.coverMorphDirectFrame = this.liveCover !== undefined || this.coverMorphPixel !== undefined;
       this.coverMorphPlayCount = HomeCardMorph.playCount;
       this.coverMorphDuration = HomeCardMorph.durationSec;
       this.coverMorphCoverReady = this.coverMorphDirectFrame;
@@ -4453,7 +4578,7 @@ struct VideoPlayerPage {
           this.coverMorphStartFallbackTimer = -1;
           this.tryStartCoverMorph();
         }, 16);
-        logInfo('[HomeCardMorph] snapshot ready, start after prepaint frame');
+        logInfo(`[HomeCardMorph] source=${this.liveCover ? 'live-node' : 'snapshot'} ready`);
       } else {
       // 封面解码完成前保持「卡片大小窗口 + 隐藏播放页内容」，此时透出的是下层真实首页。
       // 解码完成再启动飞行。⚠️ 兜底不能再「假装 ready 然后开飞」：封面没解码时飞出去
@@ -4465,6 +4590,7 @@ struct VideoPlayerPage {
           return;
         }
         logWarn('[HomeCardMorph] cover decode timeout, abort morph');
+        this.coverFramePending = false;
         this.coverMorphCoverReady = true;
         this.coverMorphProgress = 1;
         this.coverMorphReveal = 1;
@@ -4768,6 +4894,7 @@ struct VideoPlayerPage {
       this.arFromMeta_ = this.ar > 0.05 && this.ar < 20;
       this.arMetaCid_ = this.vi.cid;
 
+      this.coverFrameRendered();
       this.waitingForFirstFrame = false;
       this.referenceSpareSurfaceMounted = true;
       this.isDashStream_ = this.playbackResources_.restoreFromFloating(ps);
@@ -6108,11 +6235,7 @@ struct VideoPlayerPage {
         }
       } else {
         loaded = this.applyCommentPage(result, cursor !== 0);
-        if (loaded && !this.rotationInProgress) {
-          this.playbackComments_.warmAvatars(result.comments, () => current() && !this.rotationInProgress, (url: string) => {
-            predecodeImage(imageUrlResize(url, 48));
-          }).catch(() => {});
-        } else if (!loaded && cursor === 0) {
+        if (!loaded && cursor === 0) {
           logWarn('[loadC] 第一页评论为空，可能Cookie失效或API限流');
         }
       }
@@ -7045,6 +7168,7 @@ struct VideoPlayerPage {
               `[VideoPlayer] 预热实例起播完成 ${Date.now() - warmAdoptAt}ms`);
             // 预热实例在池里已经渲染过首帧，IJK 不会再补一次 RENDER_START；
             // 这里直接摘掉「正在加载视频」的遮罩，否则它会一直盖在画面上。
+            this.coverFrameRendered();
             if (this.waitingForFirstFrame) {
               this.waitingForFirstFrame = false;
               this.ld = false;
@@ -7390,8 +7514,33 @@ struct VideoPlayerPage {
       PlaybackStartup.trace('frame', this.playbackStartupAt);
       PlaybackStartup.report('frame');
     }
-    this.playbackObservation_.cancelFirstFrame();
+    if (source === 'native-render') this.coverFrameRendered();
+    if (!this.coverFramePending) this.playbackObservation_.cancelFirstFrame();
     this.waitingForFirstFrame = false;
+  }
+
+  // 某些换绑路径不补报渲染事件。只在看门狗到期且播放时钟已走时读一次当前 Surface。
+  private async checkCoverSurfaceFrame(player: PlaybackPlayer): Promise<void> {
+    const surface = this.activeVideoSurfaceId();
+    const current = (): boolean => this.referenceAlive && this.coverFramePending && !this.coverMorphReturning &&
+      player === this.playbackResources_.video && surface === this.activeVideoSurfaceId();
+    if (!current()) return;
+    try {
+      const frame = await image.createPixelMapFromSurfaceWithTransformation(surface, true);
+      try {
+        if (current()) {
+          this.coverFrameRendered();
+          this.confirmFirstFrame(player, 'surface-buffer');
+        }
+      } finally {
+        frame.release().catch(() => {});
+      }
+    } catch (_error) {
+      if (!current()) return;
+      this.err = '未收到视频画面，请重试';
+      this.ld = false;
+      this.release().catch(() => {});
+    }
   }
 
   private setupL() {
@@ -7403,10 +7552,14 @@ struct VideoPlayerPage {
     const clockStart: number = player.currentTime;
     this.bufferedUntil = 0;
     this.playbackObservation_.start(clockStart, () => {
-      if (this.playbackResources_.video !== player || !this.referenceAlive || !this.waitingForFirstFrame || this.err || this.userPaused_) return;
+      if (this.playbackResources_.video !== player || !this.referenceAlive || (!this.waitingForFirstFrame && !this.coverFramePending) || this.err || this.userPaused_) return;
       // ⭐ 时钟在走 = 画面早就出了，只是 native 没补报 startRenderFrame。
       //    这种情况下绝不能重建播放器（播完时重建会把续播点算成 0，直接从头重播）。
       if (player.state === 'playing' && player.currentTime >= clockStart + 500) {
+        if (this.coverFramePending && this.coverMorphActive) {
+          this.checkCoverSurfaceFrame(player);
+          return;
+        }
         this.confirmFirstFrame(player, 'watchdog-clock');
         logInfo('[VideoPlayer] 首帧看门狗：时钟已在走，按已出帧收尾');
         return;
@@ -8794,6 +8947,7 @@ struct VideoPlayerPage {
       const outgoing = this.playbackResources_.replaceForQuality(handles, old);
       this.isDashStream_ = handles.bridge !== null;
       this.promoteSpareSurface(surface);
+      if (this.coverFramePending) this.coverFrameRendered();
       this.waitingForFirstFrame = false;
       this.ld = false;
       this.err = '';
@@ -11345,9 +11499,9 @@ struct VideoPlayerPage {
         this.showEpisodeSheet = false;
       }
     })
+        if (this.coverMorphActive) { this.HomeCoverMorphLayer() }
       }
-      // 裁剪窗口：尺寸/位置/圆角全部由 coverMorphProgress 派生（见 morphWinX 等）。
-      // 非 morph 期间必须回到 100% / 原点 / 直角，否则会带着卡片几何显示页面。
+      // 播放页与飞行封面共用同一个物理裁剪边界。
       .width(this.coverMorphActive ? this.morphWinW() : '100%')
       .height(this.coverMorphActive ? this.morphWinH() : '100%')
       .position({
@@ -11358,8 +11512,6 @@ struct VideoPlayerPage {
       .clip(this.coverMorphActive)
       // 保留窗口 id，便于日志与后续测量实际渲染几何。
       .id('home-morph-window')
-    // ⭐ 首页卡片封面共享元素层：只在本次进入的 morph 期间挂载，淡出后整层移除。
-    if (this.coverMorphActive) { this.HomeCoverMorphLayer() }
     }.width('100%').height('100%').backgroundColor(Color.Transparent)
       // 方向变更时的自绘推拉兜底；平时 progress 恒 0，不产生任何位移/透明度变化。
       .translate({ x: this.coverMorphFallbackExitProgress * this.cw })
@@ -13619,6 +13771,7 @@ struct VideoPlayerPage {
         this.playbackResources_.adoptPrepared(handles);
         this.isDashStream_ = handles.bridge !== null;
         this.promoteSpareSurface(warm.surfaceId);
+        if (this.coverFramePending) this.coverFrameRendered();
         this.referenceFeedPreparingMain = false;
         // 同样只记当前条的实际画质；连刷下一条仍按 preferredQn 取流。
         this.qn = warm.source.actualQn || this.qn;

@@ -9,7 +9,10 @@ const findClass = name => ast.statements.find(node => ts.isClassDeclaration(node
 const page = findClass('HomePage');
 const methods = ['requestMoreNearTail', 'loadMore'].map(name =>
   page.members.find(node => ts.isMethodDeclaration(node) && node.name.getText(ast) === name).getText(ast));
-const code = `${findClass('VideoDataSource').getText(ast)}\nclass Pagination { ${methods.join('\n')} }\n({ VideoDataSource, Pagination });`;
+const modelPath = 'entry/build/default/cache/default/default@CompileArkTS/esmodule/debug/entry/src/main/ets/model/';
+const models = ['GenericDataSource', 'FirstScreenDataSource'].map(name =>
+  fs.readFileSync(modelPath + name + '.ts', 'utf8').replace(/^import .*;\r?\n/gm, '').replace(/^export class /gm, 'class '));
+const code = `${models.join('\n')}\n${findClass('VideoDataSource').getText(ast)}\nclass Pagination { ${methods.join('\n')} }\n({ VideoDataSource, Pagination });`;
 const { Pagination, VideoDataSource } = vm.runInNewContext(ts.transpileModule(code, {
   compilerOptions: { target: ts.ScriptTarget.ES2020 }
 }).outputText, {

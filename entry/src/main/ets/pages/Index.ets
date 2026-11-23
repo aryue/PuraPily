@@ -22,8 +22,11 @@ import { logError } from '../utils/Logger';
 import { tabIndicatorCenter } from '../utils/TabIndicatorGeometry';
 import { WarmSurfaceHost } from '../services/WarmSurfaceHost';
 import { ImGrpcService } from '../services/ImGrpcService';
+import { IjkWarmPool } from '../services/IjkWarmPool';
+import systemApp from '@system.app';
 
 const HOME_MESSAGE_REFRESH_MS: number = 30000;
+const IMAGE_FILE_CACHE_BYTES: number = 1024 * 1024 * 1024;
 
 @Entry
 @Component({ freezeWhenInactive: true })
@@ -79,6 +82,11 @@ struct Index {
   async aboutToAppear(): Promise<void> {
     this.updateHomeActivity();
     const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    try {
+      systemApp.setImageFileCacheSize(IMAGE_FILE_CACHE_BYTES);
+    } catch (error) {
+      logError('[Index] configure image file cache failed', error as Error);
+    }
     try {
       await initializeReferenceAppearance(context);
       this.initializeHeaderMaterial();
@@ -154,10 +162,13 @@ struct Index {
 
   onChannelChange(): void {
     this.homeScrollOffset = 0;
+    const scene = this.channel === 2 ? 'home:recommend' : this.channel === 3 ? 'home:popular' : '';
+    IjkWarmPool.get().activateHomeScene(scene);
   }
 
   private updateHomeActivity(): void {
     AppStorage.setOrCreate('homeFeedActive', this.pageVisible && this.activeTab === 0);
+    if (this.activeTab !== 0) IjkWarmPool.get().activateHomeScene('');
     this.updateMessagePolling();
     this.updateSearchVisibility();
   }

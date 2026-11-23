@@ -48,8 +48,8 @@ assert.match(gate, /AppStorage\.get<boolean>\('cellularPrefetch'\) === true/,
   });
   const page = new Page();
   page.dataPreferences = {
-    put: async (key, value) => stored.set(key, value),
-    flush: async () => { if (flushFails) throw new Error('flush failed'); }
+    putSync: (key, value) => stored.set(key, value),
+    flushSync: () => { if (flushFails) throw new Error('flush failed'); }
   };
   page.getUIContext = () => ({ getPromptAction: () => ({ showToast: m => toasts.push(m.message) }) });
 
@@ -64,6 +64,7 @@ assert.match(gate, /AppStorage\.get<boolean>\('cellularPrefetch'\) === true/,
   flushFails = true;
   await page.saveCellularPrefetch(true);
   assert.equal(shared.get('cellularPrefetch'), true, 'a failed flush must not roll back the live gate');
+  assert.match(toasts.at(-1), /设置保存失败/);
 
   // 3. Cold start restores the saved value; a launch-time --ps flag overrides it without writing preferences.
   const saved = new Map();
@@ -74,9 +75,9 @@ assert.match(gate, /AppStorage\.get<boolean>\('cellularPrefetch'\) === true/,
     hilog: { info() {}, error(msg) { throw new Error(msg); } },
     PersistentStorage: { persistProp() {} },
     AppStorage: { setOrCreate: (key, value) => restored.set(key, value) },
-    preferences: { getPreferences: async () => ({
-      get: async (key, fallback) => saved.has(key) ? saved.get(key) : fallback,
-      put: async (key, value) => writes.push([key, value])
+    preferences: { getPreferencesSync: () => ({
+      getSync: (key, fallback) => saved.has(key) ? saved.get(key) : fallback,
+      putSync: (key, value) => writes.push([key, value])
     }) }
   });
   const instance = new Ability();
@@ -100,7 +101,7 @@ assert.match(gate, /AppStorage\.get<boolean>\('cellularPrefetch'\) === true/,
       'the --ps override must never be written back to preferences');
   }
   assert.ok(ability.indexOf("this.cellularPrefetchLaunchOverride = String(want.parameters['cellularPrefetch'])") <
-    ability.indexOf('this.loadCardSettings();'), 'the --ps flag must be parsed before the async restore');
+    ability.indexOf('this.loadCardSettings();'), 'the --ps flag must be parsed before the restore');
 
   console.log('Cellular prefetch setting: UI binding, live gate change, persistence and cold-start override passed.');
 })().catch(error => { console.error(error); process.exitCode = 1; });

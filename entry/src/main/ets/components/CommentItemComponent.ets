@@ -8,7 +8,6 @@ import { componentUtils, LevelMode, ImmersiveMode } from '@kit.ArkUI';
 import { ReplyItemComponent } from './ReplyItemComponent';
 import { CommentContentRenderer } from './CommentContentRenderer';
 import { TextSelectionDialog } from './TextSelectionDialog';
-import { getCachedPixelMap } from '../utils/ImageCache';
 import { measureTextLines } from '../utils/TextMeasure';
 import { logWarn } from '../utils/Logger';
 import { MaterialUtil } from '../utils/MaterialUtil';

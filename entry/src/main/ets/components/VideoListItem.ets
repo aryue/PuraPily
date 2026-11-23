@@ -2,6 +2,7 @@ import { ordinaryCardColor } from '../utils/SurfaceColors';
 import { NativeCardGlass } from './NativeCardGlass';
 import { fmtRelativeTime } from '../utils/TimeFormat';
 import { VideoCardMoreButton } from './VideoCardMoreButton';
+import { homeArtworkRetained } from '../utils/HomeArtwork';
 import { VideoCardFeedback } from '../services/VideoCardFeedback';
 
 /** Shared formatting for horizontal video lists. Missing values stay hidden. */
@@ -41,6 +42,8 @@ export struct VideoListItem {
   @Prop radius: number = 8;
   @Prop title: string = '';
   @Prop cover: string = '';
+  @Prop homeChannel: number = -1;
+  @StorageProp('homeArtworkMask') artworkMask: number = 63;
   @Prop duration: number = 0;
   @Prop owner: string = '';
   @Prop playCount: number = -1;
@@ -133,8 +136,8 @@ export struct VideoListItem {
               .margin({ left: 10 })
           }
           Stack({ alignContent: Alignment.BottomEnd }) {
-            if (this.cover) {
-              Image(this.cover).width('100%').height('100%').objectFit(ImageFit.Cover).draggable(false)
+            if (this.cover && (this.homeChannel < 0 || homeArtworkRetained(this.artworkMask, this.homeChannel))) {
+              Image(this.cover).width('100%').height('100%').objectFit(ImageFit.Cover).autoResize(true).draggable(false)
             }
             if (this.duration > 0) {
               Text(videoListDuration(this.duration)).fontSize(10).maxFontScale(1).fontColor('#FFFFFF')

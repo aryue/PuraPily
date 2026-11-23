@@ -29,6 +29,7 @@ assert.ok(!page.includes('private get '), 'ArkUI component accessors must not be
 compile('export ' + section(page, 'class RegionContentState', '/** 首页分区'), ctx);
 ctx.RegionContentState = ctx.exports.RegionContentState;
 ctx.VideoCardFeedback = { isDismissed: () => false };
+ctx.prefetchVideoPlayback = () => Promise.resolve();
 const compiledPath = 'entry/build/default/cache/default/default@CompileArkTS/esmodule/debug/entry/src/main/ets/pages/RegionChannelPage.ts';
 const compiled = process.argv.includes('--compiled') ? fs.readFileSync(compiledPath, 'utf8') : null;
 const methods = compiled
@@ -45,7 +46,8 @@ async function main() {
   assert.equal(mapped[0].id, 'ss123');
   const p = new ctx.exports.Page();
   let routed;
-  const source = () => ({ items: [], reloads: 0, reloadItems(a) { this.items = [...a]; this.reloads++; },
+  const source = () => ({ items: [], reloads: 0, staged: 0, reloadItems(a) { this.items = [...a]; this.reloads++; },
+    replaceForViewport(a, batch) { assert.equal(batch, 2); this.staged++; this.reloadItems(a); },
     totalCount() { return this.items.length; } });
   const scroller = () => ({ currentOffset: () => ({ yOffset: 120 }), scrollTo(args) { p.lastOffset = args.yOffset; } });
   Object.assign(p, { generation: 0, selectedRid: 0, ids: new Set(), regionStates: new Map(), page: 1, itemCount: 0,
@@ -56,6 +58,12 @@ async function main() {
     getUIContext: () => ({ getRouter: () => ({ pushUrl: args => { routed = args; return Promise.resolve(); } }),
       animateTo: (options, action) => { action(); options.onFinish?.(); } }),
     contentWidth: 300 });
+  const restored = source();
+  const firstItems = [{ id: 'first' }];
+  p.publishPaneItems(restored, { items: firstItems, offset: 0 });
+  assert.equal(restored.staged, 1, 'a cold category enters the viewport in batches');
+  p.publishPaneItems(restored, { items: firstItems, offset: 120 });
+  assert.equal(restored.staged, 1, 'restoring a scrolled category publishes the full extent immediately');
   let oldResolve, newResolve;
   ctx.fetchRegionContent = rid => new Promise(resolve => { if (rid === 0) oldResolve = resolve; else newResolve = resolve; });
   const oldRequest = p.loadRanking(true);

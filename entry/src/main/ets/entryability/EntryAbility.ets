@@ -165,7 +165,7 @@ export default class EntryAbility extends UIAbility {
     }
     // 字体大小设置页在运行中切回「跟随系统」后要靠系统配置回调继续跟，注册一次即可（API 24+）。
     AppScaleService.watchSystemFontScale(this.context);
-    // 必须在 loadCardSettings() 之前解析：恢复持久化开关是异步的，否则会反过来覆盖本次启动的命令行值。
+    // 恢复持久化开关时同时解析本次启动的命令行覆盖。
     if (want.parameters?.['cellularPrefetch'] !== undefined) {
       this.cellularPrefetchLaunchOverride = String(want.parameters['cellularPrefetch']) !== 'off';
     }
@@ -455,48 +455,52 @@ export default class EntryAbility extends UIAbility {
 
   // ==================== 窗口/UI 配置 ====================
 
-  private async loadCardSettings(): Promise<void> {
+  private loadCardSettings(): void {
     try {
-      const pref = await preferences.getPreferences(this.context, 'my_app_settings');
+      const pref = preferences.getPreferencesSync(this.context, { name: 'my_app_settings' });
+      // 首屏和窗口显隐都使用启动时恢复的值。前后台切换只应用当前值。
+      AppStorage.setOrCreate('hideNavigationIndicator', pref.getSync('hideNavigationIndicator', false) === true);
+      AppStorage.setOrCreate('recommendApiSource', pref.getSync('recommendApiSource', 'App') === 'Web' ? 'Web' : 'App');
+      AppStorage.setOrCreate('danmakuApiSource', pref.getSync('danmakuApiSource', 'grpc') === 'xml' ? 'xml' : 'grpc');
       // 画质两档偏好的读取与「当前链路 → 生效档」解析已由 QualityPreferenceService 在 onCreate 里
       // 同步完成（必须早于首屏列表预取）；这里不再碰 defaultVideoQn，避免按旧档覆盖。
-      const kernel = await pref.get('playbackKernel', 'system');
+      const kernel = pref.getSync('playbackKernel', 'system');
       AppStorage.setOrCreate('playbackKernel', kernel === 'ijk' ? 'ijk' : 'system');
-      const landscapeSide = await pref.get('landscapePlaybackSide', 'left');
+      const landscapeSide = pref.getSync('landscapePlaybackSide', 'left');
       AppStorage.setOrCreate('landscapePlaybackSide', landscapeSide === 'right' ? 'right' : 'left');
-      const cardMargin = await pref.get('cardMargin', 12) as number;
+      const cardMargin = pref.getSync('cardMargin', 12) as number;
       AppStorage.setOrCreate('cardMargin', cardMargin);
-      const cardBorderRadius = await pref.get('cardBorderRadius', 20) as number;
+      const cardBorderRadius = pref.getSync('cardBorderRadius', 20) as number;
       AppStorage.setOrCreate('cardBorderRadius', cardBorderRadius);
-      const cardListBorderRadius = await pref.get('cardListBorderRadius', 12) as number;
+      const cardListBorderRadius = pref.getSync('cardListBorderRadius', 12) as number;
       AppStorage.setOrCreate('cardListBorderRadius', cardListBorderRadius);
-      const cardListMargin = await pref.get('cardListMargin', 12) as number;
+      const cardListMargin = pref.getSync('cardListMargin', 12) as number;
       AppStorage.setOrCreate('cardListMargin', cardListMargin);
       // ⭐ 加载全局关闭动画开关（避免重启后失效）
-      const disableAnimations = await pref.get('da', false) as boolean;
+      const disableAnimations = pref.getSync('da', false) as boolean;
       AppStorage.setOrCreate('da', disableAnimations);
       // ⭐ 加载屏幕旋转锁定（避免重启后视频页回退为自动旋转）
-      const orientationLock = await pref.get('screenOrientationLock', '跟随系统') as string;
+      const orientationLock = pref.getSync('screenOrientationLock', '跟随系统') as string;
       AppStorage.setOrCreate('screenOrientationLock', orientationLock);
       // ⭐ 加载震动反馈开关（避免重启后震动失效或无法关闭）
-      const vibrateEnabled = await pref.get('vibrateEnabled', true) as boolean;
+      const vibrateEnabled = pref.getSync('vibrateEnabled', true) as boolean;
       AppStorage.setOrCreate('vibrateEnabled', vibrateEnabled);
       // 蜂窝预热取流：设置页开关落盘，重启后必须恢复；--ps 只覆盖本次启动且不写偏好文件。
-      const savedCellularPrefetch = await pref.get('cellularPrefetch', false) as boolean;
+      const savedCellularPrefetch = pref.getSync('cellularPrefetch', false) as boolean;
       const launchOverride = this.cellularPrefetchLaunchOverride;
       const cellularPrefetch = launchOverride === null ? savedCellularPrefetch : launchOverride;
       AppStorage.setOrCreate('cellularPrefetch', cellularPrefetch);
-      AppStorage.setOrCreate('sponsorBlockEnabled', await pref.get('sponsorBlockEnabled', false) as boolean);
+      AppStorage.setOrCreate('sponsorBlockEnabled', pref.getSync('sponsorBlockEnabled', false) as boolean);
       AppStorage.setOrCreate('sponsorBlockPgcMode',
-        await pref.get('sponsorBlockPgcMode', 'skipOnce') as string);
+        pref.getSync('sponsorBlockPgcMode', 'skipOnce') as string);
       AppStorage.setOrCreate('sponsorBlockModes',
-        await pref.get('sponsorBlockModes', '111111111111') as string);
-      AppStorage.setOrCreate('sponsorBlockToast', await pref.get('sponsorBlockToast', true) as boolean);
+        pref.getSync('sponsorBlockModes', '111111111111') as string);
+      AppStorage.setOrCreate('sponsorBlockToast', pref.getSync('sponsorBlockToast', true) as boolean);
       AppStorage.setOrCreate('sponsorBlockSeekInto',
-        await pref.get('sponsorBlockSeekInto', false) as boolean);
-      AppStorage.setOrCreate('sponsorBlockLimitMs', await pref.get('sponsorBlockLimitMs', 0) as number);
+        pref.getSync('sponsorBlockSeekInto', false) as boolean);
+      AppStorage.setOrCreate('sponsorBlockLimitMs', pref.getSync('sponsorBlockLimitMs', 0) as number);
       AppStorage.setOrCreate('sponsorBlockServer',
-        await pref.get('sponsorBlockServer', 'https://www.bsbsb.top') as string);
+        pref.getSync('sponsorBlockServer', 'https://www.bsbsb.top') as string);
       hilog.info(DOMAIN, TAG, 'cellularPrefetch saved=%{public}s override=%{public}s active=%{public}s',
         String(savedCellularPrefetch), String(launchOverride), String(cellularPrefetch));
     } catch (e) {
@@ -517,14 +521,9 @@ export default class EntryAbility extends UIAbility {
         navigationBarContentColor: '#FFFFFF',
       };
       await windowClass.setWindowSystemBarProperties(sysBarProps);
-      const pref = await preferences.getPreferences(this.context, 'my_app_settings');
       const navInset = windowClass.getUIContext().px2vp(
         windowClass.getWindowAvoidArea(window.AvoidAreaType.TYPE_NAVIGATION_INDICATOR).bottomRect.height);
-      if (navInset > 0 && !(AppStorage.get<boolean>('hideNavigationIndicator') ?? false)) {
-        AppStorage.setOrCreate('realNavIndicatorHeight', navInset);
-      }
-      AppStorage.setOrCreate('hideNavigationIndicator', await pref.get('hideNavigationIndicator', false) as boolean);
-      StatusBarUtils.updateNavigationInset();
+      StatusBarUtils.updateNavigationInset(navInset);
       // ★ 按用户偏好和全屏状态设置状态栏显隐
       const isFullscreen: boolean = AppStorage.get<boolean>('isFullscreen') ?? false;
       const hideStatusBar: boolean = AppStorage.get<boolean>('hideStatusBar') ?? false;
@@ -615,13 +614,11 @@ export default class EntryAbility extends UIAbility {
     });
   }
 
-  /** 从 Preferences 读取并应用屏幕旋转锁定（冷启动时调用，保证重启后立即生效） */
+  /** 将启动时恢复的旋转偏好应用到窗口。 */
   private async applyOrientationLockFromPrefs(): Promise<void> {
     try {
-      const pref = await preferences.getPreferences(this.context, 'my_app_settings');
-      const lock = await pref.get('screenOrientationLock', '跟随系统') as string;
-      AppStorage.setOrCreate('screenOrientationLock', lock);
       const windowClass = await window.getLastWindow(this.context);
+      const lock = AppStorage.get<string>('screenOrientationLock') ?? '跟随系统';
       let orientation: window.Orientation;
       switch (lock) {
         case '跟随系统':

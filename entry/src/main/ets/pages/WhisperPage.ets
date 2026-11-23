@@ -11,6 +11,7 @@ import { WhisperChatView } from '../components/WhisperChatView';
 import { logInfo, logWarn, logError, errMsg } from '../utils/Logger';
 import { ImGrpcService, ImSessionListResult, ImSession, ImUnreadCount } from '../services/ImGrpcService';
 import { ChatEmote, ChatTextSegment } from '../utils/ChatEmote';
+import { FirstScreenDataSource } from '../model/FirstScreenDataSource';
 
 /** ⚠️ 分栏左栏宽度可调节范围（左右占比 3:7）：最小 = 屏幕宽×30%（左30%右70%），最大 = 屏幕宽×70%（左70%右30%） */
 const SPLIT_MIN_RATIO: number = 0.3;
@@ -35,7 +36,8 @@ export struct WhisperPage {
   @StorageLink('pageWallpaperEnabled') pageWallpaperEnabled: boolean = false;
   @StorageProp('referenceLayout') referenceLayout: boolean = true;
   /** 会话列表 */
-  @State sessions: ImSession[] = [];
+  private readonly sessionSource = new FirstScreenDataSource<ImSession>();
+  @State @Watch('syncSessionSource') sessions: ImSession[] = [];
   /** 加载中 */
   @State isLoading: boolean = true;
   /** 加载失败 */
@@ -68,7 +70,15 @@ export struct WhisperPage {
   /** 横屏检测（分栏用，与 DynamicsPage 同方案） */
   @State isLandscape: boolean = false;
   /** 表情表是否已加载（加载完成后会话预览中的 [xxx] 文本替换为表情图片） */
-  @State emoteReady: boolean = false;
+  @State @Watch('syncSessionSource') emoteReady: boolean = false;
+
+  private syncSessionSource(): void {
+    if (this.sessionSource.getRawItems() === this.sessions) {
+      this.sessionSource.notifyDataReload();
+    } else {
+      this.sessionSource.replaceForViewport(this.sessions, 2, this.getUIContext());
+    }
+  }
   private landscapeListener: mediaquery.MediaQueryListener | null = null;
   /** 分栏右侧当前会话 */
   @State chatTalkerId: number = 0;
@@ -638,7 +648,7 @@ export struct WhisperPage {
         .width('100%')
         .justifyContent(this.isLandscape ? FlexAlign.Start : FlexAlign.Center)
       }
-          ForEach(this.sessions, (s: ImSession, index: number) => {
+          LazyForEach(this.sessionSource, (s: ImSession) => {
             ListItem() {
               this.sessionRow(s)
             }
@@ -662,7 +672,7 @@ export struct WhisperPage {
           this.onMsgListScroll(this.listScroller.currentOffset().yOffset);
         })
         .onReachEnd(() => {
-          this.loadMore();
+          if (!this.sessionSource.isPublishing()) this.loadMore();
         })
       }
       }
@@ -710,7 +720,7 @@ export struct WhisperPage {
       } else if (this.sessions.length === 0) {
         ListItem() { Text('暂无私信').fontSize(14).fontColor(this.pageWallpaperEnabled ? (this.isDarkMode ? '#C9CDD3' : '#50545A') : '#757A81').width('100%').textAlign(TextAlign.Center).margin({ top: 70 }) }
       } else {
-        ForEach(this.sessions, (session: ImSession) => {
+        LazyForEach(this.sessionSource, (session: ImSession) => {
           ListItem() {
             this.sessionRow(session)
           }
@@ -719,7 +729,7 @@ export struct WhisperPage {
       ListItem() { Row().height(this.navIndicatorHeight + 12) }
     }.width('100%').height('100%').scrollBar(BarState.Off)
       .padding({ left: 14, right: 14 }).contentStartOffset(this.contentTopInset)
-      .onReachEnd(() => this.loadMore())
+      .onReachEnd(() => { if (!this.sessionSource.isPublishing()) this.loadMore(); })
   }
 
   build() {

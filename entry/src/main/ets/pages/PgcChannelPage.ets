@@ -1,3 +1,4 @@
+import { HomeChannelCover } from '../components/HomeChannelCover';
 import { HomeInitialLoading } from '../components/HomeInitialLoading';
 import { HomeChannelCardEntrance } from '../components/HomeChannelCardEntrance';
 import { GlassMaterial } from '../utils/GlassMaterial';
@@ -15,7 +16,8 @@ import { publishHomeScrollOffset } from '../utils/HomeScrollOffset';
  * - 双列瀑布流卡片 + 下拉刷新 + 上拉加载更多
  * - 点击卡片 → VideoPlayerPage（传 mediaId，复用搜索页 PGC 跳转方式）
  */
-import { curves, display, mediaquery } from '@kit.ArkUI';
+import { curves, display, mediaquery, LazyColumnLayout, LazyColumnLayoutAttribute,
+  LazyVWaterFlowLayout, LazyVWaterFlowLayoutAttribute, LengthMetrics } from '@kit.ArkUI';
 import { common } from '@kit.AbilityKit';
 import { preferences } from '@kit.ArkData';
 import { logError } from '../utils/Logger';
@@ -27,7 +29,8 @@ import {
   PgcIndexValue,
   PgcSeason
 } from '../api/PgcApi';
-import { GenericDataSource } from '../model/GenericDataSource';
+import { FirstScreenDataSource } from '../model/FirstScreenDataSource';
+import { resizeImageUrl } from '../utils/ImageUrl';
 
 @Component({ freezeWhenInactive: true })
 export struct PgcChannelPage {
@@ -96,7 +99,7 @@ export struct PgcChannelPage {
   private filterAnimToken: number = 0;
   private readonly PANEL_ROW_HEIGHT: number = 44;
 
-  private dataSource: GenericDataSource<PgcSeason> = new GenericDataSource();
+  private dataSource: FirstScreenDataSource<PgcSeason> = new FirstScreenDataSource<PgcSeason>();
   private scroller: Scroller = new Scroller();
   @State isLoading: boolean = true;
   @State isRefreshing: boolean = false;
@@ -200,8 +203,7 @@ export struct PgcChannelPage {
         return;
       }
       if (isRefresh) {
-        this.dataSource.reloadItems(list);
-
+        this.dataSource.replaceForViewport(list, 2, this.getUIContext());
       } else {
         this.dataSource.addItems(list);
       }
@@ -213,7 +215,7 @@ export struct PgcChannelPage {
   }
 
   private loadMore(): void {
-    if (this.isLoadingMore || !this.hasMore || this.isRefreshing) return;
+    if (this.isLoadingMore || !this.hasMore || this.isRefreshing || this.dataSource.isPublishing()) return;
     this.isLoadingMore = true;
     this.loadData(false).then(() => {
       this.isLoadingMore = false;
@@ -651,13 +653,8 @@ export struct PgcChannelPage {
         Column() {
           // ---- 封面区 ----
           Stack({ alignContent: Alignment.BottomStart }) {
-            Image(item.cover)
-              .width('100%')
-              // ⭐ 番剧/影视海报为竖版（2:3），避免被横版裁剪
-              .aspectRatio(2 / 3)
-              .objectFit(ImageFit.Cover)
-              .backgroundColor(this.isDarkMode ? '#333333' : '#E8E8E8')
-              .draggable(false)
+            HomeChannelCover({ source: resizeImageUrl(item.cover, 640), channel: this.channelIndex, aspect: 2 / 3,
+              placeholder: this.isDarkMode ? '#333333' : '#E8E8E8' })
 
             // 底部渐变遮罩
             Row()
@@ -919,15 +916,13 @@ export struct PgcChannelPage {
       .height(240)
       .justifyContent(FlexAlign.Center)
     } else {
-      WaterFlow({ layoutMode: WaterFlowLayoutMode.SLIDING_WINDOW }) {
+      LazyVWaterFlowLayout() {
         LazyForEach(this.dataSource, (item: PgcSeason, index: number) => {
-          FlowItem() {
-            HomeChannelCardEntrance({
-              cardKey: String(item.seasonId), gridId: `home-pgc-grid-${this.channelIndex}`,
-              channelIndex: this.channelIndex, revealedCardIds: this.revealedCardIds
-            }) {
-              this.PgcCard(item)
-            }
+          HomeChannelCardEntrance({
+            cardKey: String(item.seasonId), gridId: `home-pgc-grid-${this.channelIndex}`,
+            channelIndex: this.channelIndex, revealedCardIds: this.revealedCardIds
+          }) {
+            this.PgcCard(item)
           }
         }, (item: PgcSeason, index: number) => `${item.seasonId}_${index}`)
       }
@@ -935,14 +930,13 @@ export struct PgcChannelPage {
       .columnsTemplate(this.getColumnTemplate())
       .id(`home-pgc-grid-${this.channelIndex}`)
       .onSizeChange((_old: SizeOptions, size: SizeOptions) => { this.gridWidth = Number(size.width); })
-      .columnsGap(this.cardListMargin).rowsGap(this.cardListMargin)
+      .columnsGap(LengthMetrics.vp(this.cardListMargin)).rowsGap(LengthMetrics.vp(this.cardListMargin))
       .padding({
         left: 12,
         right: 12,
         bottom: 190 + this.navIndicatorHeight
       })
       .backgroundColor('transparent')
-      .cachedCount(12)
       .clip(false)
 
       if (this.isLoadingMore) {
@@ -1013,7 +1007,7 @@ export struct PgcChannelPage {
   mainScrollBody(showPanel: boolean) {
     Refresh({ refreshing: $$this.isRefreshing, builder: this.customRefreshComponent() }) {
       Scroll(this.scroller) {
-        Column() {
+        LazyColumnLayout() {
           if (showPanel && this.isIndexPanelExpanded && !(this.isLoading && this.dataSource.totalCount() === 0)) {
             // ⭐ 竖屏顶部内嵌面板：四周各 cardListMargin 边距，与信息流卡片对齐
             //    ⚠️ 用 padding（组件内收缩）而非 calc+margin（百分比基准易致左右不对称）

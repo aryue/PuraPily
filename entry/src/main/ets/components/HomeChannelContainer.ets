@@ -16,6 +16,27 @@ import { LivePage } from '../pages/LivePage';
 import { PgcChannelPage } from '../pages/PgcChannelPage';
 import { RegionChannelPage } from '../pages/RegionChannelPage';
 import { HOME_CHANNEL_CURVE, HOME_CHANNEL_DURATION } from '../utils/HomeChannelMotion';
+import { FrameCallback } from '@ohos.arkui.UIContext';
+import { IReusableInfo } from '@kit.ArkUI';
+
+const HIDDEN_RECOMMEND_CARD_LIMIT: number = 8;
+const RECOMMEND_POOL_QUIET_MS: number = 1500;
+const RECOMMEND_POOL_BATCH_SIZE: number = 3;
+const RECOMMEND_POOL_BATCH_INTERVAL_MS: number = 80;
+const RECOMMEND_POOL_IDLE_BUDGET_NS: number = 5_000_000;
+
+class ChannelIdleFrame extends FrameCallback {
+  private run: (timeLeftInNano: number) => void;
+
+  constructor(run: (timeLeftInNano: number) => void) {
+    super();
+    this.run = run;
+  }
+
+  onIdle(timeLeftInNano: number): void {
+    this.run(timeLeftInNano);
+  }
+}
 
 /** 频道定义（供 Index 胶囊复用） */
 export interface ChannelTabDef {
@@ -68,12 +89,99 @@ export struct HomeChannelContainer {
   private tabController: TabsController = new TabsController();
   @State activeChannel: number = 2;
   private channelInitDone: boolean = false;
+  private artworkTransition: boolean = false;
+  private artworkReleaseTimer: number = -1;
+  private recommendReusePool?: IReusableInfo;
+  private recommendReuseCapacity: number = 0;
+  private recommendTrimTimer: number = -1;
+  private recommendTrimRevision: number = 0;
+  private channelTouching: boolean = false;
+
+  private setRecommendReusePool(pool?: IReusableInfo): void {
+    this.cancelRecommendPoolTrim();
+    this.recommendReusePool = pool;
+    this.recommendReuseCapacity = pool?.maxCount ?? 0;
+    this.scheduleRecommendPoolTrim();
+  }
+
+  private cancelRecommendPoolTrim(): void {
+    this.recommendTrimRevision++;
+    if (this.recommendTrimTimer !== -1) {
+      clearTimeout(this.recommendTrimTimer);
+      this.recommendTrimTimer = -1;
+    }
+  }
+
+  private canTrimRecommendPool(): boolean {
+    return this.activeChannel !== 2 && this.activeChannel === this.channelIndex &&
+      !this.artworkTransition && !this.channelTouching && AppStorage.get<boolean>('homeFeedActive') === true &&
+      (this.recommendReusePool?.maxCount ?? 0) > HIDDEN_RECOMMEND_CARD_LIMIT;
+  }
+
+  private scheduleRecommendPoolTrim(): void {
+    if (this.recommendTrimTimer !== -1 || !this.canTrimRecommendPool()) return;
+    this.queueRecommendPoolTrim(++this.recommendTrimRevision, RECOMMEND_POOL_QUIET_MS);
+  }
+
+  private queueRecommendPoolTrim(revision: number, delay: number): void {
+    this.recommendTrimTimer = setTimeout(() => {
+      this.recommendTrimTimer = -1;
+      if (!this.canTrimRecommendPool()) return;
+      this.getUIContext().postFrameCallback(new ChannelIdleFrame((timeLeftInNano: number) => {
+        if (revision !== this.recommendTrimRevision || !this.canTrimRecommendPool()) return;
+        const pool = this.recommendReusePool!;
+        if (pool.count <= HIDDEN_RECOMMEND_CARD_LIMIT) return;
+        if (timeLeftInNano >= RECOMMEND_POOL_IDLE_BUDGET_NS) {
+          // 缩池会同步销毁组件。分批处理离屏节点，避免阻塞下一帧。
+          pool.maxCount = Math.max(HIDDEN_RECOMMEND_CARD_LIMIT, pool.count - RECOMMEND_POOL_BATCH_SIZE);
+        }
+        if (pool.count > HIDDEN_RECOMMEND_CARD_LIMIT && this.canTrimRecommendPool()) {
+          this.queueRecommendPoolTrim(revision, RECOMMEND_POOL_BATCH_INTERVAL_MS);
+        }
+      }));
+    }, delay);
+  }
+
+  private onChannelTouch(event: TouchEvent): void {
+    if (event.type === TouchType.Down || event.type === TouchType.Move) {
+      if (!this.channelTouching) this.cancelRecommendPoolTrim();
+      this.channelTouching = true;
+    } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
+      this.channelTouching = false;
+      this.scheduleRecommendPoolTrim();
+    }
+  }
+
+  private cancelArtworkRelease(): void {
+    if (this.artworkReleaseTimer !== -1) {
+      clearTimeout(this.artworkReleaseTimer);
+      this.artworkReleaseTimer = -1;
+    }
+  }
+
+  aboutToDisappear(): void {
+    this.cancelArtworkRelease();
+    this.cancelRecommendPoolTrim();
+  }
+
+  private showArtwork(from: number, to: number = from): void {
+    const pool = this.recommendReusePool;
+    if ((from === 2 || to === 2) && pool && pool.maxCount !== this.recommendReuseCapacity) {
+      pool.maxCount = this.recommendReuseCapacity;
+    }
+    const mask = (1 << from) | (1 << to);
+    // 连续横拖的相邻页通常不变，只有可见频道集合变化时才通知封面。
+    if (AppStorage.get('homeArtworkMask') !== mask) {
+      AppStorage.setOrCreate('homeArtworkMask', mask);
+    }
+  }
 
   aboutToAppear() {
     // 从 AppStorage 恢复上次频道（胶囊可能已在其它入口设置）；默认 2=推荐
     const saved: number = AppStorage.get<number>('homeChannelIndex') ?? 2;
     this.activeChannel = saved >= 0 && saved < CHANNEL_TABS.length ? saved : 2;
     this.channelPosition = channelPagerIndex(this.activeChannel) + 1;
+    this.showArtwork(this.activeChannel);
     this.channelInitDone = true;
   }
 
@@ -82,6 +190,9 @@ export struct HomeChannelContainer {
     if (!this.channelInitDone || this.syncingChannel) return;
     const target = this.channelIndex;
     if (target < 0 || target >= CHANNEL_TABS.length) return;
+    this.cancelRecommendPoolTrim();
+    this.cancelArtworkRelease();
+    this.showArtwork(this.activeChannel, target);
     this.tabController.changeIndex(channelPagerIndex(target));
     if (target === this.activeChannel) this.channelPosition = channelPagerIndex(target) + 1;
   }
@@ -104,6 +215,7 @@ export struct HomeChannelContainer {
   private onTabsChange(index: number): void {
     const changed = this.activeChannel !== index;
     this.activeChannel = index;
+    if (!this.artworkTransition) this.showArtwork(index);
     this.channelPosition = channelPagerIndex(index) + 1;
     if (this.channelIndex !== index) {
       this.syncingChannel = true;
@@ -114,14 +226,31 @@ export struct HomeChannelContainer {
       const signal: number = (AppStorage.get('livePanelCollapseSignal') as number) || 0;
       AppStorage.set('livePanelCollapseSignal', signal + 1);
     }
+    this.scheduleRecommendPoolTrim();
   }
 
   private onTabsGestureSwipe(index: number, event: TabsAnimationEvent): void {
     if (this.pagerWidth <= 0) return;
+    this.cancelRecommendPoolTrim();
+    const neighbor = index - Math.sign(event.currentOffset);
+    if (neighbor >= 0 && neighbor < CHANNEL_TABS.length) {
+      this.showArtwork(channelAtPager(index), channelAtPager(neighbor));
+    }
     this.channelPosition = Math.max(1, Math.min(CHANNEL_TABS.length, index + 1 - event.currentOffset / this.pagerWidth));
   }
 
-  private onTabsAnimationStart(toIndex: number): void {
+  private onTabsAnimationStart(fromIndex: number, toIndex: number): void {
+    this.artworkTransition = true;
+    this.cancelRecommendPoolTrim();
+    this.cancelArtworkRelease();
+    const destination = channelAtPager(toIndex - 1);
+    this.showArtwork(channelAtPager(fromIndex), destination);
+    // At the tail of the native curve the old page has almost left the viewport.
+    // Drop its images while the outgoing subtree can still process a render update.
+    this.artworkReleaseTimer = setTimeout(() => {
+      this.artworkReleaseTimer = -1;
+      this.showArtwork(destination);
+    }, HOME_CHANNEL_DURATION - 48);
     this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: HOME_CHANNEL_DURATION, curve: HOME_CHANNEL_CURVE }, () => {
       this.channelPosition = toIndex;
     });
@@ -136,7 +265,8 @@ export struct HomeChannelContainer {
           LivePage()
         }
         TabContent() {
-          HomePage({ externalScroller: this.externalScroller })
+          HomePage({ externalScroller: this.externalScroller,
+            onCardReusePool: (pool?: IReusableInfo) => this.setRecommendReusePool(pool) })
         }
         TabContent() {
           DiscoverPage({ externalScroller: this.discoverScroller })
@@ -168,13 +298,18 @@ export struct HomeChannelContainer {
         this.pagerWidth = Number(newArea.width);
       })
       .onGestureSwipe((index: number, event: TabsAnimationEvent) => this.onTabsGestureSwipe(index, event))
-      .onAnimationStart((_fromIndex: number, toIndex: number) => this.onTabsAnimationStart(toIndex + 1))
-      .onAnimationEnd((index: number) => this.onTabsChange(channelAtPager(index)))
+      .onAnimationStart((fromIndex: number, toIndex: number) => this.onTabsAnimationStart(fromIndex, toIndex + 1))
+      .onAnimationEnd((index: number) => {
+        this.cancelArtworkRelease();
+        this.artworkTransition = false;
+        this.onTabsChange(channelAtPager(index));
+      })
       .onChange((index: number) => this.onTabsChange(channelAtPager(index)))
       .width('100%')
       .height('100%')
     }
     .width('100%')
     .height('100%')
+    .onTouch((event: TouchEvent) => this.onChannelTouch(event))
   }
 }

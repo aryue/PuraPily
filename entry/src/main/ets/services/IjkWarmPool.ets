@@ -22,6 +22,7 @@ export interface IjkWarmTake {
 }
 
 const TTL_MS: number = 25000;
+const HOME_TTL_MS: number = 10000;
 /** 槽位内实例新建后 1.2s 内不因目标变化而重建，避免快速滑动时反复销毁/创建。 */
 const REBUILD_COOLDOWN_MS: number = 1200;
 const MAX_SLOTS: number = 5;
@@ -73,7 +74,7 @@ export class IjkWarmPool {
     this.sceneOrders.set(scene, order);
     for (const slot of this.slots) {
       if (slot.scene === scene) slot.order = order;
-      else if (slot.scene.startsWith('home:') && slot.pending !== null) this.dispose(slot);
+      else if (slot.scene.startsWith('home:')) this.dispose(slot);
     }
   }
 
@@ -217,7 +218,7 @@ export class IjkWarmPool {
   take(cid: number, quality: number): IjkWarmTake | null {
     for (const s of this.slots) {
       if (s.session === null || s.cid !== cid) continue;
-      if (Date.now() - s.createdAt > TTL_MS) {
+      if (Date.now() - s.createdAt > this.slotTtl(s)) {
         this.dispose(s);
         return null;
       }
@@ -315,13 +316,17 @@ export class IjkWarmPool {
     return 0;
   }
 
+  private slotTtl(s: WarmSlot): number {
+    return s.scene.startsWith('home:') ? HOME_TTL_MS : TTL_MS;
+  }
+
   private arm(s: WarmSlot): void {
     this.clearTimer(s);
     s.timer = setTimeout(() => {
       s.timer = -1;
       log('expired cid=' + s.cid);
       this.dispose(s);
-    }, TTL_MS);
+    }, this.slotTtl(s));
   }
 
   private clearTimer(s: WarmSlot): void {

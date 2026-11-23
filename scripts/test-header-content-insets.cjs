@@ -15,6 +15,10 @@ const { gradientTitleBarStyle } = context.exports;
 let calls = [];
 const component = name => new Proxy({}, { get: (_, key) => (...args) => calls.push([name, key, ...args]) });
 for (const name of ['Column', 'WaterFlow', 'If', 'ForEach', 'FlowItem', 'Text', 'Refresh']) context[name] = component(name);
+context.LazyForEach = {
+  create: (_id, _owner, items, build) => items.forEach(build),
+  pop() {}
+};
 Object.assign(context, { ClickEffectLevel: { LIGHT: 0 }, BarState: { Off: 0 }, EdgeEffect: { Spring: 0 } });
 const source = fs.readFileSync(base + 'pages/FavoritesPage.ts', 'utf8');
 const ast = ts.createSourceFile('FavoritesPage.ts', source, ts.ScriptTarget.Latest, true);
@@ -30,6 +34,7 @@ for (const status of [0, 24, 40, 48]) {
       const subject = new context.exports.Subject();
       Object.assign(subject, { globalStatusBarHeight: status, columnCount: columns,
         isLoadingResources: state === 'loading', resourceList: state === 'empty' ? [] : [{ id: 1 }],
+        resourceDataSource: state === 'empty' ? [] : [{ id: 1 }],
         resourceHasMore: false, isDarkMode: true,
         observeComponentCreation2: fn => fn(1, true),
         ifElseBranchUpdateFunction: (_, fn) => fn(),

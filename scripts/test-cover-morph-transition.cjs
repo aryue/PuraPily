@@ -62,6 +62,13 @@ assert.match(index, /\.id\('home-morph-root'\)/, '首页根节点必须挂可视
 assert.match(home, /getRectangleById\('home-morph-root'\)/, '首页尺寸必须读取真实根节点矩形');
 assert.match(home, /getComponentSnapshot\(\)\s*\n?\s*\.getSync\(`home-card-cover-image-\$\{item\.id\}`\)/, 
   '首页点击必须同步快照已渲染的封面图');
+assert.match(card, /ForEach\(\[this\.coverArtwork\(\)\][\s\S]{0,190}?NodeContainer\(this\.hostFor\(art\)\)[\s\S]{0,120}?JSON\.stringify\(art\)/,
+  '列表复用到另一条视频时必须更换封面宿主');
+assert.match(home, /= !flight && rect !== undefined/, '已解码的同节点转场跳过快照');
+assert.match(page, /@State private coverMorphStarted: boolean = false;/,
+  '启动飞行必须触发 ArkUI 重建封面宿主分支');
+assert.match(page, /NodeContainer\(this\.liveCover\)/, '播放页挂载卡片提供的控制器');
+assert.match(page, /this\.coverMorphReturnEarlyHide = true;\s*this\.liveCover\?\.restore\(\);\s*this\.showHomeCover\(true\);/, '返回落位时立即归还封面');
 assert.ok(!/captureMorphBase|home-morph-snapshot/.test(home), '首页不得再维护整页截图底板');
 assert.match(home, /const info = utils\.getRectangleById\(HomeCardMorph\.cardCoverId\(item\.id\)\);/,
   '点击时必须取封面窗口矩形');
@@ -69,7 +76,7 @@ assert.match(home, /if \(x > winW - margin \|\| y > winH - margin \|\| x \+ w < 
   '卡片矩形必须校验与可视区有交集');
 assert.match(home, /const rect: HomeCardMorphRect \| undefined =\s*\n\s*HomeCardMorph\.enabled\(\) \? this\.readCardCoverRect\(item\) : undefined;/, 
   '矩形必须在点击同步段取');
-assert.match(home, /this\.armHomeCardMorph\(item, rect, coverPixel\);/, 
+assert.match(home, /if \(this\.armHomeCardMorph\(item, rect, coverPixel\)\) HomeCardMorph\.liveCover = flight;/,
   '取到矩形和快照后必须同步登记');
 assert.match(home, /this\.openVideoPage\(item\);/, '登记后必须跳转');
 assert.ok(!/const timer = setTimeout|const use = \(base/.test(home), '不得保留截图竞态逻辑');
@@ -88,27 +95,27 @@ assert.match(page, /this\.trySwitchCoverMorph\(\);[\s\S]{0,700}?this\.coverMorph
   '必须先切再起 progress，避免主线程延迟时切换帧取到手递矩形');
 assert.match(page, /private switchCoverMorphToPlayer\(\): void \{[\s\S]{0,600}?this\.coverMorphSwitchRect = \{ x: q\.x, y: q\.y, width: q\.width, height: q\.height, radius: q\.radius \};/, 
   '切换帧必须冻结当前封面矩形，播放页几何从这一帧接过');
-assert.match(page, /private coverMorphFlyRect\(\): HomeCardMorphRect \{[\s\S]{0,900}?const aspect = Math\.max\(0\.05, cardAspect \+ \(mediaAspect - cardAspect\) \* a\);/, 
+assert.match(page, /private coverMorphFlyRect\([^)]*\): HomeCardMorphRect \{[\s\S]{0,900}?const aspect = Math\.max\(0\.05, cardAspect \+ \(mediaAspect - cardAspect\) \* a\);/,
   '封面飞行矩形必须按 ASPECT_DURATION 变成视频真实画幅');
 assert.match(page, /private coverMorphLayerRect\(\): HomeCardMorphRect \{[\s\S]{0,900}?if \(!this\.coverMorphSwitching\) return this\.coverMorphFlyRect\(\);/, 
   '切换前封面层必须用飞行矩形');
 assert.match(page, /private morphWinFrom: HomeCardMorphRect[\s\S]{0,240}?private morphWinTo: HomeCardMorphRect/, 
   '窗口必须有起止矩形');
-assert.match(page, /private morphWinW\(\): number \{[\s\S]{0,500}?q\.width \+ \(this\.morphPageW - q\.width\) \* this\.coverMorphReveal/, 
+assert.match(page, /private coverMorphEnterWindowRect\([^)]*\): HomeCardMorphRect \{[\s\S]{0,500}?card\.width \+ \(this\.morphPageW - card\.width\) \* reveal/,
   '进入段窗口宽度必须严格从卡片宽展开到整页宽');
-assert.match(page, /private morphWinH\(\): number \{[\s\S]{0,500}?q\.height \+ \(this\.morphPageH - q\.height\) \* this\.coverMorphReveal/, 
+assert.match(page, /private coverMorphEnterWindowRect\([^)]*\): HomeCardMorphRect \{[\s\S]{0,500}?card\.height \+ \(this\.morphPageH - card\.height\) \* reveal/,
   '进入段窗口高度必须严格从卡片高展开到整页高');
 assert.match(page, /const s0 = this\.morphHandoffScale\(\);[\s\S]{0,160}?return s0 \+ \(1 - s0\) \* this\.coverMorphReveal;/, 
   '进入段页面缩放必须从切换帧的动态 s0 放大到 1');
 assert.match(page, /private morphHandoffScale\(\): number \{[\s\S]{0,300}?Math\.max\(1, q\.width\) \/ Math\.max\(1, this\.morphPageW\)/, 
   '切换帧页面缩放必须让整页宽度与卡片同宽');
-assert.match(page, /return this\.coverMorphSwitchRect\.x \* \(1 - this\.coverMorphReveal\);/, 
+assert.match(page, /x: card\.x \* \(1 - reveal\)/,
   '进入段窗口横向原点必须从卡片位置收拢到 0');
-assert.match(page, /return this\.coverMorphSwitchRect\.y \* \(1 - this\.coverMorphReveal\);/, 
+assert.match(page, /y: card\.y \* \(1 - reveal\)/,
   '进入段窗口纵向原点必须从卡片位置收拢到 0');
-assert.match(page, /private morphContentPosX\(\): number \{[\s\S]{0,400}?this\.morphHandoffWinX\(\) - q\.x/, 
+assert.match(page, /private morphContentPosX\(\): number \{[\s\S]{0,400}?this\.morphHandoffWinX\(\) - this\.coverMorphSwitchRect\.x/,
   '内容水平偏移必须按切换帧视频居中量收拢到 0');
-assert.match(page, /private morphContentPosY\(\): number \{[\s\S]{0,400}?this\.morphHandoffWinY\(\) - q\.y/, 
+assert.match(page, /private morphContentPosY\(\): number \{[\s\S]{0,400}?this\.morphHandoffWinY\(\) - this\.coverMorphSwitchRect\.y/,
   '内容纵向偏移必须按切换帧视频居中量收拢到 0');
 assert.match(page, /private coverMorphHandoffRect\(\): HomeCardMorphRect \{/, 
   '必须有手递矩形计算');
@@ -137,9 +144,9 @@ assert.match(page, /private coverMorphPixel: image\.PixelMap \| undefined = unde
 assert.match(page, /this\.coverMorphPixel = HomeCardMorph\.takeCoverPixel\(\);/, 
   '播放页必须取走快照 PixelMap');
 assert.match(page, /Image\(this\.coverMorphPixel\)/, '封面层必须优先渲染 PixelMap 快照');
-assert.match(page, /if \(this\.coverMorphDirectFrame && this\.waitingForFirstFrame\) \{[\s\S]{0,240}?snapshot holds until first frame/, 
+assert.match(page, /if \(this\.coverFramePending\) \{[\s\S]{0,240}?snapshot holds until first frame/,
   '首帧未到必须保持快照，不能退回页内封面');
-assert.match(page, /if \(this\.coverMorphDirectFrame && this\.coverMorphSwitching\) \{[\s\S]{0,160}?scheduleCoverMorphFirstFrameFade\(\)/, 
+assert.match(page, /if \(this\.coverMorphSwitching && \(this\.coverMorphDirectFrame \|\| this\.coverMorphRevealDone\)\) \{[\s\S]{0,160}?scheduleCoverMorphFirstFrameFade\(\)/,
   '首帧提前就绪时必须调度快照提前淡出');
 assert.match(page, /private scheduleCoverMorphFirstFrameFade\(\): void \{[\s\S]{0,700}?this\.fadeCoverMorphOverlay\(\);/, 
   '首帧可以在窗口移动途中交接，不能等 reveal 完全结束才淡');
@@ -176,9 +183,10 @@ assert.match(page, /colors: \[\['#00000000', 0\], \['#99000000', 1\]\]/,
 const coverLayer = page.slice(page.indexOf('HomeCoverMorphLayer()'), page.indexOf('@State isBiliLoggedIn'));
 assert.match(coverLayer, /coverMorphLayerRect\(\)\.x - this\.morphWinX\(\)/, 
   '封面层位置必须换算成相对裁剪窗口的局部坐标');
-assert.match(coverLayer, /\.width\(this\.morphWinW\(\)\)[\s\S]{0,240}?\.clip\(true\)/, 
-  '封面层必须裁剪到当前 morph 窗口内，不能盖住窗口外真实首页');
-
+assert.match(page, /if \(this\.coverMorphActive\) \{ this\.HomeCoverMorphLayer\(\) \}\s*\n\s*\}[\s\S]{0,900}?\.id\('home-morph-window'\)/,
+  '封面和播放页必须在同一裁剪容器内');
+assert.match(card, /\.visibility\(this\.flyingCard === this\.coverMorphId\(\) \? Visibility.Hidden : Visibility.Visible\)/,
+  '按卡片身份隐藏原封面，包括刚重建的卡片');
 // ── 5) 返回：先 back 让首页 live 激活，再由非零 Exit 撑住收缩 ─────────────────
 assert.match(page, /if \(this\.fs \|\| this\.referenceFeed\) return false;/,
   '全屏/连刷不能接管返回；横屏同方向必须允许接管');
@@ -188,7 +196,7 @@ assert.match(page, /const rotatedReturn = !this\.coverMorphOrientationStable\(\)
   '返回前必须区分同方向与中途换方向');
 assert.match(page, /private startCoverMorphRotatedReturn\(\): void \{[\s\S]{0,1600}?HomeCardMorph\.homeLayoutReadyGeneration > this\.coverMorphRotatedReadyBefore[\s\S]{0,1200}?const next = this\.readCoverMorphCardRect\(\);/,
   '换方向返回必须先等首页完成新方向布局，再读取同一张卡片的真实落点');
-assert.match(page, /private readCoverMorphCardRect\(\): HomeCardMorphRect \| undefined \{[\s\S]{0,500}?HomeCardMorph\.cardElementId/,
+assert.match(page, /private readCoverMorphCardRect\(\): HomeCardMorphRect \| undefined \{[\s\S]{0,500}?this\.morphCardId/,
   '返回落点必须按首页卡片节点 id 实时读取');
 const followBlock = page.slice(page.indexOf('  private startCoverMorphReturnFollow()'),
   page.indexOf('  private beginReturnCoverMorph('));
@@ -204,14 +212,13 @@ assert.match(page, /const dur = this\.da \? 0 : HomeCardMorph\.RETURN_DURATION;/
   '返回收缩时长口径必须保留');
 const returnBlock = page.slice(page.indexOf('  private beginReturnCoverMorph('),
   page.indexOf('  private disposeCoverMorph('));
-assert.match(returnBlock, /this\.startCoverMorphRotatedReturn\(\);[\s\S]{0,200}?return;[\s\S]{0,300}?router\.back\([\s\S]{0,180}?this\.startCoverMorphReturnFollow\(\);[\s\S]{0,160}?animateTo\(/,
+assert.match(returnBlock, /this\.startCoverMorphRotatedReturn\(\);[\s\S]{0,200}?return;[\s\S]{0,300}?router\.back\([\s\S]{0,180}?this\.startCoverMorphReturnFollow\(\);[\s\S]{0,160}?this\.animateCoverMorphReturn\(/,
   '撤回打断后必须恢复先 back、再收缩的路径');
-assert.match(returnBlock, /this\.coverMorphProgress = 0;/, '返回只能补间 progress');
 assert.match(returnBlock, /const quickReturn = this\.coverMorphActive && measuredP < 0\.999;/, 
   '进入中途返回必须识别为 quick return');
-assert.match(returnBlock, /const startP = quickReturn \? measuredP : 1;/, 
+assert.match(returnBlock, /const startP = quickReturn \? Math\.max\(0\.0001, measuredP\) : 1;/,
   'quick return 必须从实测窗口进度反缩，不能重置到整页');
-assert.match(returnBlock, /const firstFrameMissing = this\.waitingForFirstFrame \|\| this\.coverMorphPosterOpacity > 0\.01;/, 
+assert.match(returnBlock, /const firstFrameMissing = this\.coverFramePending \|\| this\.waitingForFirstFrame \|\| this\.coverMorphPosterOpacity > 0\.01;/,
   '返回必须先判断首帧是否未就绪');
 assert.match(returnBlock, /this\.coverMorphReturnCoverInstant = firstFrameMissing \|\|/, 
   '首帧未就绪时返回必须让外层封面第一帧就接管');
@@ -219,7 +226,7 @@ assert.match(returnBlock, /if \(!firstFrameMissing\) this\.coverMorphPosterOpaci
   '首帧未就绪时不能提前清掉 poster，否则返回会缩一块空加载页');
 assert.match(returnBlock, /this\.coverMorphProgress = startP;/, 
   '返回首帧 progress 必须接当前进入进度');
-assert.match(page, /if \(this\.coverMorphReturning && this\.coverMorphQuickReturn\)/, 
+assert.match(page, /private coverMorphReturnCoverRect\([^)]*\): HomeCardMorphRect \{\s*if \(this\.coverMorphQuickReturn\)/,
   '进入中途返回的封面矩形必须从当前矩形直接缩回卡片');
 assert.match(returnBlock, /getRectangleById\('home-morph-window'\)/, 
   'quick return 必须读当前窗口实际渲染宽度反算起始进度');
@@ -274,16 +281,120 @@ assert.match(switchBlock, /duration: this\.da \? 0 : 300,[\s\S]{0,1600}?this\.co
   '撤回后切换展开仍由 animateTo 补间到整页');
 assert.match(switchBlock, /duration: this\.da \? 0 : \(this\.coverMorphDirectFrame \? 160 : 220\),[\s\S]{0,1600}?this\.coverMorphOverlayOpacity = 0;/, 
   '快照直出时首帧淡入必须提前到 160ms');
-assert.match(page, /private coverMorphLayerRect\(\): HomeCardMorphRect \{[\s\S]{0,1400}?const f = Math\.max\(0, Math\.min\(1, this\.coverMorphReveal \/ 0\.5\)\);/, 
+assert.match(page, /private coverMorphEnterCoverRect\(reveal: number\): HomeCardMorphRect \{[\s\S]{0,400}?const f = Math\.max\(0, Math\.min\(1, reveal \/ 0\.5\)\);/,
   '快照矩形必须在前 50% reveal 贴到视频区，不能拖到完全展开');
-assert.match(page, /private coverMorphLayerOpacity\(\): number \{[\s\S]{0,650}?const elapsed = 1 - this\.coverMorphProgress;[\s\S]{0,120}?return Math\.max\(0, Math\.min\(1, \(elapsed - 0\.08\) \/ 0\.55\)\);/, 
-  '返回必须先与当前画面交叉淡入封面，不能第一帧直接换成封面');
+const returnAlpha = new Function('HomeCardMorph', page.match(/private coverMorphLayerOpacity\(\): number \{\r?\n([\s\S]*?)\r?\n  \}/)[1]);
 assert.match(page, /private fadeCoverMorphOverlay\(\): void \{[\s\S]{0,700}?duration: this\.da \? 0 : \(this\.coverMorphDirectFrame \? 160 : 220\)[\s\S]{0,500}?this\.coverMorphOverlayOpacity = 0;/, 
   '快照路径必须 160ms 淡到首帧；URL 回退才用 220ms');
 assert.match(page, /\.opacity\(this\.coverMorphLayerOpacity\(\)\)/, 
   '封面层显隐必须由交叉淡入/淡出方法控制');
-assert.match(returnBlock, /expectedFrameRateRange: \{ min: 60, max: 120, expected: 120 \}/, 
+assert.match(page, /private animateCoverMorphReturn\([\s\S]{0,1200}?expectedFrameRateRange: \{ min: 60, max: 120, expected: 120 \}/,
   '返回收缩必须声明 120Hz 帧率范围');
+assert.equal((page.match(/this\.animateCoverMorphReturn\(dur,/g) || []).length, 2,
+  '同方向和换方向返回都采用相同的收缩阶段');
+assert.doesNotMatch(page, /keyframeAnimateTo\(/, '播放页布局必须走常规属性补间');
+assert.match(page, /\.borderRadius\(this\.coverMorphActive \? this\.morphWinRadius\(\) : 0\)\s*\.clip\(this\.coverMorphActive\)/,
+  '播放页的裁剪尺寸和圆角必须走同一套补间');
+assert.match(card, /\.borderRadius\(HomeCardMorph\.CARD_RADIUS\)/);
+assert.match(home, /radius: HomeCardMorph\.CARD_RADIUS/);
+
+const ts = require(process.env.ARK_TYPESCRIPT ||
+  'D:/Program Files/Huawei/DevEco Studio/sdk/default/openharmony/ets/build-tools/ets-loader/node_modules/typescript');
+const splitExports = {};
+const splitSource = read('entry/src/main/ets/utils/CubicBezierSplit.ts');
+new Function('exports', ts.transpileModule(splitSource, {
+  compilerOptions: { module: ts.ModuleKind.CommonJS }
+}).outputText)(splitExports);
+const joinTravel = Number(morph.match(/RETURN_JOIN_PROGRESS: number = ([\d.]+)/)[1]);
+const joinProgress = 1 - joinTravel;
+assert.match(page, /splitCubicBezierAtProgress\(HomeCardMorph\.RETURN_CURVE, HomeCardMorph\.RETURN_JOIN_PROGRESS\)/);
+const curve = { x1: 0.608848, y1: 0, x2: 0.958848, y2: 1 };
+const defaultSplit = splitExports.splitCubicBezierAtProgress(curve, 0.63);
+assert.ok(Math.abs(defaultSplit.timeFraction - 0.79498) < 1e-6);
+const sample = (a, b, t) => 3 * (1 - t) ** 2 * t * a + 3 * (1 - t) * t ** 2 * b + t ** 3;
+for (const travel of [0.35, 0.63, 0.8]) {
+  const { first, second, timeFraction } = splitExports.splitCubicBezierAtProgress(curve, travel);
+  assert.ok(timeFraction > 0 && timeFraction < 1);
+  const slopeBefore = travel / timeFraction * (1 - first.y2) / (1 - first.x2);
+  const slopeAfter = (1 - travel) / (1 - timeFraction) * second.y1 / second.x1;
+  assert.ok(Math.abs(slopeBefore - slopeAfter) < 1e-7, '交接处保持同一速度');
+  // Both segments must reconstruct the original curve on its global time/progress axes.
+  let low = 0, high = 1;
+  for (let i = 0; i < 40; i++) {
+    const middle = (low + high) / 2;
+    if (sample(curve.y1, curve.y2, middle) < travel) low = middle;
+    else high = middle;
+  }
+  const t = (low + high) / 2;
+  for (const [axis, extent] of [['x', timeFraction], ['y', travel]]) {
+    const a = axis + '1', b = axis + '2';
+    assert.ok(Math.abs(extent * sample(first[a], first[b], 0.5) - sample(curve[a], curve[b], t / 2)) < 1e-7);
+    assert.ok(Math.abs(extent + (1 - extent) * sample(second[a], second[b], 0.5) -
+      sample(curve[a], curve[b], (1 + t) / 2)) < 1e-7);
+  }
+}
+const opacityBody = page.match(/private morphContentOpacity\(\): number \{\r?\n([\s\S]*?)\r?\n  \}/)[1];
+const opacity = new Function(opacityBody);
+for (const start of [1, 0.54]) {
+  const layer = { coverMorphActive: true, coverMorphReturning: true, coverMorphQuickReturn: start < 1,
+    coverMorphQuickStartP: start };
+  for (const p of [start, start * 0.7, start * joinProgress, start * 0.12, 0]) {
+    layer.coverMorphProgress = p;
+    assert.equal(opacity.call(layer), 1, '返回时整页保持不透明，详情随窗口裁剪退出');
+  }
+}
+for (const p of [1, 0.6, joinProgress, joinProgress / 2, 0]) {
+  const alpha = returnAlpha.call({coverMorphActive: true, coverMorphReturning: true, coverMorphProgress: p},
+    {CLIP_JOIN_PROGRESS: joinProgress});
+  assert.equal(alpha, p >= joinProgress ? 0 : 1 - p / joinProgress);
+}
+const radius = Number(morph.match(/CARD_RADIUS: number = ([\d.]+)/)[1]);
+const cardRect = { x: 224, y: 340, width: 210, height: 118.125, radius };
+const fullWindow = { x: 0, y: 0, width: 440, height: 744, radius: 0 };
+const geometry = { coverMorphActive: true, morphWinTo: fullWindow, coverMorphReturning: true, coverMorphReturnTarget: cardRect };
+for (const name of ['coverMorphAspectProgress', 'coverMorphFlyRect', 'coverMorphReturnCoverRect', 'coverMorphReturnWindowRect']) {
+  const match = page.match(new RegExp(`private ${name}\\(([^)]*)\\): (?:number|HomeCardMorphRect) \\{\\r?\\n([\\s\\S]*?)\\r?\\n  \\}`));
+  assert.ok(match, `缺少 ${name}`);
+  geometry[name] = new Function('HomeCardMorph', match[1].replace(/: number/g, ''), match[2])
+    .bind(geometry, { CLIP_JOIN_PROGRESS: joinProgress, ASPECT_PROGRESS: 0.42 });
+}
+for (const name of ['morphPageScale', 'morphContentPosX', 'morphContentPosY']) {
+  const body = page.match(new RegExp('private ' + name + '\\(\\): number \\{([\\s\\S]*?)\\n  \\}'))[1];
+  geometry[name] = new Function(body).bind(geometry);
+}
+geometry.morphWinX = () => geometry.coverMorphReturnWindowRect().x;
+geometry.morphWinY = () => geometry.coverMorphReturnWindowRect().y;
+for (const aspect of [16 / 9, 9 / 16, 21 / 9]) {
+  const width = Math.min(400, 360 * aspect);
+  geometry.coverMorphTo = { x: (440 - width) / 2, y: 42, width, height: width / aspect, radius: 0 };
+  geometry.coverMorphMediaAspect = () => aspect;
+  geometry.coverMorphAspectEqual = aspect === 16 / 9;
+  for (const progress of [1, 0.7, joinProgress, 0.17, 0]) {
+    geometry.coverMorphProgress = progress;
+    const media = geometry.coverMorphTo;
+    const cover = geometry.coverMorphReturnCoverRect(progress);
+    const scale = geometry.morphPageScale();
+    for (const [axis, dim, win, offset] of [
+      ['x', 'width', geometry.morphWinX(), geometry.morphContentPosX()],
+      ['y', 'height', geometry.morphWinY(), geometry.morphContentPosY()]
+    ]) {
+      const edge = win + offset + media[axis] * scale;
+      assert.ok(edge <= cover[axis] + 1e-6 && edge + media[dim] * scale >= cover[axis] + cover[dim] - 1e-6,
+        '交叉切换时真实视频必须覆盖封面，两端不能露出黑边或详情');
+    }
+  }
+  geometry.coverMorphProgress = 1;
+  assert.deepEqual(geometry.coverMorphReturnWindowRect(), fullWindow);
+  geometry.coverMorphProgress = (1 + joinProgress) / 2;
+  assert.ok(geometry.coverMorphReturnWindowRect().height > geometry.coverMorphReturnCoverRect(0.5).height,
+    '正常返回前段保留可见的播放页内容');
+  for (const progress of [joinProgress, joinProgress / 2, 0]) {
+    geometry.coverMorphProgress = progress;
+    assert.deepEqual(geometry.coverMorphReturnWindowRect(), geometry.coverMorphReturnCoverRect(progress),
+      '返回后段的窗口、封面四边和圆角须一致');
+  }
+  assert.deepEqual(geometry.coverMorphReturnWindowRect(), cardRect);
+}
 assert.match(returnBlock, /this\.startCoverMorphRotatedReturn\(\);/,
   '换方向返回必须走主路径而不是直接兜底');
 assert.match(page, /elapsed >= HomeCardMorph\.ROTATED_RETURN_WAIT_MS[\s\S]{0,500}?rotated target unavailable/,
@@ -309,4 +420,9 @@ assert.match(returnBlock, /this\.coverMorphAspectEqual = Math\.abs\(\s*\n\s*to\.
 assert.match(page, /if \(p <= 0\.0001\) \{\s*\n\s*return \{ x: from\.x, y: from\.y, width: from\.width, height: from\.height, radius: from\.radius \};/,
   '返回末帧封面矩形必须严格等于卡片矩形，不能留下 mediaAspect 的高裁切层');
 
+assert.match(page, /this\.snapMorphToFullPage\(\);\s*this\.coverMorphRevealDone = true;\s*if \(this\.coverFramePending && !this\.err\) return;\s*this\.liveCover\?\.restore\(\);/,
+  '4 秒只收口布局，首帧未到保留封面');
+assert.match(page, /if \(source === 'native-render'\) this\.coverFrameRendered\(\);/, '播放时钟不能解除画面等待');
+assert.match(page, /this\.coverFramePending && this\.coverMorphRevealDone && !this\.coverMorphReturning && !this\.err[\s\S]{0,300}?home-cover-loading/,
+  '等待首帧时在已展开的封面中央显示加载圈');
 console.log('PASS: cover morph transition (live home under non-zero page exits, no snapshot base).');

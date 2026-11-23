@@ -1,3 +1,4 @@
+import { CoverFlight } from '../components/HomeCoverNode';
 import { HomeInitialLoading } from '../components/HomeInitialLoading';
 import { GlassMaterial } from '../utils/GlassMaterial';
 import { PageSurface } from '../components/PageSurface';
@@ -10,12 +11,14 @@ import { FrameCallback } from '@ohos.arkui.UIContext';
 import { HomeRefreshIndicator } from '../components/HomeRefreshIndicator';
 import { common } from '@kit.AbilityKit';
 import { logInfo, logWarn, logError, errMsg } from '../utils/Logger';
-import { window, curves, mediaquery, display } from '@kit.ArkUI';
+import { window, curves, mediaquery, display, LazyColumnLayout, LazyColumnLayoutAttribute,
+  LazyVWaterFlowLayout, LazyVWaterFlowLayoutAttribute, LengthMetrics, UIUtils, IReusableInfo } from '@kit.ArkUI';
 import { hdsMaterial } from '@kit.UIDesignKit';
 import { getRecommendVideos, blacklistUploader, prefetchVideoPlayback } from '../api/BilibiliApi';
 import { getRecommendVideosOptimized } from '../api/RecommendApiOptimized';
 import { PlaybackListPrefetch } from '../services/PlaybackListPrefetch';
 import { RecommendItem } from '../model/RecommendItem';
+import { FirstScreenDataSource } from '../model/FirstScreenDataSource';
 import { preferences } from '@kit.ArkData';
 import { deviceInfo } from '@kit.BasicServicesKit';
 import { VibrateUtils } from '../utils/VibrateUtils';
@@ -60,50 +63,27 @@ function releaseDecodeSlot(): void {
   logInfo(`[图片解码] 释放解码槽: ${gActiveImageDecodes}/${gMaxConcurrentDecodes}`);
 }
 
-class VideoDataSource implements IDataSource {
-  private items: RecommendItem[] = [];
-  private listeners: DataChangeListener[] = [];
-
-  public totalCount(): number {
-    return this.items.length;
+class VideoDataSource extends FirstScreenDataSource<RecommendItem> {
+  addItems(newItems: RecommendItem[]): void {
+    const items = this.getRawItems();
+    this.setRawItems(items.concat(newItems));
+    this.notifyDataAdd(items.length, newItems.length);
   }
 
-  public getData(index: number): RecommendItem {
-    return this.items[index];
-  }
-
-  registerDataChangeListener(listener: DataChangeListener): void {
-    if (this.listeners.indexOf(listener) < 0) {
-      this.listeners.push(listener);
-    }
-  }
-
-  unregisterDataChangeListener(listener: DataChangeListener): void {
-    const pos = this.listeners.indexOf(listener);
-    if (pos >= 0) this.listeners.splice(pos, 1);
-  }
-
-  public addItems(newItems: RecommendItem[]): void {
-    const startIdx = this.items.length;
-    this.items = this.items.concat(newItems);
+  notifyDataAdd(index: number, count: number = 1): void {
     this.listeners.forEach(listener => listener.onDatasetChange([
-      { type: DataOperationType.ADD, index: startIdx, count: newItems.length }
+      { type: DataOperationType.ADD, index: index, count: count }
     ]));
   }
 
-  public reloadItems(allItems: RecommendItem[]): void {
-    this.items = allItems;
+  notifyDataReload(): void {
     this.listeners.forEach(listener => listener.onDatasetChange([{ type: DataOperationType.RELOAD }]));
   }
-
-  public getRawItems(): RecommendItem[] {
-    return this.items;
-  }
-
 }
 
-@Component({ freezeWhenInactive: true })
+@Component({ freezeWhenInactive: true, reusePool: 'perInstance', poolAccepts: [VideoCardComponent] })
 export struct HomePage {
+  onCardReusePool?: (info?: IReusableInfo) => void;
   @StorageLink('pageWallpaperEnabled') pageWallpaperEnabled: boolean = false;
   // ★ 由父组件传入，供 Scroll 组件和 HdsNavigation.bindToScrollable 使用
   externalScroller?: Scroller = undefined;
@@ -220,7 +200,7 @@ export struct HomePage {
   private homeLayoutCallbacks: Set<() => void> = new Set();
   private homeAnchorIndex: number = -1;
   private homeAnchorTop: number = 0;
-  @State waterFlowKey: number = 0;  // 列数变化时递增，强制 WaterFlow 重建
+  @State waterFlowKey: number = 0;  // 记录列布局更新
   @State isLandscape: boolean = false;
   @State bottomPadding: number = 0;
   @State sidePadding: number = 12;
@@ -426,6 +406,8 @@ export struct HomePage {
   private landscapeListener: mediaquery.MediaQueryListener | null = null;
 
   async aboutToAppear() {
+    const pool = UIUtils.getCustomComponentContext(this).getReusePool()?.getReusableInfo(VideoCardComponent);
+    if (pool && !Array.isArray(pool)) this.onCardReusePool?.(pool);
     this.isPageActive = true;
     await this.getStatusBarHeight();
     await this.waitForStableOrientation();
@@ -434,25 +416,6 @@ export struct HomePage {
     await this.loadWatchHistoryForDedup();
     // ⭐ 从持久化存储加载屏蔽UP主列表
     await UserBehaviorService.loadBlockedUploaders();
-    // ⭐ 从持久化存储加载推荐源设置，避免依赖设置页初始化
-    try {
-      const pf = await preferences.getPreferences(this.getUIContext().getHostContext() as common.Context, 'my_app_settings');
-      const savedSource = await pf.get('recommendApiSource', 'App') as string;
-      logInfo(`[PrefDebug] 从Preferences读取recommendApiSource="${savedSource}"` +
-        ` (Preferences名=my_app_settings, key=recommendApiSource)`);
-      AppStorage.set('recommendApiSource', savedSource);
-    } catch (e) {
-      logError(`[PrefDebug] 读取recommendApiSource异常: ${e}`);
-    }
-    // ⭐ 从持久化存储加载弹幕数据源设置
-    try {
-      const dmkPf = await preferences.getPreferences(this.getUIContext().getHostContext() as common.Context, 'my_app_settings');
-      const savedDmkSource = await dmkPf.get('danmakuApiSource', 'grpc') as string;
-      logInfo(`[PrefDebug] 从Preferences读取danmakuApiSource="${savedDmkSource}"`);
-      AppStorage.set('danmakuApiSource', savedDmkSource);
-    } catch (e) {
-      logError(`[PrefDebug] 读取danmakuApiSource异常: ${e}`);
-    }
     await this.refreshData();
     await this.watchWindowSizeChange();
     this.updatePaddings();
@@ -461,6 +424,7 @@ export struct HomePage {
     this.registerOrientationListener();
   }
   async aboutToDisappear() {
+    this.onCardReusePool?.();
     this.isPageActive = false;
     this.homeLayoutRevision++;
     this.homeLayoutPending = false;
@@ -690,7 +654,7 @@ export struct HomePage {
         this.externalScroller.scrollTo({ xOffset: 0, yOffset: target, animation: false });
         this.afterHomeLayout(() => {
           if (revision !== this.homeLayoutRevision || columnRequest !== this.columnRequestRevision || !this.isPageActive) return;
-          // Lazy WaterFlow can expand its estimated extent after the first
+          // The lazy layout can expand its estimated extent after the first
           // resized frame. A temporarily clamped Scroll must get the same target.
           if (this.externalScroller && Math.abs(this.externalScroller.currentOffset().yOffset - target) > 0.5 && attempt < 8) {
             this.finishHomeRelayout(revision, attempt + 1);
@@ -1093,7 +1057,7 @@ export struct HomePage {
       this.revealedCardIds.forEach((id: string) => {
         if (!retainedIds.has(id)) this.revealedCardIds.delete(id);
       });
-      this.dataSource.reloadItems(combinedItems);
+      this.dataSource.replaceForViewport(combinedItems, Math.min(2, this.columnCount), this.getUIContext());
       this.playbackListStart = 0;
       this.playbackVisibleIndexes.clear();
       this.syncPlaybackListPrefetch();
@@ -1227,7 +1191,7 @@ export struct HomePage {
 
   private async loadMore(retry: boolean = false): Promise<void> {
     if (!this.isPageActive || !this.playbackHomeActive || this.playbackHomeChannel !== 2 ||
-      this.isLoading || this.isRefreshing || this.isLoadingMore || !this.hasMore ||
+      this.isLoading || this.isRefreshing || this.isLoadingMore || this.dataSource.isPublishing() || !this.hasMore ||
       (this.paginationNeedsRetry && !retry)) return;
     const generation = this.recommendationGeneration;
     this.paginationNeedsRetry = false;
@@ -1342,7 +1306,7 @@ export struct HomePage {
       }
       HomeCardMorph.windowW = winW;
       HomeCardMorph.windowH = winH;
-      return { x, y, width: w, height: h, radius: 8 };
+      return { x, y, width: w, height: h, radius: HomeCardMorph.CARD_RADIUS };
     } catch (e) {
       logWarn(`[HomeCardMorph] 取封面矩形失败，回退原转场: ${errMsg(e)}`);
       return undefined;
@@ -1381,7 +1345,7 @@ export struct HomePage {
     }
   }
 
-  private onCardClick(item: RecommendItem) {
+  private onCardClick(item: RecommendItem, flight?: CoverFlight) {
     this.playbackListPrefetch.pause();
     // 自动记录点击播放的视频（用于去重）
     this.autoRecordWatched(item);
@@ -1390,9 +1354,9 @@ export struct HomePage {
     // 矩形在点击这一帧同步取；首页 Exit 非零时长会把真实首页留在播放页下面。
     const rect: HomeCardMorphRect | undefined =
       HomeCardMorph.enabled() ? this.readCardCoverRect(item) : undefined;
-    const coverPixel: image.PixelMap | undefined = rect !== undefined && HomeCardMorph.enabled()
+    const coverPixel: image.PixelMap | undefined = !flight && rect !== undefined && HomeCardMorph.enabled()
       ? this.captureCardCoverPixel(item) : undefined;
-    this.armHomeCardMorph(item, rect, coverPixel);
+    if (this.armHomeCardMorph(item, rect, coverPixel)) HomeCardMorph.liveCover = flight;
     this.openVideoPage(item);
   }
 
@@ -1725,7 +1689,7 @@ export struct HomePage {
       if ((this.isLandscape ? this.showHomeCarouselLandscape : this.showHomeCarouselPortrait) && (this.isLandscape ? this.showCarouselBgLandscape : this.showCarouselBgPortrait)) {
         Stack() {
           if (this.lastCoverUrl) {
-            Image(this.lastCoverUrl)
+            Image(resizeImageUrl(this.lastCoverUrl, 640))
               .width('100%')
               .height('100%')
               .objectFit(ImageFit.Cover)
@@ -1733,7 +1697,7 @@ export struct HomePage {
               .opacity(1 - this.bgFade)
           }
           if (this.bgCoverUrl) {
-            Image(this.bgCoverUrl)
+            Image(resizeImageUrl(this.bgCoverUrl, 640))
               .width('100%')
               .height('100%')
               .objectFit(ImageFit.Cover)
@@ -1756,7 +1720,7 @@ export struct HomePage {
       }
       Refresh({ refreshing: $$this.isRefreshing, builder: this.customRefreshComponent() }) {
         Scroll(this.externalScroller!) {
-          Column() {
+          LazyColumnLayout() {
               // ★ 轮播图：播放量最高的 3 个视频 — cover-flow 风格
               // ⭐ 始终渲染（不在 else 分支），opacity 控制显隐动画
               if (this.showHomeCarouselPortrait && !this.isLandscape && !(this.isLoading && this.dataSource.totalCount() === 0)) {
@@ -1777,7 +1741,7 @@ export struct HomePage {
                   ForEach(this.banners, (item: RecommendItem, index: number) => {
                     Column() {
                       Stack({ alignContent: Alignment.Bottom }) {
-                        Image(item.coverUrl)
+                        Image(resizeImageUrl(item.coverUrl, 960))
                           .width('100%')
                           .aspectRatio(16 / 9)
                           .objectFit(ImageFit.Cover)
@@ -1903,48 +1867,49 @@ export struct HomePage {
                 refreshing: this.isRefreshing || this.refreshReady,
                 topInset: homeHeaderTopInset(this.statusBarHeight, this.hideStatusBar, this.homeSearchRowHeight) })
             } else {
-              // ⭐ 使用 waterFlowKey 强制 WaterFlow 在列数变化时重建
+              // 外层 Scroll 提供视口，网格按可见范围创建和回收卡片。
               if (this.waterFlowKey >= 0) {
-                WaterFlow() {
+                LazyVWaterFlowLayout() {
                   LazyForEach(this.dataSource, (item: RecommendItem, index: number) => {
-                  FlowItem() {
-                    if (item.id === this.REFRESH_SEPARATOR_ID) {
-                      this.RefreshSeparatorCard()
-                    } else {
-                      VideoCardComponent({
-                        item: item,
-                        coverWidth: this.cardCoverWidth(),
-                        entranceCenterX: this.cardEntranceCenterX(index),
-                        revealedCardIds: this.revealedCardIds,
-                        onCardClick: (clicked: RecommendItem): void => this.onCardClick(clicked),
-                        onLongPress: (pressed: RecommendItem): void => this.showVideoMenu(pressed)
-                      })
+                    Stack() {
+                      if (item.id === this.REFRESH_SEPARATOR_ID) {
+                        this.RefreshSeparatorCard()
+                      } else {
+                        VideoCardComponent({
+                          item: item,
+                          coverWidth: this.cardCoverWidth(),
+                          entranceCenterX: this.cardEntranceCenterX(index),
+                          revealedCardIds: this.revealedCardIds,
+                          onCardClick: (clicked: RecommendItem, flight?: CoverFlight): void => this.onCardClick(clicked, flight),
+                          onLongPress: (pressed: RecommendItem): void => this.showVideoMenu(pressed)
+                        })
+                      }
                     }
-                  }
-                  .id(`home-recommend-card-${index}`)
-                  .onAppear(() => {
-                    // 自动记录浏览过的视频（用于去重）
-                    this.autoRecordWatched(item);
-                    acquireDecodeSlot(); // ⭐ 标记封面开始加载（统计并发数）
-                  })
-                  .onVisibleAreaChange([0.5], (visible: boolean) => {
-                    if (visible) this.playbackVisibleIndexes.add(index);
-                    else this.playbackVisibleIndexes.delete(index);
-                    if (!this.playbackHomeActive || this.playbackHomeChannel !== 2) return;
-                    if (visible) this.requestMoreNearTail(index);
-                    let first = index;
-                    for (const candidate of this.playbackVisibleIndexes) first = Math.min(first, candidate);
-                    this.playbackListStart = Math.max(0, first - 2);
-                    this.schedulePlaybackListPrefetch();
-                  })
+                    .width('100%')
+                    .id(`home-recommend-card-${index}`)
+                    .onAppear(() => {
+                      // 自动记录浏览过的视频（用于去重）
+                      this.autoRecordWatched(item);
+                      acquireDecodeSlot(); // ⭐ 标记封面开始加载（统计并发数）
+                    })
+                    .onDisAppear(() => { this.playbackVisibleIndexes.delete(index); })
+                    .onVisibleAreaChange([0.5], (visible: boolean) => {
+                      if (visible) this.playbackVisibleIndexes.add(index);
+                      else this.playbackVisibleIndexes.delete(index);
+                      if (!this.playbackHomeActive || this.playbackHomeChannel !== 2) return;
+                      if (visible) this.requestMoreNearTail(index);
+                      let first = index;
+                      for (const candidate of this.playbackVisibleIndexes) first = Math.min(first, candidate);
+                      this.playbackListStart = Math.max(0, first - 2);
+                      this.schedulePlaybackListPrefetch();
+                    })
                 }, (item: RecommendItem, index: number) => `${item.id}_${index}`)
               }
               .columnsTemplate('1fr '.repeat(this.columnCount).trim())
               .id('home-recommend-flow')
-              .columnsGap(this.cardListMargin).rowsGap(this.cardListMargin)
+              .columnsGap(LengthMetrics.vp(this.cardListMargin)).rowsGap(LengthMetrics.vp(this.cardListMargin))
               .padding({ left: this.isLandscape && this.showHomeCarouselLandscape ? this.landscapeCarouselWidth : this.sidePadding, right: this.sidePadding, top: this.showHomeCarouselPortrait && !this.isLandscape ? 0 : this.headerContentHeight() + (this.hideStatusBar ? 0 : this.statusBarHeight), bottom: this.bottomPadding + (this.floatingBottomBar ? 84 + this.navIndicatorHeight : 0) })
               .backgroundColor('transparent')
-              .cachedCount(16)
               .clip(false)
               .gesture(PinchGesture().onActionEnd((event: GestureEvent) => this.handlePinch(event.scale)))
               }
@@ -1977,6 +1942,7 @@ export struct HomePage {
             this.showPaginationFooter = false;
           }
           if (this.homeLayoutPending || !AppStorage.get<boolean>('homeFeedActive') || yOffset === 0 || AppStorage.get<number>('homeChannelIndex') !== 2) return;
+          this.playbackListPrefetch.noteHomeScroll();
           if (this.showHomeCarouselPortrait && !this.isLandscape) {
             const absoluteOffset = this.externalScroller!.currentOffset().yOffset;
             this.carouselParallaxY = absoluteOffset * 0.2;
@@ -2027,7 +1993,7 @@ export struct HomePage {
               Column() {
                 // ⭐ 封面图
                 Stack({ alignContent: Alignment.Bottom }) {
-                  Image(item.coverUrl)
+                  Image(resizeImageUrl(item.coverUrl, 960))
                     .width('100%')
                     .aspectRatio(16 / 9)
                     .objectFit(ImageFit.Cover)

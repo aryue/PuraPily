@@ -20,12 +20,17 @@ class FakeSession {
 }
 
 const storage = { playbackKernel: 'ijk', ijkWarmSlots: 1 };
+const recordedDelays = [];
 function load(file, imports) {
   const context = vm.createContext({
     exports: {},
     require: name => imports[name],
     AppStorage: { get(key) { return storage[key]; }, setOrCreate(key, value) { storage[key] = value; } },
-    setTimeout, clearTimeout, Date, Math, Promise
+    setTimeout(callback, delay) {
+      recordedDelays.push(delay);
+      return setTimeout(callback, delay);
+    },
+    clearTimeout, Date, Math, Promise
   });
   vm.runInContext(ts.transpileModule(fs.readFileSync(ROOT + file + '.ets', 'utf8'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 }
@@ -110,7 +115,7 @@ async function main() {
   pool.activateHomeScene('home:popular');
   await oldTab;
   assert.equal(pool.take(12, 112), null, 'switching tabs cancels unfinished work');
-  assert.ok(pool.take(11, 112), 'switching tabs retains completed work');
+  assert.equal(pool.take(11, 112), null, 'switching tabs releases the old decoder even when it is ready');
   await pool.warm(13, source, 0, 'home:popular');
   assert.ok(pool.take(13, 112), 'the active popular tab gets its own slots');
   storage.ijkWarmSlots = 1;
@@ -119,8 +124,14 @@ async function main() {
   await pool.warm(22, source, 0, 'feed-minimum');
   assert.equal(pool.readyCount(), 1);
   assert.equal(pool.take(21, 112), null, 'the two-slot global minimum evicts the older home slot');
-  assert.ok(pool.take(22, 112), 'the second feed slot fits even when the home setting is one');
+  pool.activateHomeScene('');
+  assert.ok(pool.take(22, 112), 'leaving the homepage does not dispose a non-home scene');
   pool.releaseScene('feed-minimum');
+  pool.activateHomeScene('home:recommend');
+  await pool.warm(23, source, 0, 'home:recommend');
+  assert.equal(recordedDelays.at(-1), 10000, 'a ready homepage decoder has a short idle retention window');
+  pool.activateHomeScene('');
+  assert.equal(pool.take(23, 112), null, 'a channel without prewarming releases the old home instance');
   console.log('Warm pool resume-position handoff passed');
 }
 

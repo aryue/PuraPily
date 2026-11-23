@@ -1,3 +1,4 @@
+import { resizeImageUrl } from '../utils/ImageUrl';
 import { HomeInitialLoading } from '../components/HomeInitialLoading';
 import { HomeChannelCardEntrance } from '../components/HomeChannelCardEntrance';
 import { HOME_SEARCH_ROW_HEIGHT, homeHeaderTopInset } from '../utils/HomeHeaderLayout';
@@ -7,7 +8,7 @@ import { VideoListItem, videoListPublished } from '../components/VideoListItem';
 import { fetchRegionContent, REGION_TABS, RegionTab } from '../api/RegionApi';
 import { RecommendItem } from '../model/RecommendItem';
 import { prefetchVideoPlayback } from '../api/BilibiliApi';
-import { GenericDataSource } from '../model/GenericDataSource';
+import { FirstScreenDataSource } from '../model/FirstScreenDataSource';
 import { logError } from '../utils/Logger';
 import { VideoCardFeedback } from '../services/VideoCardFeedback';
 import { publishHomeScrollOffset } from '../utils/HomeScrollOffset';
@@ -55,7 +56,9 @@ export struct RegionChannelPage {
   @State incomingLoaded: boolean = false;
   private queuedRid: number | null = null;
   private paneScrollers: Scroller[] = [new Scroller(), new Scroller()];
-  private paneDataSources: GenericDataSource<RecommendItem>[] = [new GenericDataSource(), new GenericDataSource()];
+  private paneDataSources: FirstScreenDataSource<RecommendItem>[] = [
+    new FirstScreenDataSource<RecommendItem>(), new FirstScreenDataSource<RecommendItem>()
+  ];
   private paneItemSets: RecommendItem[][] = [[], []];
   @State refreshReady: boolean = false;
   @State private contentWidth: number = 300;
@@ -64,9 +67,9 @@ export struct RegionChannelPage {
   private page: number = 1;
   private ids: Set<string> = new Set();
   private regionStates: Map<number, RegionContentState> = new Map();
-  private currentDataSource(): GenericDataSource<RecommendItem> { return this.paneDataSources[this.activePane]; }
+  private currentDataSource(): FirstScreenDataSource<RecommendItem> { return this.paneDataSources[this.activePane]; }
   private currentScroller(): Scroller { return this.paneScrollers[this.activePane]; }
-  private incomingDataSource(): GenericDataSource<RecommendItem> { return this.paneDataSources[1 - this.activePane]; }
+  private incomingDataSource(): FirstScreenDataSource<RecommendItem> { return this.paneDataSources[1 - this.activePane]; }
   private incomingScroller(): Scroller { return this.paneScrollers[1 - this.activePane]; }
   private sidebarScroller: Scroller = new Scroller();
   private barScrollTracker: HomeBarScrollTracker = new HomeBarScrollTracker(20);
@@ -100,7 +103,7 @@ export struct RegionChannelPage {
 
   private restoreRegion(state: RegionContentState, updateItems: boolean = true): void {
     if (updateItems && this.paneItemSets[this.activePane] !== state.items) {
-      this.currentDataSource().reloadItems(state.items);
+      this.publishPaneItems(this.currentDataSource(), state);
       this.paneItemSets[this.activePane] = state.items;
     }
     this.paneRids[this.activePane] = this.selectedRid;
@@ -122,10 +125,19 @@ export struct RegionChannelPage {
     this.paneLoaded[pane] = state.loaded || state.failed;
     this.incomingItems = state.items.slice();
     if (this.paneItemSets[pane] !== state.items) {
-      this.incomingDataSource().reloadItems(state.items);
+      this.publishPaneItems(this.incomingDataSource(), state);
       this.paneItemSets[pane] = state.items;
     }
     this.incomingLoaded = state.loaded;
+  }
+
+  private publishPaneItems(source: FirstScreenDataSource<RecommendItem>, state: RegionContentState): void {
+    // Restoring a scrolled category needs its full extent before scrollTo runs.
+    if (state.offset > 0) {
+      source.reloadItems(state.items);
+    } else {
+      source.replaceForViewport(state.items, 2, this.getUIContext());
+    }
   }
 
   private async fetchRegionPage(rid: number, state: RegionContentState, page: number,
@@ -322,7 +334,7 @@ export struct RegionChannelPage {
               cardKey: `${this.paneRids[pane]}:${item.id}`, gridId: `home-region-grid-${pane}`,
               channelIndex: 0, paneActive: pane === this.activePane, revealedCardIds: this.revealedCardIds
             }) {
-              VideoListItem({ title: item.title, cover: item.coverUrl, duration: item.duration, owner: item.ownerName,
+              VideoListItem({ title: item.title, cover: resizeImageUrl(item.coverUrl, 640), homeChannel: 0, duration: item.duration, owner: item.ownerName,
                 showDivider: false,
                 videoId: item.pgcSeasonId > 0 ? '' : item.id, ownerMid: item.ownerMid,
                 playCount: item.pgcSeasonId > 0 ? -1 : item.playCount,
@@ -339,7 +351,10 @@ export struct RegionChannelPage {
       .padding({ left: 8, right: 8 })
       .contentStartOffset(homeHeaderTopInset(this.statusBarHeight, this.hideStatusBar, this.homeSearchRowHeight))
       .contentEndOffset(100 + this.navIndicatorHeight)
-      .onReachEnd(() => { if (pane === this.activePane && this.isActive() && !this.transitionActive) void this.loadRanking(false); })
+      .onReachEnd(() => {
+        if (pane === this.activePane && this.isActive() && !this.transitionActive &&
+          !this.paneDataSources[pane].isPublishing()) void this.loadRanking(false);
+      })
       .onDidScroll(() => {
         if (pane !== this.activePane || !this.isActive() || this.transitionActive) return;
         const offset = Math.max(0, this.currentScroller().currentOffset().yOffset);

@@ -1,3 +1,5 @@
+import { GenericDataSource } from '../model/GenericDataSource';
+
 export interface PlayerEpisodeRow {
   key: string;
   number: string;
@@ -12,7 +14,7 @@ export struct PlayerEpisodeSheet {
   @Prop title: string = '';
   @Prop sections: string[] = [];
   @Prop sectionIndex: number = 0;
-  @Prop rows: PlayerEpisodeRow[] = [];
+  @Prop @Watch('updateRows') rows: PlayerEpisodeRow[] = [];
   @Prop initialIndex: number = 0;
   @Prop sheetHeight: number = 400;
   @Prop sheetBackground: ResourceColor = Color.Transparent;
@@ -21,6 +23,18 @@ export struct PlayerEpisodeSheet {
   onSection: (index: number) => void = () => {};
   onEpisode: (index: number) => void = () => {};
   private scroller: Scroller = new Scroller();
+  private rowSource: GenericDataSource<PlayerEpisodeRow> = new GenericDataSource<PlayerEpisodeRow>();
+  private rowRevision: number = 0;
+
+  aboutToAppear(): void {
+    this.rowSource.setRawItems(this.rows);
+  }
+
+  private updateRows(): void {
+    // A replacement can change the selected row or move an episode between indices.
+    this.rowRevision++;
+    this.rowSource.reloadItems(this.rows);
+  }
 
   build() {
     Column() {
@@ -55,7 +69,7 @@ export struct PlayerEpisodeSheet {
         }
         if (this.rows.length > 0) {
           List({ scroller: this.scroller, initialIndex: this.initialIndex }) {
-            ForEach(this.rows, (row: PlayerEpisodeRow, index: number) => {
+            LazyForEach(this.rowSource, (row: PlayerEpisodeRow, index: number) => {
               ListItem() {
                 Row() {
                   if (row.cover) {
@@ -76,7 +90,7 @@ export struct PlayerEpisodeSheet {
                 .borderRadius(20)
                 .onClick(() => { if (!row.selected) this.onEpisode(index); })
               }
-            }, (row: PlayerEpisodeRow) => row.key)
+            }, (row: PlayerEpisodeRow, index: number) => `${this.rowRevision}-${index}-${row.key}`)
           }
           .layoutWeight(1).padding({ left: 8, right: 8 }).height('100%')
           .scrollBar(BarState.Off).id(this.listId)

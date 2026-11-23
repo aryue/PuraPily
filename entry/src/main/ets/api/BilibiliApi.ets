@@ -3216,24 +3216,51 @@ async function fetchVideoDetail(bvid: string): Promise<VideoDetail | null> {
 //     详情 RTT(≈90~150ms) → playurl RTT(≈135ms) → 平台 prepare(≈500ms)
 //   这段完全没有和"页面转场 / 播放器初始化"重叠，用户看到的就是明显白等。
 // 现在：
-//   1) 详情按 key 缓存（TTL 5 分钟），命中即 0 网络；
+//   1) 缓存保留最近使用的 64 个视频（TTL 5 分钟），命中即 0 网络；
 //   2) 同 key 请求在飞时复用同一个 Promise —— 来源页点卡片时的预热 + 播放页 loadD 只会打一次网络；
-//   3) 成功后按"请求 key / 返回的 bvid / aid"三键回填，所以 aid 入口拿到的详情，
-//      播放页再用 bvid 查也能命中（省掉 initFromAid 之后 loadD 的第二次 view 请求）。
+//   3) 请求 key、bvid 和 aid 共享同一条缓存记录，过期或淘汰时一起释放。
 interface VideoDetailCacheEntry {
   detail: VideoDetail | null;
   at: number;
+  keys: Set<string>;
 }
 
 const videoDetailCache: Map<string, VideoDetailCacheEntry> = new Map();
+const recentVideoDetails: Set<VideoDetailCacheEntry> = new Set();
 const videoDetailInflight: Map<string, Promise<VideoDetail | null>> = new Map();
 const VIDEO_DETAIL_CACHE_TTL: number = 5 * 60 * 1000;
+const VIDEO_DETAIL_CACHE_LIMIT: number = 64;
 
 /** 归一化缓存键：纯数字视为 aid，加前缀避免与 bvid 撞键 */
 function videoDetailKey(idOrAid: string): string {
   const s: string = (idOrAid ?? '').trim();
   if (!s) return '';
   return /^\d+$/.test(s) ? `aid:${s}` : s;
+}
+
+function removeCachedVideoDetail(entry: VideoDetailCacheEntry): void {
+  entry.keys.forEach((key: string) => videoDetailCache.delete(key));
+  recentVideoDetails.delete(entry);
+}
+
+function rememberVideoDetail(key: string, detail: VideoDetail | null): void {
+  const now = Date.now();
+  recentVideoDetails.forEach((entry: VideoDetailCacheEntry) => {
+    if (now - entry.at >= VIDEO_DETAIL_CACHE_TTL) removeCachedVideoDetail(entry);
+  });
+  const keys = new Set<string>([key]);
+  if (detail?.bvid) keys.add(videoDetailKey(detail.bvid));
+  if (detail?.aid) keys.add(videoDetailKey(String(detail.aid)));
+  const entry: VideoDetailCacheEntry = { detail: detail, at: now, keys: keys };
+  keys.forEach((alias: string) => {
+    const previous = videoDetailCache.get(alias);
+    if (previous) removeCachedVideoDetail(previous);
+  });
+  keys.forEach((alias: string) => videoDetailCache.set(alias, entry));
+  recentVideoDetails.add(entry);
+  if (recentVideoDetails.size > VIDEO_DETAIL_CACHE_LIMIT) {
+    removeCachedVideoDetail(recentVideoDetails.values().next().value!);
+  }
 }
 
 /**
@@ -3251,9 +3278,11 @@ export function prefetchVideoDetail(idOrAid: string): void {
 export function invalidateVideoDetailCache(idOrAid?: string): void {
   if (!idOrAid) {
     videoDetailCache.clear();
+    recentVideoDetails.clear();
     return;
   }
-  videoDetailCache.delete(videoDetailKey(idOrAid));
+  const cached = videoDetailCache.get(videoDetailKey(idOrAid));
+  if (cached) removeCachedVideoDetail(cached);
 }
 
 /**
@@ -3266,10 +3295,13 @@ export async function getVideoDetail(idOrAid: string): Promise<VideoDetail | nul
 
   const cached: VideoDetailCacheEntry | undefined = videoDetailCache.get(key);
   if (cached !== undefined && (Date.now() - cached.at) < VIDEO_DETAIL_CACHE_TTL) {
+    recentVideoDetails.delete(cached);
+    recentVideoDetails.add(cached);
     logInfo(`[getVideoDetail] 命中缓存: ${key}`);
     profile?.mark('cache-hit'); profile?.end();
     return cached.detail;
   }
+  if (cached !== undefined) removeCachedVideoDetail(cached);
   const flying: Promise<VideoDetail | null> | undefined = videoDetailInflight.get(key);
   if (flying !== undefined) {
     logInfo(`[getVideoDetail] 复用进行中的请求: ${key}`);
@@ -3278,12 +3310,7 @@ export async function getVideoDetail(idOrAid: string): Promise<VideoDetail | nul
 
   const task: Promise<VideoDetail | null> = fetchVideoDetail(idOrAid).then((d: VideoDetail | null) => {
     videoDetailInflight.delete(key);
-    const at: number = Date.now();
-    videoDetailCache.set(key, { detail: d, at: at });
-    if (d) {
-      if (d.bvid) videoDetailCache.set(videoDetailKey(d.bvid), { detail: d, at: at });
-      if (d.aid) videoDetailCache.set(videoDetailKey(String(d.aid)), { detail: d, at: at });
-    }
+    rememberVideoDetail(key, d);
     return d;
   }).catch((e: Error) => {
     videoDetailInflight.delete(key);

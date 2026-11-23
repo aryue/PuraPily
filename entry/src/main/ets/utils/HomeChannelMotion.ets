@@ -19,6 +19,8 @@ function slope(index: number): number {
   return (firstWeight + secondWeight) / (firstWeight / incoming + secondWeight / outgoing);
 }
 
+const SLOPES: number[] = TIMES.map((_time: number, index: number) => slope(index));
+
 export function homeChannelProgress(fraction: number): number {
   if (fraction <= 0) return 0;
   if (fraction >= 1) return 1;
@@ -30,9 +32,9 @@ export function homeChannelProgress(fraction: number): number {
   const squared = t * t;
   const cubed = squared * t;
   return (2 * cubed - 3 * squared + 1) * POSITIONS[index]
-    + (cubed - 2 * squared + t) * span * slope(index)
+    + (cubed - 2 * squared + t) * span * SLOPES[index]
     + (-2 * cubed + 3 * squared) * POSITIONS[index + 1]
-    + (cubed - squared) * span * slope(index + 1);
+    + (cubed - squared) * span * SLOPES[index + 1];
 }
 
 export const HOME_CHANNEL_CURVE = curves.customCurve(homeChannelProgress);

@@ -36,16 +36,11 @@ async function main() {
   const requests = [];
   const data = [];
   let targetSearches = 0;
-  let warmed;
   const service = new PlaybackComments();
   service.fetch = (aid, cursor, sort) => {
     const pending = deferred();
     requests.push({ aid, cursor, sort, ...pending });
     return pending.promise;
-  };
-  service.warmAvatars = (comments, current) => {
-    warmed = { comments, current };
-    return new Promise(() => {});
   };
   Object.assign(page, {
     playbackComments_: service, referenceAlive: true, referenceSwitchGeneration: 1, vd: { aid: 33 },
@@ -69,7 +64,6 @@ async function main() {
   requests[1].resolve({ comments: [101], nextCursor: 22, isEnd: false });
   await reload;
   assert.equal(targetSearches, 1);
-  assert.equal(warmed.current(), true);
   assert.deepEqual(data, [101]);
   requests[0].resolve({ comments: [55], nextCursor: 40, isEnd: true });
   await previous;
@@ -78,14 +72,13 @@ async function main() {
   assert.equal(page.hm, true);
 
   const next = page.loadMC();
-  assert.equal(warmed.current(), false, 'obsolete avatar preparation stops after a new request');
   requests[2].resolve({ comments: [102], nextCursor: 30, isEnd: true });
   await next;
   assert.deepEqual(data, [101, 102]);
   assert.equal(page.commentCursor, 30);
   assert.equal(page.hm, false);
   assert.equal(page.isLoadingMore, false);
-  console.log('PASS: stale pagination isolation, target lookup while avatars are pending, and current cursor commits');
+  console.log('PASS: stale pagination isolation, target lookup after initial results, and current cursor commits');
 }
 
 main().catch(error => { console.error(error); process.exitCode = 1; });

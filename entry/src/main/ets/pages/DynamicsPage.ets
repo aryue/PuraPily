@@ -24,6 +24,8 @@ import { cardItemBg, cardItemBorder } from '../utils/CardStyle';
 import { fmtRelativeTime } from '../utils/TimeFormat';
 import { themeRgba } from '../utils/ThemeColor';
 import { tabIndicatorCenter } from '../utils/TabIndicatorGeometry';
+import { GenericDataSource } from '../model/GenericDataSource';
+import { FirstScreenDataSource } from '../model/FirstScreenDataSource';
 import { resizeImageUrl as resizeImageUrlShared } from '../utils/ImageUrl';
 
 /**
@@ -143,7 +145,10 @@ export struct DynamicsPage {
   @State feedTabPosition: number = 1;
   @State feedTabCenters: number[] = [17, 83];
   private feedPagerWidth: number = 0;
-  @State tabFeeds: DynTabFeedState[] = [
+  private readonly tabFeedSources: FirstScreenDataSource<SpaceDynamicItem>[] = [
+    new FirstScreenDataSource<SpaceDynamicItem>(), new FirstScreenDataSource<SpaceDynamicItem>()
+  ];
+  @State @Watch('syncTabFeedSources') tabFeeds: DynTabFeedState[] = [
     { items: [], loaded: false, error: '', hint: '还没有关注的 UP 发布投稿' },
     { items: [], loaded: false, error: '', hint: '暂无关注动态' }
   ];
@@ -241,9 +246,16 @@ export struct DynamicsPage {
   private videoScroller: Scroller = new Scroller();
   private allScroller: Scroller = new Scroller();
   @State viewportWidth: number = 0;
-  @State followedShows: DynamicFollowShow[] = [];
+  @State @Watch('syncFollowedShowsSource') followedShows: DynamicFollowShow[] = [];
   @State showFollowedShows: boolean = false;
   @State followedShowsLoading: boolean = false;
+  private readonly followedShowsSource: GenericDataSource<DynamicFollowShow> = new GenericDataSource<DynamicFollowShow>();
+  private followedShowsRevision: number = 0;
+
+  private syncFollowedShowsSource(): void {
+    this.followedShowsRevision++;
+    this.followedShowsSource.reloadItems(this.followedShows);
+  }
 
   private async loadFollowedShows(fetchAll: boolean = false): Promise<void> {
     if (this.followedShowsLoading) return;
@@ -275,6 +287,14 @@ export struct DynamicsPage {
 
   private dynScroller(): Scroller {
     return this.filterType === 'video' ? this.videoScroller : this.allScroller;
+  }
+
+  private syncTabFeedSources(): void {
+    for (let index = 0; index < this.tabFeedSources.length; index++) {
+      const items = this.tabFeeds[index].items;
+      const source = this.tabFeedSources[index];
+      if (source.getRawItems() !== items) source.replaceForViewport(items, 1, this.getUIContext());
+    }
   }
 
   private saveTabFeed(): void {
@@ -1500,7 +1520,7 @@ export struct DynamicsPage {
             this.FeedStatus(index)
           }
         } else {
-          ForEach(this.tabFeeds[index].items, (item: SpaceDynamicItem) => {
+          LazyForEach(this.tabFeedSources[index], (item: SpaceDynamicItem) => {
             ListItem() {
               this.dynamicCard(item)
             }
@@ -1512,12 +1532,14 @@ export struct DynamicsPage {
       .contentStartOffset(44 + this.statusBarHeight + 12)
       .id(`dynamic-feed-${index}`)
       .contentEndOffset(this.floatingBottomBar ? 84 + this.navIndicatorHeight : 0)
-      .scrollBar(BarState.Off).edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true }).cachedCount(50)
+      .scrollBar(BarState.Off).edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true }).cachedCount(4)
       .onWillScroll(() => {
         if (index !== this.lastTabsIndex) return;
         this.onDynFeedScroll((index === 0 ? this.videoScroller : this.allScroller).currentOffset().yOffset);
       })
-      .onReachEnd(() => { if (index === this.lastTabsIndex) this.onReachEnd(); })
+      .onReachEnd(() => {
+        if (index === this.lastTabsIndex && !this.tabFeedSources[index].isPublishing()) this.onReachEnd();
+      })
     }
     .width('100%').height('100%')
     .backgroundColor(this.pageWallpaperEnabled ? Color.Transparent : pageBackgroundColor(this.isDarkMode))
@@ -1672,7 +1694,7 @@ export struct DynamicsPage {
             .width('100%').justifyContent(FlexAlign.Center)
         }
       }
-      ForEach(this.followedShows, (show: DynamicFollowShow) => {
+      LazyForEach(this.followedShowsSource, (show: DynamicFollowShow) => {
         ListItem() {
           Row({ space: 12 }) {
             Image(resizeImageUrl(show.new_ep?.cover || show.cover, 240)).width(120).height(75).objectFit(ImageFit.Cover).borderRadius(4)
@@ -1682,7 +1704,7 @@ export struct DynamicsPage {
             }.layoutWeight(1).alignItems(HorizontalAlign.Start)
           }.width('100%').onClick(() => this.openFollowedShow(show))
         }
-      }, (show: DynamicFollowShow) => show.season_id.toString())
+      }, (show: DynamicFollowShow) => `${this.followedShowsRevision}-${show.season_id}`)
     }.width('100%').height('100%').padding(16).scrollBar(BarState.Off)
   }
 

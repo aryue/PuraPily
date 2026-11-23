@@ -10,6 +10,7 @@ import { PageWallpaperService, clampWallpaperOpacity, clampWallpaperScrim } from
 import { deviceInfo } from '@kit.BasicServicesKit';
 import { common } from '@kit.AbilityKit';
 import { fileIo } from '@kit.CoreFileKit';
+import { taskpool } from '@kit.ArkTS';
 import { logInfo, logWarn, logError } from '../utils/Logger';
 import { applyThemeMode } from '../utils/ReferenceAppearance';
 import { StatusBarUtils } from '../utils/StatusBarUtils';
@@ -29,6 +30,26 @@ import {
 const ROTATION_OPTIONS: string[] = ['跟随系统', '自动旋转', '锁定竖屏', '锁定横屏'];
 /** 字号拖动预览的最小下发间隔：setFontSizeScale 会重排整页，太密会明显掉帧。 */
 const FONT_PREVIEW_INTERVAL_MS: number = 80;
+
+@Concurrent
+function measureCacheDirectory(root: string): number {
+  let total = 0;
+  const pending: string[] = [root];
+  while (pending.length > 0) {
+    const dir = pending.pop()!;
+    try {
+      for (const name of fileIo.listFileSync(dir)) {
+        const path = dir + '/' + name;
+        try {
+          const stat = fileIo.lstatSync(path);
+          if (stat.isDirectory()) pending.push(path);
+          else total += stat.size;
+        } catch (_) {}
+      }
+    } catch (_) {}
+  }
+  return total;
+}
 
 @Component({ freezeWhenInactive: true })
 export struct ProfilePage {
@@ -103,15 +124,12 @@ export struct ProfilePage {
   @StorageLink('userProfileFace') userAvatarUrl: string = '';
   @State userMid: number = Number(extractMidFromCookie(AppStorage.get<string>('biliCookie') ?? ''));
   private dataPreferences: preferences.Preferences | null = null;
+  private cacheSizeRevision: number = 0;
 
   async aboutToAppear(): Promise<void> {
     if (!this.settingsOnly) FavoritesDataService.getInstance().warm(Number(extractMidFromCookie(AppStorage.get<string>('biliCookie') ?? '')));
     HighRefreshService.getInstance().supportedRates();
     this.dataPreferences = await preferences.getPreferences(this.getUIContext().getHostContext() as common.UIAbilityContext, 'my_app_settings');
-    this.recommendApiSource = await this.dataPreferences.get('recommendApiSource', 'App') as string;
-    this.danmakuApiSource = await this.dataPreferences.get('danmakuApiSource', 'grpc') as string;
-    const side = await this.dataPreferences.get('landscapePlaybackSide', 'left');
-    this.landscapePlaybackSide = side === 'right' ? 'right' : 'left';
     // 系统字号可能在应用进后台期间被改过，进设置页时先对齐（只有原生跟随态才读得回系统值）
     AppScaleService.refreshSystemScale(this.getUIContext().getHostContext() as common.UIAbilityContext);
     const fontSetting = await AppScaleService.loadFontSetting(this.getUIContext().getHostContext() as common.UIAbilityContext);
@@ -150,35 +168,15 @@ export struct ProfilePage {
     return (bytes / 1048576).toFixed(1) + ' MB';
   }
 
-  /** 递归计算目录大小 */
-  private getDirSize(dirPath: string): number {
-    let total = 0;
-    try {
-      const names: string[] = fileIo.listFileSync(dirPath);
-      for (const name of names) {
-        const fullPath: string = dirPath + '/' + name;
-        try {
-          const stat = fileIo.statSync(fullPath);
-          if (stat.isDirectory()) {
-            total += this.getDirSize(fullPath);
-          } else {
-            total += stat.size;
-          }
-        } catch (_) {}
-      }
-    } catch (_) {}
-    return total;
-  }
-
   /** 计算缓存总大小 */
   private async calcCacheSize(): Promise<void> {
+    const revision = ++this.cacheSizeRevision;
     try {
       const context: common.Context = this.getUIContext().getHostContext() as common.Context;
-      let total = 0;
-      total += this.getDirSize(context.cacheDir);
-      this.cacheSizeText = this.formatSize(total);
+      const total = await taskpool.execute<[string], number>(measureCacheDirectory, context.cacheDir);
+      if (revision === this.cacheSizeRevision) this.cacheSizeText = this.formatSize(total);
     } catch (_) {
-      this.cacheSizeText = '获取失败';
+      if (revision === this.cacheSizeRevision) this.cacheSizeText = '获取失败';
     }
   }
 
@@ -608,20 +606,26 @@ export struct ProfilePage {
       .backgroundColor(this.pageWallpaperEnabled ? Color.Transparent : pageBackgroundColor(this.isDarkMode))
   }
 
-  private async referenceSaveBoolean(key: string, value: boolean): Promise<void> {
+  private referenceSaveBoolean(key: string, value: boolean): boolean {
     AppStorage.setOrCreate(key, value);
     try {
       const pref = this.dataPreferences ?? preferences.getPreferencesSync(
         this.getUIContext().getHostContext() as common.UIAbilityContext, { name: 'my_app_settings' });
-      await pref.put(key, value);
-      await pref.flush();
-    } catch (error) { logError('保存设置失败', error); }
+      // 开关变更立即落盘，避免退后台或连续切换时留下延迟写入。
+      pref.putSync(key, value);
+      pref.flushSync();
+      return true;
+    } catch (error) {
+      logError('保存设置失败', error);
+      this.getUIContext().getPromptAction().showToast({ message: '设置保存失败，重启后可能恢复原值' });
+      return false;
+    }
   }
 
   /** 设置项：写 AppStorage 立即生效（NetworkGate 每次判定都实时读取），同时落盘保证重启后 UI 与策略一致。 */
-  private async saveCellularPrefetch(value: boolean): Promise<void> {
-    await this.referenceSaveBoolean('cellularPrefetch', value);
-    if (value) {
+  private saveCellularPrefetch(value: boolean): void {
+    const saved = this.referenceSaveBoolean('cellularPrefetch', value);
+    if (value && saved) {
       this.getUIContext().getPromptAction().showToast({ message: '已放行蜂窝预热取流，注意移动数据流量' });
     }
   }
@@ -631,7 +635,7 @@ export struct ProfilePage {
     this.startupCdnRacePending = true;
     try {
       if (this.startupCdnRace) {
-        await this.referenceSaveBoolean('startupCdnRace', false);
+        this.referenceSaveBoolean('startupCdnRace', false);
         return;
       }
       const result = await this.getUIContext().getPromptAction().showDialog({
@@ -642,7 +646,7 @@ export struct ProfilePage {
           { text: '开启', color: '#007DFF' }
         ]
       });
-      if (result.index === 1) await this.referenceSaveBoolean('startupCdnRace', true);
+      if (result.index === 1) this.referenceSaveBoolean('startupCdnRace', true);
     } catch (_) {
       // 返回键或点遮罩关闭对话框时保留原设置。
     } finally {
@@ -991,6 +995,8 @@ export struct ProfilePage {
                 window.getLastWindow(this.getUIContext().getHostContext() as common.UIAbilityContext).then((win: window.Window) => {
                   StatusBarUtils.setSystemBars(win, !(AppStorage.get<boolean>('isLandscape') ?? false) &&
                     !(AppStorage.get<boolean>('hideStatusBar') ?? false), true);
+                }).catch((error: Error) => {
+                  logError('应用小白条设置失败', error);
                 });
               })
             }.width('100%').constraintSize({ minHeight: 56 }).padding({ left: 16, right: 16, top: 12, bottom: 12 })

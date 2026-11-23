@@ -107,16 +107,6 @@ export class PlaybackComments {
     };
   }
 
-  async warmAvatars(comments: ObservableComment[], current: () => boolean,
-    predecode: (url: string) => void): Promise<void> {
-    for (const comment of comments) {
-      if (!current()) return;
-      const url = comment.member?.avatar;
-      if (url) predecode(url);
-      await new Promise<void>(resolve => setTimeout(resolve, 50));
-    }
-  }
-
   async locate(search: PlaybackCommentSearch): Promise<number> {
     let index = search.find();
     if (index >= 0 || !search.reloadLatest) return index;

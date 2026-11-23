@@ -4,7 +4,7 @@
  */
 export class GenericDataSource<T> implements IDataSource {
   private data: T[] = [];
-  private listeners: DataChangeListener[] = [];
+  protected listeners: DataChangeListener[] = [];
 
   totalCount(): number {
     return this.data.length;

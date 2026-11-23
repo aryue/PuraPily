@@ -9,6 +9,8 @@ import { PageWallpaper } from '../components/PageWallpaper';
 import { FloatingVideoTransition } from '../services/FloatingVideoTransition';
 import { VideoListItem } from '../components/VideoListItem';
 import { VideoCardFeedback } from '../services/VideoCardFeedback';
+import { FirstScreenDataSource } from '../model/FirstScreenDataSource';
+import { resizeImageUrl } from '../utils/ImageUrl';
 // FavoritesPage.ets - 我的收藏页面（同步B站官方收藏夹）
 import { router, mediaquery, window, curves } from '@kit.ArkUI';
 import { logInfo, logWarn, logError } from '../utils/Logger';
@@ -82,7 +84,10 @@ struct FavoritesPage {
 
   @State pageMode: PageMode = PageMode.FOLDER_LIST;
   @State activeTabIndex: number = 0;
-  @State folderPages: FavoriteFolderState[] = [new FavoriteFolderState(), new FavoriteFolderState()];
+  private readonly folderSources: FirstScreenDataSource<FavFolderItem>[] = [
+    new FirstScreenDataSource<FavFolderItem>(), new FirstScreenDataSource<FavFolderItem>()
+  ];
+  @State @Watch('syncFolderSources') folderPages: FavoriteFolderState[] = [new FavoriteFolderState(), new FavoriteFolderState()];
   @State tabPosition: number = 0;
   @State tabStripWidth: number = 0;
   private folderTabs: TabsController = new TabsController();
@@ -92,7 +97,21 @@ struct FavoritesPage {
   private pagerWidth: number = 0;
   @State currentFolderId: number = 0;
   @State currentFolderTitle: string = '';
-  @State resourceList: FavResourceItem[] = [];
+  private readonly resourceDataSource = new FirstScreenDataSource<FavResourceItem>();
+  @State @Watch('syncResourceDataSource') resourceList: FavResourceItem[] = [];
+
+  private syncResourceDataSource(): void {
+    this.resourceDataSource.replaceForViewport(this.resourceList, this.columnCount, this.getUIContext());
+  }
+
+  private syncFolderSources(): void {
+    const ui = this.getUIContext();
+    for (let index = 0; index < this.folderSources.length; index++) {
+      const source = this.folderSources[index];
+      const folders = this.folderPages[index].folders;
+      if (source.getRawItems() !== folders) source.replaceForViewport(folders, this.columnCount, ui);
+    }
+  }
   @State resourceError: string = '';
   @StorageLink('cardFeedbackRevision') @Watch('onCardFeedbackChange') feedbackRevision: number = 0;
 
@@ -691,13 +710,13 @@ struct FavoritesPage {
     Column() {
       Refresh({ refreshing: $$this.folderPages[index].refreshing }) {
         WaterFlow({ scroller: this.folderScroller(index) }) {
-          ForEach(this.folderPages[index].folders, (item: FavFolderItem, index: number) => {
+          LazyForEach(this.folderSources[index], (item: FavFolderItem) => {
             FlowItem() {
               this.FolderCard(item)
             }
             .width('100%')
             .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.96 })
-          }, (item: FavFolderItem) => String(item.id))
+          }, (item: FavFolderItem) => `${item.id}:${item.cover || ''}:${item.covers?.join(',') || ''}`)
         }
         .columnsTemplate(this.columnCount === 2 ? '1fr 1fr' : '1fr')
         .contentStartOffset(this.globalStatusBarHeight + 48)
@@ -706,7 +725,7 @@ struct FavoritesPage {
         .width('100%')
         .layoutWeight(1)
         .scrollBar(BarState.Off)
-        .cachedCount(30)
+        .cachedCount(4)
         .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
         .padding({ left: 12, right: 12, top: 12, bottom: 0 })
         .backgroundColor('transparent')
@@ -774,7 +793,7 @@ struct FavoritesPage {
     Row() {
       Stack() {
         if (folder.cover) {
-          Image(this.getCoverByIndex(folder, 2))
+          Image(resizeImageUrl(this.getCoverByIndex(folder, 2), 640)).autoResize(true)
             .width(160)
             .height(120)
             .borderRadius(this.cardListBorderRadius)
@@ -783,7 +802,7 @@ struct FavoritesPage {
             .offset({ x: 24, y: 18 })
             .opacity(0.20)
 
-          Image(this.getCoverByIndex(folder, 1))
+          Image(resizeImageUrl(this.getCoverByIndex(folder, 1), 640)).autoResize(true)
             .width(160)
             .height(120)
             .borderRadius(this.cardListBorderRadius)
@@ -792,7 +811,7 @@ struct FavoritesPage {
             .offset({ x: 12, y: 9 })
             .opacity(0.50)
 
-          Image(this.getCoverByIndex(folder, 0))
+          Image(resizeImageUrl(this.getCoverByIndex(folder, 0), 640)).autoResize(true)
             .width(160)
             .height(120)
             .borderRadius(this.cardListBorderRadius)
@@ -867,7 +886,7 @@ struct FavoritesPage {
       } else {
         Refresh({ refreshing: $$this.isRefreshing }) {
           WaterFlow({ scroller: this.waterFlowScroller }) {
-            ForEach(this.resourceList, (item: FavResourceItem) => {
+            LazyForEach(this.resourceDataSource, (item: FavResourceItem) => {
               FlowItem() {
                 this.VideoCard(item)
               }
@@ -910,7 +929,7 @@ struct FavoritesPage {
           .width('100%')
           .layoutWeight(1)
           .scrollBar(BarState.Off)
-          .cachedCount(30)
+          .cachedCount(6)
           .edgeEffect(EdgeEffect.Spring, { alwaysEnabled: true })
           .padding({ left: 12, right: 12, top: 8, bottom: 0 })
           .backgroundColor('transparent')
@@ -938,7 +957,7 @@ struct FavoritesPage {
   @Builder
   VideoCard(video: FavResourceItem) {
     VideoListItem({
-      title: video.title, cover: video.cover, duration: video.duration,
+      title: video.title, cover: resizeImageUrl(video.cover, 640), duration: video.duration,
       videoId: video.bvid, ownerMid: video.upper ? String(video.upper.mid) : '',
       playCount: video.cnt_info ? video.cnt_info.play : -1,
       tag: video.title === '已失效视频' ? '已失效' : '',

@@ -35,9 +35,9 @@ assert.ok(prefs.includes("DEFAULT_MODES: string = '111111111111'"), 'default mod
 assert.ok(prefs.includes('https://www.bsbsb.top'), 'default SponsorBlock server missing');
 assert.ok(prefs.includes("'sponsorBlockEnabled'") && prefs.includes("'sponsorBlockPgcMode'"),
   'settings keys must be read from AppStorage');
-assert.ok(ability.includes("pref.get('sponsorBlockEnabled', false)") &&
-  ability.includes("pref.get('sponsorBlockModes', '111111111111')") &&
-  ability.includes("pref.get('sponsorBlockSeekInto', false)"),
+assert.ok(ability.includes("pref.getSync('sponsorBlockEnabled', false)") &&
+  ability.includes("pref.getSync('sponsorBlockModes', '111111111111')") &&
+  ability.includes("pref.getSync('sponsorBlockSeekInto', false)"),
   'EntryAbility must restore SponsorBlock settings on launch');
 
 // 3) API：秒→毫秒、404 静默、无 B 站 Cookie 外泄。

@@ -1,3 +1,4 @@
+import { HomeChannelCover } from '../components/HomeChannelCover';
 import { HomeInitialLoading } from '../components/HomeInitialLoading';
 import { HomeChannelCardEntrance } from '../components/HomeChannelCardEntrance';
 import { cardItemBg } from '../utils/CardStyle';
@@ -17,7 +18,8 @@ import { publishHomeScrollOffset } from '../utils/HomeScrollOffset';
  * - 2列直播卡片网格
  * - 下拉刷新 + 上拉加载更多
  */
-import { mediaquery, display } from '@kit.ArkUI';
+import { mediaquery, display, LazyColumnLayout, LazyColumnLayoutAttribute,
+  LazyVWaterFlowLayout, LazyVWaterFlowLayoutAttribute, LengthMetrics } from '@kit.ArkUI';
 import { logInfo, logWarn, logError } from '../utils/Logger';
 import { common } from '@kit.AbilityKit';
 import { preferences } from '@kit.ArkData';
@@ -33,53 +35,8 @@ import {
 import { ImmersiveLightWrapper } from '../components/ImmersiveLightWrapper';
 import { HdsMiniBarButton } from '../components/infra/HdsMiniBarButton';
 
-/** 数据源封装，供 LazyForEach 使用 */
-class LiveDataSource implements IDataSource {
-  private items: LiveFeedRoom[] = [];
-  private listeners: DataChangeListener[] = [];
-
-  totalCount(): number {
-    return this.items.length;
-  }
-
-  getData(index: number): LiveFeedRoom {
-    return this.items[index];
-  }
-
-  registerDataChangeListener(listener: DataChangeListener): void {
-    if (this.listeners.indexOf(listener) < 0) {
-      this.listeners.push(listener);
-    }
-  }
-
-  unregisterDataChangeListener(listener: DataChangeListener): void {
-    const pos = this.listeners.indexOf(listener);
-    if (pos >= 0) this.listeners.splice(pos, 1);
-  }
-
-  notifyDataReload(): void {
-    this.listeners.forEach(listener => listener.onDataReloaded());
-  }
-
-  notifyDataAdd(startIndex: number): void {
-    this.listeners.forEach(listener => listener.onDataAdd(startIndex));
-  }
-
-  addItems(newItems: LiveFeedRoom[]): void {
-    const startIdx = this.items.length;
-    this.items.push(...newItems);
-    this.notifyDataAdd(startIdx);
-  }
-
-  reloadItems(allItems: LiveFeedRoom[]): void {
-    this.items = allItems;
-    this.notifyDataReload();
-  }
-
-  getRawItems(): LiveFeedRoom[] {
-    return this.items;
-  }
-}
+import { resizeImageUrl } from '../utils/ImageUrl';
+import { FirstScreenDataSource } from '../model/FirstScreenDataSource';
 
 interface AreaTab {
   id: number;
@@ -116,7 +73,7 @@ export struct LivePage {
   @StorageLink('da') da: boolean = false;
 
   // 数据
-  @State dataSource: LiveDataSource = new LiveDataSource();
+  @State dataSource: FirstScreenDataSource<LiveFeedRoom> = new FirstScreenDataSource<LiveFeedRoom>();
   @State areas: AreaTab[] = [{ id: 0, name: '全部', isSelected: true, pinned: true }];
   @State selectedAreaId: number = 0;
 
@@ -299,7 +256,7 @@ export struct LivePage {
       }
 
       if (isRefresh) {
-        this.dataSource.reloadItems(uniqueRooms);
+        this.dataSource.replaceForViewport(uniqueRooms, 2, this.getUIContext());
       } else {
         this.dataSource.addItems(uniqueRooms);
       }
@@ -355,7 +312,7 @@ export struct LivePage {
   }
 
   private loadMore(): void {
-    if (this.isLoadingMore || !this.hasMore || this.isRefreshing) return;
+    if (this.isLoadingMore || !this.hasMore || this.isRefreshing || this.dataSource.isPublishing()) return;
     this.loadLiveRooms(false);
   }
 
@@ -456,12 +413,8 @@ export struct LivePage {
         Column() {
           // ---- 封面区 ----
           Stack() {
-            Image(room.cover ? room.cover : '')
-              .width('100%')
-              .aspectRatio(16 / 9)
-              .objectFit(ImageFit.Cover)
-              .backgroundColor(this.isDarkMode ? '#333333' : '#E8E8E8')
-              .draggable(false)
+            HomeChannelCover({ source: resizeImageUrl(room.cover, 960), channel: 1, aspect: 16 / 9,
+              placeholder: this.isDarkMode ? '#333333' : '#E8E8E8' })
 
             // 底部渐变遮罩
             Row()
@@ -532,7 +485,7 @@ export struct LivePage {
           // ---- 主播信息行 ----
           Row() {
             if (room.face) {
-              Image(room.face)
+              Image(resizeImageUrl(room.face, 96))
                 .width(20).height(20)
                 .borderRadius(10)
                 .margin({ right: 5 })
@@ -586,7 +539,7 @@ export struct LivePage {
       Column() {
         Refresh({ refreshing: $$this.isRefreshing, builder: this.customRefreshComponent() }) {
           Scroll(this.scroller) {
-            Column() {
+            LazyColumnLayout() {
               // ⭐ 关注的UP主正在直播区块（信息流上方，需要登录）
               if (this.followedLiveRooms.length > 0 && !(this.isLoading && this.dataSource.totalCount() === 0)) {
                 Column() {
@@ -615,7 +568,7 @@ export struct LivePage {
                         ImmersiveLightWrapper({ radius: 18, materialStyle: 0, lightIntensity: 2.0 }) {
                           Row() {
                             if (room.face) {
-                              Image(room.face)
+                              Image(resizeImageUrl(room.face, 96))
                                 .width(28).height(28)
                                 .borderRadius(14)
                                 .objectFit(ImageFit.Cover)
@@ -666,29 +619,25 @@ export struct LivePage {
                 .height(300)
                 .justifyContent(FlexAlign.Center)
               } else {
-                WaterFlow({ layoutMode: WaterFlowLayoutMode.SLIDING_WINDOW }) {
+                LazyVWaterFlowLayout() {
                   LazyForEach(this.dataSource, (room: LiveFeedRoom, index: number) => {
-                    FlowItem() {
-                      HomeChannelCardEntrance({
-                        cardKey: String(room.roomId), gridId: 'home-live-grid',
-                        channelIndex: 1, revealedCardIds: this.revealedCardIds
-                      }) {
-                        this.LiveCard(room)
-                      }
+                    HomeChannelCardEntrance({
+                      cardKey: String(room.roomId), gridId: 'home-live-grid',
+                      channelIndex: 1, revealedCardIds: this.revealedCardIds
+                    }) {
+                      this.LiveCard(room)
                     }
-                    .backgroundColor('transparent')
                   }, (room: LiveFeedRoom, index: number) => `${room.roomId}_${index}`)
                 }
                 .columnsTemplate({ fillType: PresetFillType.BREAKPOINT_DEFAULT })
                 .id('home-live-grid')
-                .columnsGap(this.cardListMargin).rowsGap(this.cardListMargin)
+                .columnsGap(LengthMetrics.vp(this.cardListMargin)).rowsGap(LengthMetrics.vp(this.cardListMargin))
                 .padding({
                   left: 12,
                   right: 12,
                   bottom: 4
                 })
                 .backgroundColor('transparent')
-                .cachedCount(20)
                 .clip(false)
 
                 // 底部加载提示

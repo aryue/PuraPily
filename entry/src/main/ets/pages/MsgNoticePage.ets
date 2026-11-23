@@ -9,6 +9,7 @@ import { router } from '@kit.ArkUI';
 import { logInfo, logWarn, logError, errMsg } from '../utils/Logger';
 import { MsgFeedApi, MsgFeedItem, MsgFeedListResult } from '../api/MsgFeedApi';
 import { prefetchVideoPlayback } from '../api/BilibiliApi';
+import { FirstScreenDataSource } from '../model/FirstScreenDataSource';
 
 /** 类型配置（标题 + 类型号） */
 interface NoticeTypeConfig {
@@ -39,7 +40,12 @@ struct MsgNoticePage {
   /** 标题 */
   @State title: string = '消息';
   /** 列表数据 */
-  @State items: MsgFeedItem[] = [];
+  private readonly itemSource = new FirstScreenDataSource<MsgFeedItem>();
+  @State @Watch('syncItemSource') items: MsgFeedItem[] = [];
+
+  private syncItemSource(): void {
+    this.itemSource.replaceForViewport(this.items, 2, this.getUIContext());
+  }
   /** 加载中 */
   @State isLoading: boolean = true;
   /** 加载失败 */
@@ -293,7 +299,7 @@ struct MsgNoticePage {
         .justifyContent(FlexAlign.Center)
       } else {
         List({ space: 8 }) {
-          ForEach(this.items, (item: MsgFeedItem) => {
+          LazyForEach(this.itemSource, (item: MsgFeedItem) => {
             ListItem() {
               this.noticeRow(item)
             }
@@ -306,7 +312,7 @@ struct MsgNoticePage {
         .contentStartOffset(this.hideStatusBar ? 44 : this.statusBarHeight + 44)
         .scrollBar(BarState.Off)
         .onReachEnd(() => {
-          this.loadMore();
+          if (!this.itemSource.isPublishing()) this.loadMore();
         })
       }
 
