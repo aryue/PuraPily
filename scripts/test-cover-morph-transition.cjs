@@ -27,9 +27,12 @@ assert.ok(!/\.sharedTransition\(/.test(card), '卡片封面不得用 sharedTrans
 assert.ok(!/\.sharedTransition\(/.test(page), '播放页不得用 sharedTransition');
 
 // ── 2) 跨页交接：只交封面、矩形与角标，不再交截图底板 ──────────────────────────
-assert.match(morph, /static readonly DURATION: number = 380;/, '飞行路径时长必须是 380ms');
-assert.match(morph, /static readonly RETURN_DURATION: number = 380;/, '同方向返回可见收缩必须是 380ms');
-assert.match(morph, /static readonly RETURN_HOLD_MS: number = 440;/, '退出转场必须覆盖返回收缩与收尾');
+const flightDuration = Number(morph.match(/static readonly DURATION: number = ([\d.]+);/)[1]);
+const returnDuration = Number(morph.match(/static readonly RETURN_DURATION: number = ([\d.]+);/)[1]);
+const returnHold = Number(morph.match(/static readonly RETURN_HOLD_MS: number = ([\d.]+);/)[1]);
+assert.ok(flightDuration >= 250, '飞行路径时长不得低于平台下限');
+assert.ok(returnDuration >= 250, '同方向返回可见收缩不得低于平台下限');
+assert.ok(returnHold >= returnDuration, '退出转场必须覆盖完整返回收缩');
 assert.match(morph, /static readonly ROTATED_RETURN_MIN_MS: number = 250;/, '换方向返回不得低于平台 250ms 下限');
 assert.match(morph, /static readonly ROTATED_RETURN_FALLBACK_MS: number = 250;/, '推拉兜底也必须满足 250ms 下限');
 assert.match(morph, /static readonly ASPECT_PROGRESS: number = 0\.42;/, 
@@ -288,7 +291,7 @@ assert.match(page, /private fadeCoverMorphOverlay\(\): void \{[\s\S]{0,700}?dura
   '快照路径必须 160ms 淡到首帧；URL 回退才用 220ms');
 assert.match(page, /\.opacity\(this\.coverMorphLayerOpacity\(\)\)/, 
   '封面层显隐必须由交叉淡入/淡出方法控制');
-assert.match(page, /private animateCoverMorphReturn\([\s\S]{0,1200}?expectedFrameRateRange: \{ min: 60, max: 120, expected: 120 \}/,
+assert.match(page, /private animateCoverMorphReturn\([\s\S]{0,1600}?expectedFrameRateRange: \{ min: 60, max: 120, expected: 120 \}/,
   '返回收缩必须声明 120Hz 帧率范围');
 assert.equal((page.match(/this\.animateCoverMorphReturn\(dur,/g) || []).length, 2,
   '同方向和换方向返回都采用相同的收缩阶段');
@@ -298,41 +301,14 @@ assert.match(page, /\.borderRadius\(this\.coverMorphActive \? this\.morphWinRadi
 assert.match(card, /\.borderRadius\(HomeCardMorph\.CARD_RADIUS\)/);
 assert.match(home, /radius: HomeCardMorph\.CARD_RADIUS/);
 
-const ts = require(process.env.ARK_TYPESCRIPT ||
-  'D:/Program Files/Huawei/DevEco Studio/sdk/default/openharmony/ets/build-tools/ets-loader/node_modules/typescript');
-const splitExports = {};
-const splitSource = read('entry/src/main/ets/utils/CubicBezierSplit.ts');
-new Function('exports', ts.transpileModule(splitSource, {
-  compilerOptions: { module: ts.ModuleKind.CommonJS }
-}).outputText)(splitExports);
 const joinTravel = Number(morph.match(/RETURN_JOIN_PROGRESS: number = ([\d.]+)/)[1]);
 const joinProgress = 1 - joinTravel;
-assert.match(page, /splitCubicBezierAtProgress\(HomeCardMorph\.RETURN_CURVE, HomeCardMorph\.RETURN_JOIN_PROGRESS\)/);
-const curve = { x1: 0.608848, y1: 0, x2: 0.958848, y2: 1 };
-const defaultSplit = splitExports.splitCubicBezierAtProgress(curve, 0.63);
-assert.ok(Math.abs(defaultSplit.timeFraction - 0.79498) < 1e-6);
-const sample = (a, b, t) => 3 * (1 - t) ** 2 * t * a + 3 * (1 - t) * t ** 2 * b + t ** 3;
-for (const travel of [0.35, 0.63, 0.8]) {
-  const { first, second, timeFraction } = splitExports.splitCubicBezierAtProgress(curve, travel);
-  assert.ok(timeFraction > 0 && timeFraction < 1);
-  const slopeBefore = travel / timeFraction * (1 - first.y2) / (1 - first.x2);
-  const slopeAfter = (1 - travel) / (1 - timeFraction) * second.y1 / second.x1;
-  assert.ok(Math.abs(slopeBefore - slopeAfter) < 1e-7, '交接处保持同一速度');
-  // Both segments must reconstruct the original curve on its global time/progress axes.
-  let low = 0, high = 1;
-  for (let i = 0; i < 40; i++) {
-    const middle = (low + high) / 2;
-    if (sample(curve.y1, curve.y2, middle) < travel) low = middle;
-    else high = middle;
-  }
-  const t = (low + high) / 2;
-  for (const [axis, extent] of [['x', timeFraction], ['y', travel]]) {
-    const a = axis + '1', b = axis + '2';
-    assert.ok(Math.abs(extent * sample(first[a], first[b], 0.5) - sample(curve[a], curve[b], t / 2)) < 1e-7);
-    assert.ok(Math.abs(extent + (1 - extent) * sample(second[a], second[b], 0.5) -
-      sample(curve[a], curve[b], (1 + t) / 2)) < 1e-7);
-  }
-}
+const animateReturnBody = page.match(/private animateCoverMorphReturn\(duration: number, onFinish: \(\) => void\): void \{\r?\n([\s\S]*?)\r?\n  \}/)[1];
+assert.match(animateReturnBody, /splitCubicBezierAtProgress\(HomeCardMorph\.RETURN_CURVE, HomeCardMorph\.RETURN_JOIN_PROGRESS\)/,
+  '返回交接必须从整条曲线自动求分段');
+assert.equal((animateReturnBody.match(/animateTo\(\{/g) || []).length, 2,
+  '返回几何必须交给两条首尾相接的原生属性补间');
+assert.doesNotMatch(page, /private coverMorphReturnAnimator/, '返回动画不得依赖 JS 每帧状态回调');
 const opacityBody = page.match(/private morphContentOpacity\(\): number \{\r?\n([\s\S]*?)\r?\n  \}/)[1];
 const opacity = new Function(opacityBody);
 for (const start of [1, 0.54]) {

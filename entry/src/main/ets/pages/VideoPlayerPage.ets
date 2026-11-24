@@ -1,4 +1,3 @@
-import { splitCubicBezierAtProgress } from '../utils/CubicBezierSplit';
 import { CoverFlight } from '../components/HomeCoverNode';
 import { setBackgroundPlayback } from '../services/BackgroundPlaybackPreference';
 import { createSentDanmaku } from '../services/DanmakuService';
@@ -63,6 +62,7 @@ import { HOME_CHANNEL_CURVE, HOME_CHANNEL_DURATION } from '../utils/HomeChannelM
 import { VideoInteractionResult } from '../api/VideoInteractionApi';
 // VideoPlayerPage.ets
 import { router, curves, SegmentButton, SegmentButtonOptions, componentUtils, display, KeyboardAvoidMode, LengthMetrics, AnimatorResult } from '@kit.ArkUI';
+import { splitCubicBezierAtProgress } from '../utils/CubicBezierSplit';
 import { logInfo, logWarn, logError, errMsg } from '../utils/Logger';
 import { isCommentPictureDragAutoScroll } from '../components/CommentContentRenderer';
 import { VideoIntroCard, VideoIntroTag, getVideoPlayUrl, invalidatePlayUrlCache, PlayUrlResult, getVideoDetail, VideoDetail, CommentItem, VideoPageItem, modifyFollow, clearFollowedMidsCache, getUserInfo, UserInfo, getPgcPlayUrl, getPgcSeasonInfo, getPgcEpisodeInfo, PgcSeasonInfo, PgcEpisode, sendDanmakuVideo, SeasonEpisode, SeasonSection, UgcSeason } from '../api/BilibiliApi';
@@ -2126,11 +2126,10 @@ struct VideoPlayerPage {
       onFinish();
       return;
     }
-    // 在裁剪窗口贴合封面的位置切开同一条曲线，保持交接处速度连续。
+    const start = this.coverMorphQuickReturn ? this.coverMorphQuickStartP : 1;
     const split = splitCubicBezierAtProgress(HomeCardMorph.RETURN_CURVE, HomeCardMorph.RETURN_JOIN_PROGRESS);
     const firstDuration = Math.round(duration * split.timeFraction);
     const endAt = Date.now() + duration;
-    const start = this.coverMorphQuickReturn ? this.coverMorphQuickStartP : 1;
     animateTo({
       duration: firstDuration,
       curve: curves.cubicBezierCurve(split.first.x1, split.first.y1, split.first.x2, split.first.y2),

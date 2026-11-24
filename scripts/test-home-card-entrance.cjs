@@ -7,7 +7,7 @@ const compiled = 'entry/build/default/cache/default/default@CompileArkTS/esmodul
 const timers = new Map();
 let nextTimer = 1;
 function setTimer(callback, delay) {
-  assert.equal(delay, 750);
+  assert.ok(delay === 750 || delay === 520 || delay === 16, `unexpected entrance timer ${delay}`);
   const id = nextTimer++;
   timers.set(id, callback);
   return id;
@@ -20,6 +20,8 @@ function runTimer(id) {
 }
 function loadCard(componentName, methodNames) {
   const source = fs.readFileSync(compiled + 'components/' + componentName + '.ts', 'utf8');
+  assert.match(source, /new ObservedPropertySimplePU\(0\.2, this, "entranceScale"\)/,
+    'first construction must not render a full-size card');
   const ast = ts.createSourceFile(componentName + '.ts', source, ts.ScriptTarget.Latest, true);
   const component = ast.statements.find(node => ts.isClassDeclaration(node) && node.name.text === componentName);
   const methods = methodNames.map(name => {
@@ -27,10 +29,10 @@ function loadCard(componentName, methodNames) {
     assert.ok(member, `Compiled ${componentName} should contain ${name}`);
     return member.getText(ast);
   });
-  const fallback = ast.statements.find(node => ts.isVariableStatement(node) &&
-    node.declarationList.declarations.some(decl => decl.name.getText(ast) === 'ENTRANCE_FALLBACK_MS'));
-  assert.ok(fallback);
-  const output = ts.transpileModule(`${fallback.getText(ast)}\nclass Card { ${methods.join('\n')} }; Card;`, {
+  const constants = ast.statements.filter(node => ts.isVariableStatement(node) &&
+    node.declarationList.declarations.some(decl => /^ENTRANCE_(FALLBACK|COMPLETION|SETTLE_RESTORE)_MS$/.test(decl.name.getText(ast))));
+  assert.equal(constants.length, 3);
+  const output = ts.transpileModule(`${constants.map(node => node.getText(ast)).join('\n')}\nclass Card { ${methods.join('\n')} }; Card;`, {
     compilerOptions: { target: ts.ScriptTarget.ES2020 }
   }).outputText;
   const Card = vm.runInNewContext(output, {
@@ -41,22 +43,23 @@ function loadCard(componentName, methodNames) {
 
 const { source, Card } = loadCard('VideoCardComponent',
   ['aboutToAppear', 'aboutToReuse', 'aboutToRecycle', 'aboutToDisappear', 'prepareEntrance',
-    'clearEntranceTimer', 'revealEntrance', 'openCard']);
+    'clearEntranceTimers', 'revealEntrance', 'completeEntrance', 'openCard']);
 const revealedCardIds = new Set();
 const animations = [];
-const animateTo = (options, update) => {
+const animateToImmediately = (options, update) => {
   assert.deepEqual({ ...options.expectedFrameRateRange }, { min: 60, max: 120, expected: 120 });
   assert.equal(options.duration, 450);
   assert.equal(options.curve, 0);
   animations.push(options);
   update();
 };
-const getUIContext = () => ({ animateTo });
+const getUIContext = () => ({ animateToImmediately });
 const opened = [];
 const card = Object.assign(new Card(), { item: { id: 'first' }, revealedCardIds, getUIContext,
-  entranceScale: 1, entranceRevision: 0, entranceTimer: -1, onCardClick: item => opened.push(item.id) });
+  entranceScale: 1, entranceRevision: 0, entranceTimer: -1, entranceCompletionTimer: -1,
+  entranceSettleTimer: -1, onCardClick: item => opened.push(item.id) });
 const duplicate = Object.assign(new Card(), { item: { id: 'first' }, revealedCardIds, getUIContext,
-  entranceScale: 1, entranceRevision: 0, entranceTimer: -1 });
+  entranceScale: 1, entranceRevision: 0, entranceTimer: -1, entranceCompletionTimer: -1, entranceSettleTimer: -1 });
 
 card.aboutToAppear();
 duplicate.aboutToAppear();
@@ -66,9 +69,13 @@ assert.equal(card.entranceScale, 0.2, 'the first rendered size is compact');
 card.revealEntrance();
 assert.equal(card.entranceScale, 1);
 assert.equal(timers.has(firstTimer), false);
+assert.ok(timers.has(card.entranceCompletionTimer), 'completion watchdog is scheduled');
 card.openCard();
 assert.deepEqual(opened, [], 'wait for the resting cover rectangle when clicked mid-animation');
-animations[0].onFinish();
+runTimer(card.entranceCompletionTimer);
+assert.equal(card.entranceScale, 1.0001, 'the watchdog invalidates a frozen tween target');
+runTimer(card.entranceSettleTimer);
+assert.equal(card.entranceScale, 1, 'the forced frame settles at the exact final scale');
 assert.deepEqual(opened, ['first']);
 duplicate.revealEntrance();
 assert.equal(duplicate.entranceScale, 1, 'an existing compact duplicate still reaches full size');
@@ -99,11 +106,13 @@ assert.match(home, /revealedCardIds: this\.revealedCardIds/);
 assert.match(home, /entranceCenterX: this\.cardEntranceCenterX\(index\)/);
 
 const { Card: ChannelCard } = loadCard('HomeChannelCardEntrance',
-  ['aboutToAppear', 'aboutToDisappear', 'clearEntranceTimer', 'updateEntrance', 'reveal', 'anchorId']);
+  ['aboutToAppear', 'aboutToDisappear', 'clearEntranceTimers', 'clearEntranceFallback',
+    'updateEntrance', 'reveal', 'completeEntrance', 'anchorId']);
 const channelCard = Object.assign(new ChannelCard(), {
   cardKey: 'channel-card', gridId: 'grid', channelIndex: 3, activeChannel: 2, paneActive: true,
-  homeActive: true, visible: false, entranceScale: 1, entranceTimer: -1, revealedCardIds: new Set(),
-  getUIContext: () => ({ animateTo, getComponentUtils: () => ({ getRectangleById: () => null }) })
+  homeActive: true, visible: false, entranceScale: 1, entranceTimer: -1,
+  entranceCompletionTimer: -1, entranceSettleTimer: -1, entranceRevision: 0, revealedCardIds: new Set(),
+  getUIContext: () => ({ animateToImmediately, getComponentUtils: () => ({ getRectangleById: () => null }) })
 });
 channelCard.aboutToAppear();
 assert.equal(channelCard.entranceScale, 0.2, 'a card waiting for its channel starts compact');
@@ -121,7 +130,10 @@ runTimer(channelCard.entranceTimer);
 assert.equal(animations.length, 3);
 assert.equal(channelCard.entranceScale, 1, 'the channel fallback animates a missed visibility edge');
 assert.equal(channelCard.entranceLayer, true);
-animations[2].onFinish();
+runTimer(channelCard.entranceCompletionTimer);
+assert.equal(channelCard.entranceScale, 1.0001, 'the channel watchdog invalidates a frozen tween target');
+runTimer(channelCard.entranceSettleTimer);
+assert.equal(channelCard.entranceScale, 1);
 assert.equal(channelCard.entranceLayer, false);
 channelCard.visible = true;
 channelCard.updateEntrance();

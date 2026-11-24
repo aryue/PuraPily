@@ -1,4 +1,6 @@
 const ENTRANCE_FALLBACK_MS: number = 750;
+const ENTRANCE_COMPLETION_MS: number = 520;
+const ENTRANCE_SETTLE_RESTORE_MS: number = 16;
 
 @Component
 export struct HomeChannelCardEntrance {
@@ -10,11 +12,14 @@ export struct HomeChannelCardEntrance {
   revealedCardIds: Set<string> = new Set<string>();
   @StorageProp('homeFeedActive') @Watch('updateEntrance') homeActive: boolean = false;
   @StorageProp('homeChannelIndex') @Watch('updateEntrance') activeChannel: number = -1;
-  @State private entranceScale: number = 1;
+  @State private entranceScale: number = 0.2;
   @State private centerX: number | string = '50%';
   @State private entranceLayer: boolean = false;
   private visible: boolean = false;
   private entranceTimer: number = -1;
+  private entranceCompletionTimer: number = -1;
+  private entranceSettleTimer: number = -1;
+  private entranceRevision: number = 0;
 
   aboutToAppear(): void {
     this.entranceScale = this.revealedCardIds.has(this.cardKey) ? 1 : 0.2;
@@ -22,18 +27,26 @@ export struct HomeChannelCardEntrance {
   }
 
   aboutToDisappear(): void {
-    this.clearEntranceTimer();
+    this.clearEntranceTimers();
   }
 
-  private clearEntranceTimer(): void {
-    if (this.entranceTimer < 0) return;
-    clearTimeout(this.entranceTimer);
+  private clearEntranceTimers(): void {
+    if (this.entranceTimer >= 0) clearTimeout(this.entranceTimer);
+    if (this.entranceCompletionTimer >= 0) clearTimeout(this.entranceCompletionTimer);
+    if (this.entranceSettleTimer >= 0) clearTimeout(this.entranceSettleTimer);
+    this.entranceTimer = -1;
+    this.entranceCompletionTimer = -1;
+    this.entranceSettleTimer = -1;
+  }
+
+  private clearEntranceFallback(): void {
+    if (this.entranceTimer >= 0) clearTimeout(this.entranceTimer);
     this.entranceTimer = -1;
   }
 
   private updateEntrance(): void {
     if (this.entranceScale === 1 || !this.paneActive || !this.homeActive || this.activeChannel !== this.channelIndex) {
-      this.clearEntranceTimer();
+      this.clearEntranceFallback();
     } else if (this.visible) {
       this.reveal();
     } else if (this.entranceTimer < 0) {
@@ -46,7 +59,7 @@ export struct HomeChannelCardEntrance {
   }
 
   private reveal(): void {
-    this.clearEntranceTimer();
+    this.clearEntranceTimers();
     if (this.revealedCardIds.has(this.cardKey)) {
       this.entranceScale = 1;
       return;
@@ -60,17 +73,37 @@ export struct HomeChannelCardEntrance {
     }
     this.revealedCardIds.add(this.cardKey);
     this.entranceLayer = true;
-    ui.animateTo({
+    const revision = ++this.entranceRevision;
+    ui.animateToImmediately({
       duration: 450,
       curve: Curve.EaseOut,
       expectedFrameRateRange: { min: 60, max: 120, expected: 120 },
       onFinish: () => {
-        this.entranceScale = 1;
-        this.entranceLayer = false;
+        this.completeEntrance(revision);
       }
     }, () => {
       this.entranceScale = 1;
     });
+    this.entranceCompletionTimer = setTimeout(() => {
+      this.entranceCompletionTimer = -1;
+      this.completeEntrance(revision, true);
+    }, ENTRANCE_COMPLETION_MS);
+  }
+
+  private completeEntrance(revision: number, forceSettle: boolean = false): void {
+    if (revision !== this.entranceRevision) return;
+    this.clearEntranceTimers();
+    if (forceSettle) {
+      // The state target is already 1 during the tween. Change it once to invalidate a frozen frame.
+      this.entranceScale = 1.0001;
+      this.entranceSettleTimer = setTimeout(() => {
+        this.entranceSettleTimer = -1;
+        if (revision === this.entranceRevision) this.entranceScale = 1;
+      }, ENTRANCE_SETTLE_RESTORE_MS);
+    } else {
+      this.entranceScale = 1;
+    }
+    this.entranceLayer = false;
   }
 
   private anchorId(): string {

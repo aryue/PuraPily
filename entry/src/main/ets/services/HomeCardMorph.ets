@@ -20,7 +20,6 @@ import { CoverFlight } from '../components/HomeCoverNode';
  */
 import { logInfo, logWarn } from '../utils/Logger';
 import { image } from '@kit.ImageKit';
-import { CubicBezierControlPoints } from '../utils/CubicBezierSplit';
 
 /** 视频画面矩形（vp）；只用于播放页把自己那端占位放到正确位置，几何飞行由框架完成。 */
 export interface HomeCardMorphRect {
@@ -31,21 +30,28 @@ export interface HomeCardMorphRect {
   radius: number;
 }
 
+interface ReturnCurve {
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+}
+
 export class HomeCardMorph {
   /** 开关键（AppStorage / my_app_settings 同名） */
   static readonly SWITCH_KEY: string = 'homeCardMorph';
   /** 封面飞行时长上限：只决定飞行路径，不决定切换时刻（切换看封面/首帧谁先就绪） */
   static readonly DURATION: number = 380;
   /**
-   * 返回可见收缩时长。平台动效规范要求不少于 250ms；这里取 380ms，
+   * 返回可见收缩时长。平台动效规范要求不少于 250ms；这里取 350ms，
    * 与进入路径同长，返回不至于比打开更快、显得急停。
    */
-  static readonly RETURN_DURATION: number = 380;
+  static readonly RETURN_DURATION: number = 350;
   /**
    * 播放页退出转场保留时长。必须覆盖「等首页重排 + 最短 250ms 收缩 + 收尾」，
-   * 又不能把页面留到用户已开始滑动之后太久；440ms 留出约 40~60ms 收尾。
+   * 又不能把页面留到用户已开始滑动之后太久；410ms 留出约 40~60ms 收尾。
    */
-  static readonly RETURN_HOLD_MS: number = 440;
+  static readonly RETURN_HOLD_MS: number = 410;
   /** 换方向返回：收缩不得低于平台下限。 */
   static readonly ROTATED_RETURN_MIN_MS: number = 250;
   /** 换方向返回：收缩上限，避免比同方向返回更拖沓。 */
@@ -62,10 +68,10 @@ export class HomeCardMorph {
    */
   static readonly ASPECT_PROGRESS: number = 0.42;
   /** 返回时已走过的位移比例（0 < progress < 1）。到这里裁剪窗口贴合封面。 */
-  static readonly RETURN_JOIN_PROGRESS: number = 0.63;
+  static readonly RETURN_JOIN_PROGRESS: number = 0.8;
   static readonly CLIP_JOIN_PROGRESS: number = 1 - HomeCardMorph.RETURN_JOIN_PROGRESS;
-  /** 返回的整段速度曲线。当前交接位移下，约 79.5% 的时间用于收回详情区。 */
-  static readonly RETURN_CURVE: CubicBezierControlPoints = { x1: 0.608848, y1: 0, x2: 0.958848, y2: 1 };
+  /** 返回大部分时间接近匀速，起步和落位轻缓。 */
+  static readonly RETURN_CURVE: ReturnCurve = { x1: 0.08, y1: 0, x2: 0.92, y2: 1 };
   static readonly CARD_RADIUS: number = 8;
   /**
    * 飞行路径终点：最终视频画面矩形 × 该比例（绕中心缩放）。

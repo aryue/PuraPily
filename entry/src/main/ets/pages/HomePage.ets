@@ -470,7 +470,9 @@ export struct HomePage {
   async onPageShow() {
     this.isPageActive = true;
     this.syncPlaybackListPrefetch();
-    await this.recheckOrientationAndColumn();
+    if (!this.homeWindowSizeUnchanged()) {
+      await this.recheckOrientationAndColumn();
+    }
     this.afterHomeLayout(() => {
       HomeCardMorph.markHomeLayoutReady();
     });
@@ -508,6 +510,21 @@ export struct HomePage {
     await this.waitForStableOrientation();
     await this.initOrientationAndColumn();
     this.updatePaddings();
+  }
+
+  private homeWindowSizeUnchanged(): boolean {
+    const mainWindow = this.mainWindowRef ?? AppStorage.get<window.Window>('mainWindow');
+    if (!mainWindow) return false;
+    try {
+      const rect = mainWindow.getWindowProperties().windowRect;
+      const width = this.getUIContext().px2vp(rect.width);
+      const height = this.getUIContext().px2vp(rect.height);
+      return Math.abs(width - this.viewportWidth) <= 1 &&
+        Math.abs(height - this.viewportHeight) <= 1 &&
+        (width > height) === this.isLandscape;
+    } catch (_error) {
+      return false;
+    }
   }
 
   @Watch('onHideStatusBarChange')

@@ -10,6 +10,8 @@ import { homeArtworkRetained } from '../utils/HomeArtwork';
 import { HomeCardMorph } from '../services/HomeCardMorph';
 
 const ENTRANCE_FALLBACK_MS: number = 750;
+const ENTRANCE_COMPLETION_MS: number = 520;
+const ENTRANCE_SETTLE_RESTORE_MS: number = 16;
 
 @Reusable
 @Component
@@ -25,8 +27,10 @@ export struct VideoCardComponent {
   @StorageLink('isDarkMode') isDarkMode: boolean = true;
   @State private materialWidth: number = 0;
   @State private materialHeight: number = 0;
-  @State private entranceScale: number = 1;
+  @State private entranceScale: number = 0.2;
   private entranceTimer: number = -1;
+  private entranceCompletionTimer: number = -1;
+  private entranceSettleTimer: number = -1;
   private entranceRevision: number = 0;
   private entranceRunning: boolean = false;
   private openAfterEntrance: boolean = false;
@@ -59,7 +63,7 @@ export struct VideoCardComponent {
   }
 
   aboutToRecycle(): void {
-    this.clearEntranceTimer();
+    this.clearEntranceTimers();
     this.entranceRevision++;
     this.entranceRunning = false;
     this.openAfterEntrance = false;
@@ -69,10 +73,13 @@ export struct VideoCardComponent {
     this.aboutToRecycle();
   }
 
-  private clearEntranceTimer(): void {
-    if (this.entranceTimer < 0) return;
-    clearTimeout(this.entranceTimer);
+  private clearEntranceTimers(): void {
+    if (this.entranceTimer >= 0) clearTimeout(this.entranceTimer);
+    if (this.entranceCompletionTimer >= 0) clearTimeout(this.entranceCompletionTimer);
+    if (this.entranceSettleTimer >= 0) clearTimeout(this.entranceSettleTimer);
     this.entranceTimer = -1;
+    this.entranceCompletionTimer = -1;
+    this.entranceSettleTimer = -1;
   }
 
   private prepareEntrance(): void {
@@ -88,7 +95,7 @@ export struct VideoCardComponent {
   private revealEntrance(): void {
     const revealed = this.revealedCardIds;
     if (this.entranceScale === 1 || !revealed) return;
-    this.clearEntranceTimer();
+    this.clearEntranceTimers();
     if (revealed.has(this.item.id)) {
       this.entranceScale = 1;
       return;
@@ -96,22 +103,41 @@ export struct VideoCardComponent {
     revealed.add(this.item.id);
     const revision = ++this.entranceRevision;
     this.entranceRunning = true;
-    this.getUIContext().animateTo({
+    this.getUIContext().animateToImmediately({
       duration: 450,
       curve: Curve.EaseOut,
       expectedFrameRateRange: { min: 60, max: 120, expected: 120 },
       onFinish: () => {
-        if (revision !== this.entranceRevision) return;
-        this.entranceScale = 1;
-        this.entranceRunning = false;
-        if (this.openAfterEntrance) {
-          this.openAfterEntrance = false;
-          this.onCardClick?.(this.item, this.liveHost?.flight(this.item.id));
-        }
+        this.completeEntrance(revision);
       }
     }, () => {
       this.entranceScale = 1;
     });
+    // ArkUI can cancel the tween while a lazy row is being rebuilt. Completion must still be final.
+    this.entranceCompletionTimer = setTimeout(() => {
+      this.entranceCompletionTimer = -1;
+      this.completeEntrance(revision, true);
+    }, ENTRANCE_COMPLETION_MS);
+  }
+
+  private completeEntrance(revision: number, forceSettle: boolean = false): void {
+    if (revision !== this.entranceRevision) return;
+    this.clearEntranceTimers();
+    if (forceSettle) {
+      // The state target is already 1 during the tween. Change it once to invalidate a frozen frame.
+      this.entranceScale = 1.0001;
+      this.entranceSettleTimer = setTimeout(() => {
+        this.entranceSettleTimer = -1;
+        if (revision === this.entranceRevision) this.entranceScale = 1;
+      }, ENTRANCE_SETTLE_RESTORE_MS);
+    } else {
+      this.entranceScale = 1;
+    }
+    this.entranceRunning = false;
+    if (this.openAfterEntrance) {
+      this.openAfterEntrance = false;
+      this.onCardClick?.(this.item, this.liveHost?.flight(this.item.id));
+    }
   }
 
   private openCard(): void {
