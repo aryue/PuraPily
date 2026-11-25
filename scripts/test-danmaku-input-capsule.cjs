@@ -79,8 +79,8 @@ for (const [rel, label] of [
 }
 const controlsSrc = source('components/VideoControls');
 const playerSrc = source('pages/VideoPlayerPage');
-assert.equal((controlsSrc.match(/NativeGlassInput\(\{ inputHeight: (32|34) \}\)/g) || []).length, 2,
-  'both VideoControls danmaku entries aligned');
+assert.equal((controlsSrc.match(/NativeGlassInput\(\{ inputHeight: (32|34) \}\)/g) || []).length, 1,
+  'legacy control-layer danmaku entry removed; reference entry remains');
 assert.equal((playerSrc.match(/NativeGlassInput\(\{ inputHeight: (28|34) \}\)/g) || []).length, 2,
   'both VideoPlayerPage danmaku entries aligned');
 assert.equal((source('components/FeedPreviewChrome').match(/NativeGlassInput\(\{ inputHeight: 34 \}\)/g) || []).length, 1,

@@ -4,6 +4,7 @@ import { a2dp, connection, constant as btConstant } from '@kit.ConnectivityKit';
 import { abilityAccessCtrl, common } from '@kit.AbilityKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { LengthMetrics } from '@kit.ArkUI';
+import { AppNavigation, NavPageHost } from '../services/AppNavigation';
 import { HeaderBackButton } from '../components/HeaderBackButton';
 import { PageHeader } from '../components/PageHeader';
 import { PageSurface } from '../components/PageSurface';
@@ -60,9 +61,8 @@ struct AudioOutputLabSection {
   }
 }
 
-@Entry
 @Component
-struct AudioOutputLab {
+export struct AudioOutputLab {
   @StorageProp('isDarkMode') dark: boolean = false;
   @StorageProp('statusBarHeight') safeTop: number = 0;
   @StorageProp('navIndicatorHeight') safeBottom: number = 0;
@@ -83,6 +83,13 @@ struct AudioOutputLab {
   private active: boolean = false;
   private busy: boolean = false;
   private generation: number = 0;
+  navHost: NavPageHost | null = null;
+
+  aboutToAppear(): void {
+    if (this.navHost) {
+      this.navHost.attach((): void => this.onPageShow(), (): void => this.onPageHide(), null);
+    }
+  }
 
   private readNearLink(): NearLinkLabSnapshot {
     const devices: NearLinkLabDevice[] = [];
@@ -243,7 +250,10 @@ struct AudioOutputLab {
   }
 
   onPageHide(): void { this.stop(); }
-  aboutToDisappear(): void { this.stop(); }
+  aboutToDisappear(): void {
+    if (this.navHost) this.navHost.detach();
+    this.stop();
+  }
 
   private stop(): void {
     this.active = false;
@@ -360,7 +370,7 @@ struct AudioOutputLab {
       }.width('100%').height('100%').align(Alignment.Top).scrollBar(BarState.Auto)
       PageHeader({ withTabs: false }) {
         Row({ space: 16 }) {
-          HeaderBackButton({ onBack: () => { this.getUIContext().getRouter().back(); } })
+          HeaderBackButton({ onBack: () => { AppNavigation.back(); } })
           Text('音频输出测试').fontSize(20).fontWeight(FontWeight.Bold).fontColor(this.dark ? '#FFFFFF' : '#000000')
         }.width('100%').padding({ top: this.safeTop + 16, bottom: 16, left: 16, right: 16 })
       }

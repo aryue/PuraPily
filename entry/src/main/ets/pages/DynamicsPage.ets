@@ -10,6 +10,7 @@ import { logInfo, logWarn, logError } from '../utils/Logger';
 import { getHomeDynamics, getLastHomeDynErrorMsg, getDynUpList, DynUpListData, SpaceDynamicItem, DynVideoInfo, DynImageInfo, DynUpItem, DynTextSegment, prefetchVideoPlayback, setDynamicLike, repostDynamic, CommentLikeResult } from '../api/BilibiliApi';
 import { hdsMaterial, HdsTabs } from '@kit.UIDesignKit';
 import { display, mediaquery, curves, promptAction, uiMaterial } from '@kit.ArkUI';
+import { AppNavigation } from '../services/AppNavigation';
 import { HdsMiniBarButton } from '../components/infra/HdsMiniBarButton';
 import { FullImagePreview } from '../components/FullImagePreview';
 import { DynLikePill } from '../components/DynLikePill';
@@ -268,7 +269,7 @@ export struct DynamicsPage {
 
   private openFollowedShow(show: DynamicFollowShow): void {
     this.showFollowedShows = false;
-    this.getUIContext().getRouter().pushUrl({ url: 'pages/VideoPlayerPage',
+    AppNavigation.pushUrl({ url: 'pages/VideoPlayerPage',
       params: { mediaId: show.season_id, title: show.title, coverUrl: show.cover }
     }).catch(() => {});
   }
@@ -817,7 +818,7 @@ export struct DynamicsPage {
     // ⭐ 预热详情（fire-and-forget）：动态卡只给 bvid，播放页要等详情里的 cid 才能起播，
     //   在转场这一刻先发出去，与转场 + 播放器 surface 初始化重叠
     prefetchVideoPlayback(video.bvid, 0, AppStorage.get<number>('defaultVideoQn') ?? 116);
-    this.getUIContext().getRouter().pushUrl({
+    AppNavigation.pushUrl({
       url: 'pages/VideoPlayerPage',
       params: {
         bvid: video.bvid,
@@ -839,7 +840,7 @@ export struct DynamicsPage {
       promptAction.showToast({ message: '无法打开该动态', duration: 1500 });
       return;
     }
-    this.getUIContext().getRouter().pushUrl({
+    AppNavigation.pushUrl({
       url: 'pages/DynamicDetailPage',
       params: { dynIdStr: item.idStr, preload: item }
     }).catch(() => {});
@@ -934,7 +935,7 @@ export struct DynamicsPage {
 
   /** 打开 UP 主空间 */
   private openUpSpace(item: SpaceDynamicItem): void {    if (!item.authorName) return;
-    this.getUIContext().getRouter().pushUrl({
+    AppNavigation.pushUrl({
       url: 'pages/UpSpacePage',
       params: {
         mid: item.authorMid,
@@ -946,7 +947,7 @@ export struct DynamicsPage {
 
   /** 打开 UP 空间（面板头像） */
   private openUpSpaceByMid(up: DynUpItem): void {
-    this.getUIContext().getRouter().pushUrl({
+    AppNavigation.pushUrl({
       url: 'pages/UpSpacePage',
       params: {
         mid: up.mid,
@@ -974,7 +975,7 @@ export struct DynamicsPage {
 
   /** 跳转登录页 */
   private goToLogin(): void {
-    this.getUIContext().getRouter().pushUrl({ url: 'pages/QrCodeLoginPage' }).catch(() => {});
+    AppNavigation.pushUrl({ url: 'pages/QrCodeLoginPage' }).catch(() => {});
   }
 
   /**

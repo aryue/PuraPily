@@ -6,6 +6,7 @@ import { measureTextLines } from '../utils/TextMeasure';
 import { logWarn } from '../utils/Logger';
 import { MaterialUtil } from '../utils/MaterialUtil';
 import { VibrateUtils } from '../utils/VibrateUtils';
+import { AppNavigation } from '../services/AppNavigation';
 
 /**
  * 回复项组件 - 气泡式风格
@@ -80,7 +81,7 @@ export struct ReplyItemComponent {
           this.getUIContext().getPromptAction().closeCustomDialog(this.commentSelDialogId_);
           this.commentSelDialogId_ = -1;
         }
-        this.getUIContext().getRouter().pushUrl({
+        AppNavigation.pushUrl({
           url: 'pages/SearchPage',
           params: { keyword: keyword }
         }).catch((err: Error) => {
@@ -111,7 +112,7 @@ export struct ReplyItemComponent {
   private openUserSpace(): void {
     const mid = parseInt(this.reply.member?.mid ?? '', 10);
     if (!mid || isNaN(mid)) return;
-    this.getUIContext().getRouter().pushUrl({
+    AppNavigation.pushUrl({
       url: 'pages/UpSpacePage',
       params: {
         mid: mid,

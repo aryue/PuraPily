@@ -5,7 +5,7 @@ import { PageHeader } from '../components/PageHeader';
 import { PageWallpaper } from '../components/PageWallpaper';
 import { formatMessageTime } from '../utils/MessageData';
 // MsgNoticePage.ets — 消息中心四类通知列表页（回复我的/@我/收到的赞/系统通知）
-import { router } from '@kit.ArkUI';
+import { AppNavigation } from '../services/AppNavigation';
 import { logInfo, logWarn, logError, errMsg } from '../utils/Logger';
 import { MsgFeedApi, MsgFeedItem, MsgFeedListResult } from '../api/MsgFeedApi';
 import { prefetchVideoPlayback } from '../api/BilibiliApi';
@@ -24,9 +24,8 @@ const NOTICE_CONFIGS: NoticeTypeConfig[] = [
   { title: '系统通知', type: 4 }
 ];
 
-@Entry
 @Component({ freezeWhenInactive: true })
-struct MsgNoticePage {
+export struct MsgNoticePage {
   @StorageLink('pageWallpaperEnabled') pageWallpaperEnabled: boolean = false;
   @StorageLink('isDarkMode') isDarkMode: boolean = false;
   @StorageLink('hideStatusBar') hideStatusBar: boolean = false;
@@ -57,9 +56,10 @@ struct MsgNoticePage {
   /** 游标 */
   private cursor: string = '0';
   private cursorTime: number = 0;
+  navParams: Record<string, Object> | null = null;
 
   async aboutToAppear(): Promise<void> {
-    const params = router.getParams() as Record<string, Object>;
+    const params = this.navParams;
     if (params) {
       const type = (params['type'] as number) || 1;
       this.currentType = type;
@@ -184,7 +184,7 @@ struct MsgNoticePage {
     .alignItems(VerticalAlign.Center)
     .onClick(() => {
       if (item.commentRootId > 0 && (item.bvid || item.aid)) {
-        router.pushUrl({
+        AppNavigation.pushUrl({
           url: 'pages/CommentDetailPage',
           params: {
             aid: item.aid || 0,
@@ -198,7 +198,7 @@ struct MsgNoticePage {
       } else if (item.bvid || item.aid) {
         prefetchVideoPlayback(item.bvid || String(item.aid), 0,
           AppStorage.get<number>('defaultVideoQn') ?? 116);
-        router.pushUrl({
+        AppNavigation.pushUrl({
           url: 'pages/VideoPlayerPage',
           params: {
             bvid: item.bvid || '',
@@ -319,7 +319,7 @@ struct MsgNoticePage {
       Column() {
       PageHeader({ withTabs: false }) {
         Row() {
-          HeaderBackButton({ onBack: () => router.back() }).margin({ right: 8 })
+          HeaderBackButton({ onBack: () => { AppNavigation.back(); } }).margin({ right: 8 })
           Text(this.title)
             .fontSize(17)
             .fontWeight(FontWeight.Medium)

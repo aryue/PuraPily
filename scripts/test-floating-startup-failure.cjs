@@ -6,12 +6,16 @@ while(depth){const c=source[end++];if(c==='{')depth++;if(c==='}')depth--}
 const storage=new Map(),video={surfaceId:'main',state:'playing',width:1920,height:1080},player={takeoverPlayer(v,a,state){this.videoPlayer=v;this.audioPlayer=a;this.playerState=state;this.hasActivePlayer=true}};
 let toasts=0,finished=0;
 const ctx={exports:{},logInfo(){},logWarn(){},logError(){},setTimeout:()=>1,
+ AppNavigation:{back(){return Promise.resolve()}},
  AppStorage:{set:(k,v)=>storage.set(k,v)},PlayerService:{getInstance:()=>player},
  FloatingVideoTransition:{active:()=>false,begin(){},finish(){finished++}},
  FloatingVideoSurface:{prepare(){},park(){}},FloatingPiP:{getInstance:()=>({open:async()=>{video.surfaceId='failed-pip';return false}})}};
 vm.runInNewContext(ts.transpileModule('exports.Page=class{'+source.slice(start,end)+'}',{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020}}).outputText,ctx);
 async function main(){const page=new ctx.exports.Page();Object.assign(page,{floatingMorph:false,play:true,playbackResources_:{video,audio:null},
- vi:{bvid:'BV-test',cid:1,title:'video',cover:''},ar:16/9,ct:10,dur:75,prepareFloatingGeometry(){},triggerHaptic(){},
+ vi:{bvid:'BV-test',cid:1,title:'video',cover:''},ar:16/9,ct:10,dur:75,offlineVideoPath_:'',rt:1,qn:80,ql:'',
+ vol:1,mute:false,isLandscapeVertical:false,aidFromParams_:0,epId_:0,seasonId_:0,getQlList:()=>[],
+ detailIsCurrentVideo:()=>false,
+ prepareFloatingGeometry(){},triggerHaptic(){},
  activeVideoSurfaceId:()=> 'main',getUIContext:()=>({getPromptAction:()=>({showToast(){toasts++}})})});
  await page.minimizeToFloating();assert.equal(page.playbackResources_.video,video);assert.equal(video.surfaceId,'main');assert.equal(video.state,'playing');
  assert.equal(player.videoPlayer,null);assert.equal(player.hasActivePlayer,false);assert.equal(storage.get('videoMinimized'),false);

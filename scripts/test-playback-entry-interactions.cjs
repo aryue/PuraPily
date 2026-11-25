@@ -102,6 +102,7 @@ async function main() {
   }
   const routes = [], prefetches = [];
   const mocks = { AppStorage: { get: () => 116 }, logError() {},
+    AppNavigation: { pushUrl(route) { routes.push(route); return Promise.resolve(); } },
     prefetchVideoPlayback(...args) { prefetches.push(args); return new Promise(() => {}); },
     router: { pushUrl(route) { routes.push(route); return Promise.resolve(); } } };
   {

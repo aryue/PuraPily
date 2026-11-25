@@ -8,6 +8,7 @@ import { FloatingVideoTransition } from './FloatingVideoTransition';
 import { LiveViewHelper } from './LiveViewHelper';
 import { PlayerService } from './PlayerService';
 import { logInfo, logWarn } from '../utils/Logger';
+import { AppNavigation } from './AppNavigation';
 
 /** One system PiP session owns the floating video, both inside and outside the app. */
 export class FloatingPiP {
@@ -172,7 +173,7 @@ export class FloatingPiP {
     FloatingVideoTransition.begin('restore');
     FloatingVideoTransition.restoreExpanded = true;
     try {
-      await uiContext.getRouter().pushUrl({ url: 'pages/VideoPlayerPage', params: {
+      await AppNavigation.pushUrl({ url: 'pages/VideoPlayerPage', params: {
         bvid: state.bvid, cid: state.cid, title: state.title, coverUrl: state.cover,
         initialProgress: (PlayerService.getInstance().videoPlayer?.currentTime ?? state.currentTime * 1000) / 1000
       } });

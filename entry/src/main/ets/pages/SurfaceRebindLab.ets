@@ -16,9 +16,8 @@ const UA: string = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
  *
  * 只做测量，不参与正式播放链路。入口：aa start --ps surfaceLab <bvid>
  */
-@Entry
 @Component
-struct SurfaceRebindLab {
+export struct SurfaceRebindLab {
   @State private lines: string[] = [];
   @State private phase: string = '准备中';
   @State private running: boolean = false;
@@ -33,9 +32,10 @@ struct SurfaceRebindLab {
   private origin: number = 0;
   private playerA: media.AVPlayer | null = null;
   private bridge: DashPlayerBridge | null = null;
+  navParams: Record<string, string> | null = null;
 
   aboutToAppear(): void {
-    const params = this.getUIContext().getRouter().getParams() as Record<string, string> | null;
+    const params = this.navParams;
     const passed: string = params !== null && params !== undefined ? (params['bvid'] as string) : '';
     // 默认用模拟器/真机都验证过能播的一次推荐流条目（数字 aid 也可被 getVideoDetail 归一）。
     this.bvid = passed !== undefined && passed !== null && passed.length > 0 ? passed : '117444957970302';

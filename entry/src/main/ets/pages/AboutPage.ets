@@ -3,6 +3,7 @@ import { PageSurface } from '../components/PageSurface';
 import { pageBackgroundColor } from '../utils/SurfaceColors';
 import { PageHeader } from '../components/PageHeader';
 import { PageWallpaper } from '../components/PageWallpaper';
+import { AppNavigation } from '../services/AppNavigation';
 /**
  * 关于软件页面
  */
@@ -22,9 +23,8 @@ enum UpdateUiState {
   ERROR = 4
 }
 
-@Entry
 @Component
-struct AboutPage {
+export struct AboutPage {
   @StorageLink('pageWallpaperEnabled') pageWallpaperEnabled: boolean = false;
   @StorageLink('isDarkMode') isDarkMode: boolean = false;
   @StorageLink('statusBarHeight') statusBarHeight: number = 0;
@@ -248,7 +248,6 @@ struct AboutPage {
 //             }
 //             .width('100%')
 //             .padding(16)
-//             .onClick(() => this.getUIContext().getRouter().pushUrl({ url: 'pages/IjkLab' }))
 //           }
 //         }
 //         .width('100%')
@@ -272,7 +271,6 @@ struct AboutPage {
 //         }
 //         .width('100%')
 //         .borderRadius(14)
-//         .onClick(() => this.getUIContext().getRouter().pushUrl({ url: 'pages/DashPocPage' }))
 //
 //         }
 //         }.width('100%')
@@ -291,7 +289,7 @@ struct AboutPage {
       Column() {
       PageHeader({ withTabs: false }) {
         Row() {
-          HeaderBackButton({ onBack: () => this.getUIContext().getRouter().back() })
+          HeaderBackButton({ onBack: () => { AppNavigation.back(); } })
 
           Text('关于软件')
             .fontSize(20)

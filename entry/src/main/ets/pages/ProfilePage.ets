@@ -23,6 +23,7 @@ import { getLoginAccessKey } from '../utils/CredentialStore';
 import { HighRefreshService } from '../services/HighRefreshService';
 import { AppScaleService, FONT_SCALE_MIN, FONT_SCALE_MAX, FONT_SCALE_STEP, FONT_SCALE_DEFAULT } from '../services/AppScaleService';
 import { QualityPreferenceService, QualityBucket } from '../services/QualityPreferenceService';
+import { AppNavigation, SettingsSectionRouteParams } from '../services/AppNavigation';
 import {
   QUALITY_OPTIONS, QualityOption, DEFAULT_QUALITY_QN, DEFAULT_CELLULAR_QUALITY_QN, qualityLabel
 } from '../utils/QualityCatalog';
@@ -95,7 +96,7 @@ export struct ProfilePage {
   @StorageLink('isDarkMode') isDarkMode: boolean = false;
   @StorageLink('bgp') referenceBackgroundPlay: boolean = false;
   @StorageLink('mixAudioWithOtherApps') mixAudioWithOtherApps: boolean = false;
-  /** 首页卡片封面共享元素转场（实验开关，默认关闭；Index.pageTransition 只在页面创建时求值） */
+  /** 首页卡片封面共享元素转场（实验开关，默认关闭；Index 在 aboutToAppear 落开关快照） */
   @StorageLink('homeCardMorph') homeCardMorph: boolean = false;
   @StorageLink('cellularPrefetch') cellularPrefetch: boolean = false;
   @StorageLink('ijkWarmSlotsWifi') ijkWarmSlotsWifi: number = 1;
@@ -388,13 +389,13 @@ export struct ProfilePage {
   }
 
   private goToWatchHistory(): void {
-    this.getUIContext().getRouter().pushUrl({ url: 'pages/WatchHistoryPage' }).catch((err: Error) => {
+    AppNavigation.pushUrl({ url: 'pages/WatchHistoryPage' }).catch((err: Error) => {
       logError('跳转观看历史失败', err);
     });
   }
 
   private goToLogin(tvMode: boolean = false): void {
-    this.getUIContext().getRouter().pushUrl({ url: 'pages/QrCodeLoginPage', params: { tvMode: tvMode } }).catch((err: Error) => {
+    AppNavigation.pushUrl({ url: 'pages/QrCodeLoginPage', params: { tvMode: tvMode } }).catch((err: Error) => {
       logError('跳转扫码登录页失败', err);
       this.getUIContext().getPromptAction().showToast({ message: '登录功能暂不可用' });
     });
@@ -416,14 +417,14 @@ export struct ProfilePage {
   }
 
   private goToFavorites(): void {
-    this.getUIContext().getRouter().pushUrl({ url: 'pages/FavoritesPage' }).catch((err: Error) => {
+    AppNavigation.pushUrl({ url: 'pages/FavoritesPage' }).catch((err: Error) => {
       logError('跳转收藏页面失败', err);
       this.getUIContext().getPromptAction().showToast({ message: '收藏页面暂不可用' });
     });
   }
 
   private goToOfflineCache(): void {
-    this.getUIContext().getRouter().pushUrl({ url: 'pages/OfflineCachePage' }).catch((err: Error) => {
+    AppNavigation.pushUrl({ url: 'pages/OfflineCachePage' }).catch((err: Error) => {
       logError('跳转离线缓存页面失败', err);
       this.getUIContext().getPromptAction().showToast({ message: '离线缓存页面暂不可用' });
     });
@@ -447,20 +448,20 @@ export struct ProfilePage {
   }
 
   private goToAbout(): void {
-    this.getUIContext().getRouter().pushUrl({ url: 'pages/AboutPage' }).catch((err: Error) => {
+    AppNavigation.pushUrl({ url: 'pages/AboutPage' }).catch((err: Error) => {
       logError('跳转关于页面失败', err);
     });
   }
 
   private goToLevelBarLab(): void {
-    this.getUIContext().getRouter().pushUrl({ url: 'pages/LevelBarLab' }).catch((err: Error) => {
+    AppNavigation.pushUrl({ url: 'pages/LevelBarLab' }).catch((err: Error) => {
       logError('打开音量与亮度测试失败', err);
     });
   }
 
   private openProfile(): void {
     if (!this.isLoggedIn) { this.goToLogin(); return; }
-    this.getUIContext().getRouter().pushUrl({ url: 'pages/UpSpacePage', params: {
+    AppNavigation.pushUrl({ url: 'pages/UpSpacePage', params: {
       mid: this.userMid, upName: this.userDisplayName, upFace: this.userAvatarUrl
     } }).catch((error: Error) => { logError('打开空间失败', error); });
   }
@@ -501,13 +502,14 @@ export struct ProfilePage {
   }
 
   private openSettings(): void {
-    this.getUIContext().getRouter().pushUrl({ url: 'pages/SettingsPage' })
+    AppNavigation.pushUrl({ url: 'pages/SettingsPage' })
       .catch((error: Error) => { logError('打开设置失败', error); });
   }
 
   /** 设置页二级分区：外观与交互 / 播放设置，共用同一个分区页。 */
   private openSettingsSection(section: string): void {
-    this.getUIContext().getRouter().pushUrl({ url: 'pages/SettingsSectionPage', params: { section: section } })
+    const params: SettingsSectionRouteParams = { section: section };
+    AppNavigation.pushUrl({ url: 'pages/SettingsSectionPage', params: params })
       .catch((error: Error) => { logError('打开设置分区失败', error); });
   }
 
@@ -559,7 +561,7 @@ export struct ProfilePage {
                 this.MenuRow($r('app.media.ref_profile'), '补充 TV 授权', () => this.goToLogin(true))
               }
               this.MenuRow($r('app.media.ref_message'), '消息中心', () => {
-                this.getUIContext().getRouter().pushUrl({ url: 'pages/MessagesPage' })
+                AppNavigation.pushUrl({ url: 'pages/MessagesPage' })
                   .catch((error: Error) => { logError('打开消息失败', error); });
               })
             }.width('100%').padding({ left: 8, right: 8, top: 10, bottom: 8 })
@@ -570,7 +572,6 @@ export struct ProfilePage {
           //     this.SectionTitle('实验室')
           //     this.MenuRow($r('app.media.ic_public_volume_down'), '音量与亮度测试', () => this.goToLevelBarLab())
           //     this.MenuRow($r('app.media.headphones_fill'), '音频输出测试', () => {
-          //       this.getUIContext().getRouter().pushUrl({ url: 'pages/AudioOutputLab' })
           //         .catch((error: Error) => { logError('打开音频输出测试失败', error); });
           //     })
           //   }.width('100%').padding({ left: 8, right: 8, top: 10, bottom: 8 })
@@ -792,7 +793,7 @@ export struct ProfilePage {
     else if (kind === 'theme') await this.saveThemeMode(['system', 'light', 'dark'][index]);
     else if (kind === 'wallpaper') {
       if (this.pageWallpaperBusy) return;
-      if (index === 2) await this.getUIContext().getRouter().pushUrl({ url: 'pages/LocalWallpaperPage' });
+      if (index === 2) await AppNavigation.pushUrl({ url: 'pages/LocalWallpaperPage' });
       else await this.applyPageWallpaper(['pipw', 'picsum', 'local', 'none'][index]);
     } else if (kind === 'rotation') await this.referenceSaveRotation(ROTATION_OPTIONS[index]);
     else if (kind === 'side') await this.saveLandscapePlaybackSide(index === 1 ? 'right' : 'left');
@@ -1213,7 +1214,7 @@ export struct ProfilePage {
               .padding({ left: 16, right: 16, top: 10, bottom: 10 })
               .id('setting-entry-sponsor-block')
               .onClick(() => {
-                this.getUIContext().getRouter().pushUrl({ url: 'pages/SponsorBlockPage' })
+                AppNavigation.pushUrl({ url: 'pages/SponsorBlockPage' })
                   .catch((error: Error) => { logError('打开空降助手设置失败', error); });
               })
           }.width('100%').padding({ top: 4, bottom: 4 })

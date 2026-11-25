@@ -2,7 +2,8 @@ import { PageSurface } from '../components/PageSurface';
 import { GlassMaterial } from '../utils/GlassMaterial';
 import { formatMessageTime } from '../utils/MessageData';
 // WhisperPage.ets — 私聊会话列表页（消息页）
-import { router, mediaquery, display } from '@kit.ArkUI';
+import { mediaquery, display } from '@kit.ArkUI';
+import { AppNavigation } from '../services/AppNavigation';
 import { preferences } from '@kit.ArkData';
 import { common } from '@kit.AbilityKit';
 import { hdsMaterial } from '@kit.UIDesignKit';
@@ -222,7 +223,7 @@ export struct WhisperPage {
    */
   private openNotice(type: number): void {
     try {
-      router.pushUrl({
+      AppNavigation.pushUrl({
         url: 'pages/MsgNoticePage',
         params: {
           'type': type
@@ -361,7 +362,7 @@ export struct WhisperPage {
         this.chatTalkerName = s.sessionName;
         this.chatTalkerFace = s.face;
       } else {
-        router.pushUrl({
+        AppNavigation.pushUrl({
           url: 'pages/WhisperDetailPage',
           params: {
             'talkerId': s.talkerUid,

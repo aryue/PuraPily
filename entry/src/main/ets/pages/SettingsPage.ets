@@ -3,10 +3,10 @@ import { pageBackgroundColor } from '../utils/SurfaceColors';
 import { PageHeader } from '../components/PageHeader';
 import { PageWallpaper } from '../components/PageWallpaper';
 import { ProfilePage } from './ProfilePage';
+import { AppNavigation } from '../services/AppNavigation';
 
-@Entry
 @Component
-struct SettingsPage {
+export struct SettingsPage {
   @StorageLink('pageWallpaperEnabled') pageWallpaperEnabled: boolean = false;
   @StorageLink('isDarkMode') isDarkMode: boolean = true;
   @StorageLink('statusBarHeight') statusBarHeight: number = 0;
@@ -20,7 +20,7 @@ struct SettingsPage {
       ProfilePage({ settingsOnly: true })
       PageHeader({ withTabs: false }) {
         Row({ space: 10 }) {
-          HeaderBackButton({ onBack: () => this.getUIContext().getRouter().back() })
+          HeaderBackButton({ onBack: () => { AppNavigation.back(); } })
           Text('设置').fontSize(18).fontWeight(FontWeight.Medium)
             .fontColor(this.isDarkMode ? '#E7E9EB' : '#18191C')
         }.height(44).width('100%').padding({ left: 8, top: this.statusBarHeight })

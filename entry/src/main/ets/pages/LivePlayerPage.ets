@@ -18,6 +18,7 @@ import { HeaderBackButton } from '../components/HeaderBackButton';
 import { PlayerStatusStrip } from '../components/PlayerStatusStrip';
 import { VideoListItem } from '../components/VideoListItem';
 import { AppContinuation, ContinuationPage } from '../services/AppContinuation';
+import { AppNavigation, NavPageHost } from '../services/AppNavigation';
 import { HOME_CHANNEL_CURVE, HOME_CHANNEL_DURATION } from '../utils/HomeChannelMotion';
 import { window, display, LengthMetrics } from '@kit.ArkUI';
 import { FullscreenDeviceOrientation } from '../utils/FullscreenDeviceOrientation';
@@ -41,9 +42,10 @@ interface QualityOption {
   label: string;
 }
 
-@Entry
 @Component
-struct LivePlayerPage {
+export struct LivePlayerPage {
+  navHost: NavPageHost | null = null;
+  navParams: Record<string, Object> | null = null;
   // ========== 直播状态 ==========
   @State roomId: number = 0;
   @State title: string = '';
@@ -513,7 +515,10 @@ struct LivePlayerPage {
         this.landscapeExpand = 1;
       });
     } else {
+      const phoneViewport = Math.min(this.viewportWidth || this.screenWv(),
+        this.viewportHeight || this.screenHv()) < 600;
       const target = this.fullscreenDeviceOrientation.returnLandscape(this.rotationOrientation(), this.landscapeLayout(),
+        phoneViewport,
         this.getUIContext().getHostContext() as common.UIAbilityContext);
       if (target) {
         this.finishFullscreenExit();
@@ -771,7 +776,7 @@ struct LivePlayerPage {
   /** 推荐卡片点击：push 出新的直播播放页（普通页相关视频同款跳转），并带上当前分栏比例 */
   private selectRecommendedRoom(target: LiveFeedRoom): void {
     if (!target || target.roomId <= 0 || target.roomId === this.roomId || this.disposed) return;
-    this.getUIContext().getRouter().pushUrl({
+    AppNavigation.pushUrl({
       url: 'pages/LivePlayerPage',
       params: {
         roomId: target.roomId,
@@ -988,6 +993,10 @@ struct LivePlayerPage {
   }
 
   aboutToAppear() {
+    if (this.navHost) {
+      this.navHost.attach((): void => this.onPageShow(), (): void => this.onPageHide(),
+        (): boolean => this.onBackPress());
+    }
     // ⭐ 存活播放页计数（与 VideoPlayerPage 共用）：退出时若还有别的播放页活着，
     //    内容色必须回到白字而不是主题口径，否则浅色模式下层播放页被恢复成黑字。
     AppStorage.setOrCreate('immersivePlayerAliveCount',
@@ -998,9 +1007,9 @@ struct LivePlayerPage {
     this.registerContinuation();
     // ⭐ 注册系统音量变化监听（音量键调节时同步 app 内滑块/手势起点）
     this.registerVolumeListener();
-    const params = this.getUIContext().getRouter().getParams() as Record<string, Object>;
+    const params = this.navParams;
     // 比例只在实例内：重新进入分栏界面重置 2/3，只有不同分栏页跳转继承（普通页口径）
-    this.landscapeRatio = this.initialLandscapeRatio(params);
+    this.landscapeRatio = this.initialLandscapeRatio(params ?? undefined);
     if (params && params['roomId']) {
       this.roomId = params['roomId'] as number;
       this.roomIds = (params['roomIds'] as number[] || []).filter(id => id > 0);
@@ -1093,6 +1102,7 @@ struct LivePlayerPage {
   }
 
   aboutToDisappear() {
+    if (this.navHost) this.navHost.detach();
     this.fullscreenDeviceOrientation.stop();
     clearTimeout(this.fullscreenExitTimer);
     AppContinuation.unregister(this);
@@ -1152,7 +1162,7 @@ struct LivePlayerPage {
     //    立即恢复主题口径（目标页还是播放页则交给对方 onPageShow 强制白字）。
     //    切后台时栈顶仍是本页，不会误发。
     try {
-      const state = this.getUIContext().getRouter().getState();
+      const state = AppNavigation.getState();
       const raw = state.path.endsWith('/') ? `${state.path}${state.name}` : state.path;
       const top = raw.startsWith('/') ? raw.substring(1) : raw;
       if (top !== 'pages/LivePlayerPage' && top !== 'pages/VideoPlayerPage') {
@@ -1527,7 +1537,7 @@ struct LivePlayerPage {
     this.disposed = true;
     this.playGeneration++;
     this.releasePlayer();
-    this.getUIContext().getRouter().back();
+    AppNavigation.back();
   }
 
   /** 顶栏返回：横屏全屏先退回分栏播放态（对齐普通横屏播放页），其余直接退出直播间 */

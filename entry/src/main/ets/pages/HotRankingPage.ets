@@ -4,18 +4,19 @@ import { PageHeader } from '../components/PageHeader';
 import { PageWallpaper } from '../components/PageWallpaper';
 import { HotSearchItem, fetchHotSearch } from '../api/HotSearchService';
 import { logError } from '../utils/Logger';
+import { AppNavigation } from '../services/AppNavigation';
 
-@Entry
 @Component
-struct HotRankingPage {
+export struct HotRankingPage {
   @StorageLink('pageWallpaperEnabled') pageWallpaperEnabled: boolean = false;
   @StorageLink('isDarkMode') isDarkMode: boolean = true;
   @StorageLink('hideStatusBar') hideStatusBar: boolean = false;
   @StorageLink('statusBarHeight') globalStatusBarHeight: number = 0;
   @State hotSearchItems: HotSearchItem[] = [];
+  navParams: Record<string, Object> | null = null;
 
   aboutToAppear(): void {
-    const params = this.getUIContext().getRouter().getParams() as Record<string, Object>;
+    const params = this.navParams;
     const items = params ? params['items'] as HotSearchItem[] : [];
     if (items && items.length > 0) {
       this.hotSearchItems = items;
@@ -25,7 +26,7 @@ struct HotRankingPage {
   }
 
   private openResults(keyword: string): void {
-    this.getUIContext().getRouter().pushUrl({
+    AppNavigation.pushUrl({
       url: 'pages/SearchPage',
       params: { keyword: keyword, fromHotRanking: true }
     }).catch((error: Error) => logError('[HotRankingPage] 打开搜索结果失败', error));
@@ -136,7 +137,7 @@ struct HotRankingPage {
       Column() {
             PageHeader() {
             Row() {
-              HeaderBackButton({ iconColor: Color.White, onBack: () => this.getUIContext().getRouter().back() })
+              HeaderBackButton({ iconColor: Color.White, onBack: () => { AppNavigation.back(); } })
               Blank()
             }
             .width('100%').height(48 + (this.hideStatusBar ? 0 : this.globalStatusBarHeight))

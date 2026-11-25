@@ -2,7 +2,7 @@ import { HeaderBackButton } from '../components/HeaderBackButton';
 import { pageBackgroundColor } from '../utils/SurfaceColors';
 import { PageHeader } from '../components/PageHeader';
 import { PageWallpaper } from '../components/PageWallpaper';
-import { router } from '@kit.ArkUI';
+import { AppNavigation } from '../services/AppNavigation';
 import { logInfo, logWarn, logError } from '../utils/Logger';
 import { CommentItem, VideoDetail, getCommentReplies, getCommentDetail, CommentDetailResult, addVideoComment, prefetchVideoPlayback } from '../api/BilibiliApi';
 import { ObservableComment } from '../model/ObservableComment';
@@ -12,9 +12,8 @@ import { CommentInputBar, CommentImageDraft, CommentInputBarCtrl } from '../comp
 import { MaterialUtil } from '../utils/MaterialUtil';
 import { sortCommentReplies } from '../utils/CommentReplySort';
 
-@Entry
 @Component({ freezeWhenInactive: true })
-struct CommentDetailPage {
+export struct CommentDetailPage {
   @StorageLink('pageWallpaperEnabled') pageWallpaperEnabled: boolean = false;
   @StorageLink('isDarkMode') isDarkMode: boolean = false;
   @StorageLink('hideStatusBar') hideStatusBar: boolean = false;
@@ -54,9 +53,10 @@ struct CommentDetailPage {
   private isMsgNavMode: boolean = false;
   private replyRoot: number = 0;
   private replyParent: number = 0;
+  navParams: Record<string, Object> | null = null;
 
   async aboutToAppear(): Promise<void> {
-    const params = router.getParams() as Record<string, Object>;
+    const params = this.navParams;
     if (!params) return;
 
     const mainCommentData = params['mainComment'] as CommentItem;
@@ -191,7 +191,7 @@ struct CommentDetailPage {
     if (!member) return;
     const mid = parseInt(member.mid ?? '', 10);
     if (!mid || isNaN(mid)) return;
-    this.getUIContext().getRouter().pushUrl({
+    AppNavigation.pushUrl({
       url: 'pages/UpSpacePage',
       params: {
         mid: mid,
@@ -207,7 +207,7 @@ struct CommentDetailPage {
     if (this.bvid_ || this.aid) {
       prefetchVideoPlayback(this.bvid_ || String(this.aid), this.videoDetail?.cid || 0,
         AppStorage.get<number>('defaultVideoQn') ?? 116);
-      router.pushUrl({
+      AppNavigation.pushUrl({
         url: 'pages/VideoPlayerPage',
         params: {
           bvid: this.bvid_ || '',
@@ -572,7 +572,7 @@ struct CommentDetailPage {
       Column() {
       PageHeader({ withTabs: false }) {
         Row() {
-          HeaderBackButton({ onBack: () => router.back() });
+          HeaderBackButton({ onBack: () => { AppNavigation.back(); } });
 
           Text('评论详情')
             .fontSize(18)

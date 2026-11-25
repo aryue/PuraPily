@@ -7,7 +7,9 @@ const names = ['aboutToAppear', 'goBack', 'performSearch', 'returnToSearchLandin
 const body = names.map(name => pageClass.members.find(n => ts.isMethodDeclaration(n) && n.name.getText(ast) === name).getText(ast)).join('\n');
 const calls = [], animations = [], toasts = [];
 const context = { exports: {}, Curve: { FastOutSlowIn: 0 }, clearTimeout() {}, logError() {}, logWarn() {},
+  AppNavigation: { back() { backs++; return Promise.resolve(); } },
   searchByType: (...args) => new Promise((resolve, reject) => calls.push({ args, resolve, reject })) };
+let backs = 0;
 vm.runInNewContext(ts.transpileModule(`export class Subject { ${body} }`, {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 }
 }).outputText, context);
@@ -24,12 +26,11 @@ function page() {
 }
 (async () => {
   for (const params of [{ keyword: '简介标签' }, { keyword: '外部搜索', fromHotRanking: true }, {}]) {
-    const direct = page(); let backs = 0;
+    backs = 0;
+    const direct = page();
     Object.assign(direct, { registerContinuation() {}, saveAndSetStatusBarTransparent() {},
       initOrientationAndListen() {}, initSmartGrip() {}, recalcSearchTabBarW() {}, loadInitialData() {}, triggerHaptic() {} });
-    const ui = direct.getUIContext();
-    ui.getRouter = () => ({ getParams: () => params, back: () => backs++ });
-    direct.getUIContext = () => ui;
+    direct.navParams = params;
     direct.aboutToAppear();
     if (params.keyword) {
       assert.equal(direct.hasActiveSearch, true, 'external keywords open results immediately');

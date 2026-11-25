@@ -1,6 +1,6 @@
 import { PlaybackControlSurface } from './PlaybackControlSurface';
 import { PlaybackGlassAction } from './PlaybackGlassAction';
-import type { PlayerVideoOption } from './PlayerLegacyVideoOptions';
+import type { PlayerVideoOption } from './PlayerReferenceVideoOptions';
 
 @Component
 export struct PlayerLandscapeVideoOptions {

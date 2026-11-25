@@ -52,6 +52,7 @@ const context = { exports: {}, ViewPU: View, registerNamedRoute() {},
     fontSize() {}, fontWeight() {}, width() {}, fontColor() {}, fontFamily() {}, copyOption() {}, pop() {} },
   FontWeight: {}, CopyOptions: {},
   require: name => {
+    if (name.includes('AppNavigation')) return { AppNavigation: { pushUrl() { return Promise.resolve(); }, back() { return Promise.resolve(); } } };
     if (name.includes('nearlink.manager')) return { default: manager };
     if (name.includes('nearlink.remoteDevice')) return { default: remoteDevice };
     if (name.includes('nearlink.constant')) return { default: constant };
@@ -62,7 +63,8 @@ const code = ts.transpileModule(fs.readFileSync(path, 'utf8') + '\nexports.Lab =
 }).outputText;
 vm.runInNewContext(code, context);
 const page = Object.create(context.exports.Lab.prototype);
-for (const key of ['streams', 'preferred', 'available', 'updated', 'nearLinkDevices', 'matching']) {
+for (const key of ['streams', 'preferred', 'available', 'updated', 'nearLinkDevices', 'matching',
+  'btDevices', 'btMatching']) {
   let value = '';
   page['__' + key] = { get: () => value, set: next => { value = next; } };
 }

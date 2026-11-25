@@ -1,12 +1,12 @@
 import { HeaderBackButton } from '../components/HeaderBackButton';
+import { AppNavigation } from '../services/AppNavigation';
 import { pageBackgroundColor } from '../utils/SurfaceColors';
 import { PageHeader } from '../components/PageHeader';
 import { PageWallpaper } from '../components/PageWallpaper';
 import { WhisperPage } from './WhisperPage';
 
-@Entry
 @Component
-struct MessagesPage {
+export struct MessagesPage {
   @StorageLink('pageWallpaperEnabled') pageWallpaperEnabled: boolean = false;
   @StorageLink('isDarkMode') isDarkMode: boolean = true;
   @StorageLink('statusBarHeight') statusBarHeight: number = 0;
@@ -23,7 +23,7 @@ struct MessagesPage {
       Column() {
       PageHeader({ withTabs: false }) {
         Row() {
-          HeaderBackButton({ onBack: () => this.getUIContext().getRouter().back() }).margin({ left: 4 })
+          HeaderBackButton({ onBack: () => { AppNavigation.back(); } }).margin({ left: 4 })
           Text('消息').fontSize(18).fontWeight(FontWeight.Medium).layoutWeight(1).textAlign(TextAlign.Center)
             .fontColor(this.isDarkMode ? '#E7E9EB' : '#18191C')
           Blank().width(44)

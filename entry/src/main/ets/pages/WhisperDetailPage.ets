@@ -1,19 +1,18 @@
 import { PageWallpaper } from '../components/PageWallpaper';
 // 整页和横屏分栏共用消息实现，保持接收、历史分页和内容渲染一致。
-import { router } from '@kit.ArkUI';
 import { WhisperChatView } from '../components/WhisperChatView';
 
-@Entry
 @Component
-struct WhisperDetailPage {
+export struct WhisperDetailPage {
   @StorageLink('pageWallpaperEnabled') pageWallpaperEnabled: boolean = false;
   @State talkerId: number = 0;
   @State talkerName: string = '';
   @State talkerFace: string = '';
   @StorageLink('statusBarHeight') statusBarHeight: number = 0;
+  navParams: Record<string, Object> | null = null;
 
   aboutToAppear(): void {
-    const params = router.getParams() as Record<string, Object>;
+    const params = this.navParams;
     if (params) {
       this.talkerId = (params['talkerId'] as number) || 0;
       this.talkerName = (params['name'] as string) || '';

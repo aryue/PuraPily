@@ -1,27 +1,36 @@
 import { ExperimentalLevelBar } from '../components/ExperimentalLevelBar';
 import { HeaderBackButton } from '../components/HeaderBackButton';
+import { AppNavigation, NavPageHost } from '../services/AppNavigation';
 
-@Entry
 @Component
-struct LevelBarLab {
+export struct LevelBarLab {
   @StorageProp('statusBarHeight') safeTop: number = 40;
   @StorageProp('navIndicatorHeight') safeBottom: number = 0;
   @State private dark: boolean = true;
   @State private active: boolean = true;
   @State private volume: number = 38;
   @State private brightnessPercent: number = 35;
+  navHost: NavPageHost | null = null;
 
   onPageShow(): void { this.active = true; }
   onPageHide(): void { this.active = false; }
 
+  aboutToAppear(): void {
+    if (this.navHost) {
+      this.navHost.attach((): void => this.onPageShow(), (): void => this.onPageHide(), null);
+    }
+  }
 
+  aboutToDisappear(): void {
+    if (this.navHost) this.navHost.detach();
+  }
   build() {
     Stack() {
       Image($r('app.media.yulanbizhi')).width('100%').height('100%').objectFit(ImageFit.Cover).blur(42)
       Column().width('100%').height('100%').backgroundColor(this.dark ? '#D1191C2C' : '#B8C9D1E2')
       Column({ space: 12 }) {
         Row({ space: 12 }) {
-          HeaderBackButton({ onBack: () => { this.getUIContext().getRouter().back(); } })
+          HeaderBackButton({ onBack: () => { AppNavigation.back(); } })
           Text('音量与亮度').fontSize(22).fontWeight(FontWeight.Medium).fontColor(this.dark ? '#F1F2F6' : '#242937')
         }.width('100%')
         Text('独立效果预览').fontSize(13).fontColor(this.dark ? '#99B7BED1' : '#80515B70').width('100%').padding({ left: 52 })

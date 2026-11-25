@@ -7,10 +7,10 @@ import { WallpaperComposition } from '../components/WallpaperComposition';
 import { PageWallpaperService } from '../services/PageWallpaperService';
 import { LocalWallpaper, WallpaperCrop, cleanWallpaperCrop, wallpaperFrame } from '../utils/WallpaperLayout';
 import { WallpaperPicker } from './WallpaperPicker';
+import { AppNavigation, NavPageHost } from '../services/AppNavigation';
 
-@Entry
 @Component
-struct LocalWallpaperPage {
+export struct LocalWallpaperPage {
   @StorageLink('isDarkMode') dark: boolean = true;
   @StorageLink('statusBarHeight') statusBarHeight: number = 0;
   @StorageLink('navIndicatorHeight') bottomInset: number = 0;
@@ -33,8 +33,12 @@ struct LocalWallpaperPage {
   private panX: number = 0;
   private panY: number = 0;
   private pinchZoom: number = 1;
+  navHost: NavPageHost | null = null;
 
   async aboutToAppear(): Promise<void> {
+    if (this.navHost) {
+      this.navHost.attach((): void => {}, (): void => {}, (): boolean => this.onBackPress());
+    }
     try {
       const size = display.getDefaultDisplaySync();
       this.screenShort = Math.min(size.width, size.height);
@@ -44,6 +48,7 @@ struct LocalWallpaperPage {
     } catch (_) { this.toast('本地壁纸加载失败，请重试'); }
   }
   aboutToDisappear(): void {
+    if (this.navHost) this.navHost.detach();
     if (this.editing) PageWallpaperService.getInstance().discardImport(this.item.path);
   }
   onBackPress(): boolean {
@@ -200,7 +205,7 @@ struct LocalWallpaperPage {
       PageHeader({ withTabs: false }) {
         Row({ space: 8 }) {
           HeaderBackButton({ iconColor: this.foreground(),
-            onBack: () => { if (this.busy) return; if (this.editing) this.cancelEdit(); else this.getUIContext().getRouter().back(); } })
+            onBack: () => { if (this.busy) return; if (this.editing) this.cancelEdit(); else AppNavigation.back(); } })
           Text(this.editing ? '预览与编辑' : '本地壁纸').fontSize(18).fontWeight(FontWeight.Medium).fontColor(this.foreground())
         }.width('100%').height(this.statusBarHeight + 52).padding({ top: this.statusBarHeight, left: 8 })
       }

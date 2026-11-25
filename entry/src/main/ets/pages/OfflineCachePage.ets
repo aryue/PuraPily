@@ -6,7 +6,8 @@ import { PageHeader } from '../components/PageHeader';
 import { PageWallpaper } from '../components/PageWallpaper';
 import { VideoListItem } from '../components/VideoListItem';
 // OfflineCachePage.ets - 离线缓存列表页
-import { router, mediaquery } from '@kit.ArkUI';
+import { mediaquery } from '@kit.ArkUI';
+import { AppNavigation } from '../services/AppNavigation';
 import { common } from '@kit.AbilityKit';
 import { logError } from '../utils/Logger';
 import { OfflineCacheService } from '../services/OfflineCacheService';
@@ -89,9 +90,8 @@ struct CacheItemProgress {
   }
 }
 
-@Entry
 @Component({ freezeWhenInactive: true })
-struct OfflineCachePage {
+export struct OfflineCachePage {
   @StorageProp('videoCardEdgeLight') videoCardEdgeLight: boolean = false;
   @StorageLink('pageWallpaperEnabled') pageWallpaperEnabled: boolean = false;
   @StorageLink('isDarkMode') isDarkMode: boolean = false;
@@ -473,7 +473,7 @@ struct OfflineCachePage {
       Column() {
       PageHeader({ withTabs: false }) {
         Row() {
-          HeaderBackButton({ onBack: () => router.back() })
+          HeaderBackButton({ onBack: () => { AppNavigation.back(); } })
           Text('离线缓存')
             .fontSize(18).fontWeight(FontWeight.Bold)
             .fontColor(this.isDarkMode ? '#FFFFFF' : '#000000')

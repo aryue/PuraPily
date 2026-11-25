@@ -147,7 +147,7 @@ async function run() {
     { fetchPrivateUnread: () => privateUnread(), fetchTotalUnread: () => service.fetchTotalUnread() },
     { get: () => cookie }, fn => { timer = fn; return 1; }, () => { timer = undefined; }, 30000);
   const home = Object.assign(new Home(), {
-    pageVisible: true, activeTab: 0, appInBackground: false, messageCookie: cookie,
+    pageVisible: true, activeTab: 0, navStackDepth: 0, appInBackground: false, messageCookie: cookie,
     messagePollTimer: -1, messagePollGeneration: 0, messagePollInFlight: false,
   });
   const settle = () => new Promise(resolve => setImmediate(resolve));

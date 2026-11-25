@@ -7,10 +7,10 @@ import { PageWallpaper } from '../components/PageWallpaper';
  * 用于验证推荐功能是否正常工作
  */
 import { RecommendDetector, DetectionResult } from '../utils/RecommendDetector';
+import { AppNavigation } from '../services/AppNavigation';
 
-@Entry
 @Component
-struct RecommendDetectionPage {
+export struct RecommendDetectionPage {
   @StorageLink('isDarkMode') isDarkMode: boolean = true;
   @StorageLink('pageWallpaperEnabled') pageWallpaperEnabled: boolean = false;
   @State detectionResult: DetectionResult | null = null;
@@ -62,7 +62,7 @@ struct RecommendDetectionPage {
 
           Button('返回')
             .onClick(() => {
-              // router.back();
+              AppNavigation.back();
             })
         }
         .width('100%')

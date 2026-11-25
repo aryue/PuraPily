@@ -33,6 +33,8 @@ function player() {
   return p;
 }
 const context = { exports: {}, logInfo() {}, logWarn() {}, logError() {},
+  AppNavigation: { getState: () => ({ path: 'pages/', name: 'LivePlayerPage' }), pushUrl: () => Promise.resolve(),
+    back: () => Promise.resolve() },
   AppStorage: { setOrCreate() {}, set() {}, get: () => undefined },
   Curve: { EaseOut: 0 }, audio: { StreamUsage: { STREAM_USAGE_MOVIE: 4 }, InterruptMode: { SHARE_MODE: 0 } },
   setTimeout: cb => { timers.set(++timerId, cb); return timerId; }, clearTimeout: id => timers.delete(id),

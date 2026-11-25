@@ -1,31 +1,5 @@
 {
   "src": [
-    "pages/Index",
-    "pages/LevelBarLab",
-    "pages/SurfaceRebindLab",
-    "pages/IjkLab",
-    "pages/AudioOutputLab",
-    "pages/BilibiliLoginPage",
-    "pages/QrCodeLoginPage",
-    "pages/VideoPlayerPage",
-    "pages/SearchPage",
-    "pages/HotRankingPage",
-    "pages/WatchHistoryPage",
-    "pages/FavoritesPage",
-    "pages/AboutPage",
-    "pages/RecommendDetectionPage",
-    "pages/CommentDetailPage",
-    "pages/DynamicDetailPage",
-    "pages/UpSpacePage",
-    "pages/WhisperDetailPage",
-    "pages/MsgNoticePage",
-    "pages/LivePlayerPage",
-    "pages/OfflineCachePage",
-    "pages/DashPocPage",
-    "pages/MessagesPage",
-    "pages/SettingsPage",
-    "pages/SettingsSectionPage",
-    "pages/SponsorBlockPage",
-    "pages/LocalWallpaperPage"
+    "pages/Index"
   ]
 }

@@ -12,6 +12,8 @@ export struct HomeChannelCardEntrance {
   revealedCardIds: Set<string> = new Set<string>();
   @StorageProp('homeFeedActive') @Watch('updateEntrance') homeActive: boolean = false;
   @StorageProp('homeChannelIndex') @Watch('updateEntrance') activeChannel: number = -1;
+  @StorageProp('homeNavCovered') @Watch('updateEntrance') navCovered: boolean = false;
+  @StorageProp('homeEntranceSettleRevision') @Watch('settleEntrance') settleRevision: number = 0;
   @State private entranceScale: number = 0.2;
   @State private centerX: number | string = '50%';
   @State private entranceLayer: boolean = false;
@@ -22,7 +24,8 @@ export struct HomeChannelCardEntrance {
   private entranceRevision: number = 0;
 
   aboutToAppear(): void {
-    this.entranceScale = this.revealedCardIds.has(this.cardKey) ? 1 : 0.2;
+    this.entranceScale = this.revealedCardIds.has(this.cardKey) || this.navCovered ? 1 : 0.2;
+    this.entranceLayer = false;
     this.updateEntrance();
   }
 
@@ -45,7 +48,8 @@ export struct HomeChannelCardEntrance {
   }
 
   private updateEntrance(): void {
-    if (this.entranceScale === 1 || !this.paneActive || !this.homeActive || this.activeChannel !== this.channelIndex) {
+    if (this.entranceScale === 1 || !this.paneActive || !this.homeActive || this.navCovered ||
+      this.activeChannel !== this.channelIndex) {
       this.clearEntranceFallback();
     } else if (this.visible) {
       this.reveal();
@@ -60,7 +64,7 @@ export struct HomeChannelCardEntrance {
 
   private reveal(): void {
     this.clearEntranceTimers();
-    if (this.revealedCardIds.has(this.cardKey)) {
+    if (this.revealedCardIds.has(this.cardKey) || this.navCovered) {
       this.entranceScale = 1;
       return;
     }
@@ -103,6 +107,15 @@ export struct HomeChannelCardEntrance {
     } else {
       this.entranceScale = 1;
     }
+    this.entranceLayer = false;
+  }
+
+  /** Navigation 返回首页时，冻结/取消的入场动画必须一次性归位，不能停在缩小态。 */
+  private settleEntrance(): void {
+    this.clearEntranceTimers();
+    this.entranceRevision++;
+    this.revealedCardIds.add(this.cardKey);
+    this.entranceScale = 1;
     this.entranceLayer = false;
   }
 

@@ -1,4 +1,5 @@
 import { HomeChannelCover } from '../components/HomeChannelCover';
+import { AppNavigation } from '../services/AppNavigation';
 import { HomeInitialLoading } from '../components/HomeInitialLoading';
 import { HomeChannelCardEntrance } from '../components/HomeChannelCardEntrance';
 import { cardItemBg } from '../utils/CardStyle';
@@ -333,7 +334,7 @@ export struct LivePage {
   private enterRoom(room: LiveFeedRoom): void {
     if (room.roomId <= 0) return;
     this.collapsePanel();
-    this.getUIContext().getRouter().pushUrl({
+    AppNavigation.pushUrl({
       url: 'pages/LivePlayerPage',
       params: { roomId: room.roomId, rooms: [room, ...this.dataSource.getRawItems().filter(item => item.roomId !== room.roomId)],
         roomIds: this.dataSource.getRawItems().map(item => item.roomId),

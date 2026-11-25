@@ -2,7 +2,7 @@ import { CommentActionMenu } from './CommentActionMenu';
 import { CommentReplySurface } from './CommentReplySurface';
 import { systemShare } from '@kit.ShareKit';
 import { common } from '@kit.AbilityKit';
-﻿import { ObservableComment } from '../model/ObservableComment';
+import { ObservableComment } from '../model/ObservableComment';
 import { VideoDetail, setCommentLike, setCommentDislike } from '../api/BilibiliApi';
 import { componentUtils, LevelMode, ImmersiveMode } from '@kit.ArkUI';
 import { ReplyItemComponent } from './ReplyItemComponent';
@@ -10,6 +10,7 @@ import { CommentContentRenderer } from './CommentContentRenderer';
 import { TextSelectionDialog } from './TextSelectionDialog';
 import { measureTextLines } from '../utils/TextMeasure';
 import { logWarn } from '../utils/Logger';
+import { AppNavigation } from '../services/AppNavigation';
 import { MaterialUtil } from '../utils/MaterialUtil';
 import { VibrateUtils } from '../utils/VibrateUtils';
 import { fmtCount } from '../utils/NumberFormat';
@@ -155,7 +156,7 @@ export struct CommentItemComponent {
   private openCommenterSpace(target: ObservableComment): void {
     const mid = parseInt(target.member?.mid ?? '', 10);
     if (!mid || isNaN(mid)) return;
-    this.getUIContext().getRouter().pushUrl({
+    AppNavigation.pushUrl({
       url: 'pages/UpSpacePage',
       params: {
         mid: mid,
@@ -298,7 +299,7 @@ export struct CommentItemComponent {
           this.getUIContext().getPromptAction().closeCustomDialog(this.commentSelDialogId_);
           this.commentSelDialogId_ = -1;
         }
-        this.getUIContext().getRouter().pushUrl({
+        AppNavigation.pushUrl({
           url: 'pages/SearchPage',
           params: { keyword: keyword }
         }).catch((err: Error) => {

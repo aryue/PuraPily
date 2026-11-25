@@ -21,6 +21,7 @@ function fixture(warmPool = { peekQuality: () => 0, take: async () => null }, us
   const player = { releases: 0, sources: [], strategies: [], async release() { this.releases++; },
     async setMediaSource(src, strategy) { this.sources.push(src); this.strategies.push(strategy); } };
   const context = { exports: {}, setTimeout(callback, ms) { cidTimers.push({ callback, ms }); return setTimeout(callback, ms); }, clearTimeout, console,
+    AppNavigation: { pushUrl: () => Promise.resolve(), back: () => Promise.resolve() },
     PlaybackDeadline: require('./playback-deadline-test-helper.cjs')(),
     ijkPlaybackRequested: () => useFactory, supportsIjkPlayback: () => useIjk,
     createPlaybackPlayer() { creations++; return creation.promise; },
@@ -317,12 +318,12 @@ const dash = { url: 'video', audioUrl: 'audio', actualQn: 116, dash: {} };
     assert.ok(begin >= 0 && finish > begin);
     const routes = [], prefetched = [];
     const context = { exports: {}, AppStorage: { get() { return 116; } }, logError() {},
+      AppNavigation: { pushUrl(route) { routes.push(route); return Promise.resolve(); } },
       prefetchVideoPlayback(...args) { prefetched.push(args); return new Promise(() => {}); } };
     vm.runInNewContext(ts.transpileModule('export class Search {' + search.slice(begin, finish) + '}', {
       compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 }
     }).outputText, context);
     const page = new context.exports.Search();
-    page.getUIContext = () => ({ getRouter: () => ({ pushUrl(route) { routes.push(route); return Promise.resolve(); } }) });
     page.playVideo({ id: 'BVsearch', cid: 0, title: 'search result' });
     assert.equal(routes.length, 1, 'search click navigates immediately even without CID');
     assert.equal(routes[0].params.cid, 0); assert.equal(prefetched.length, 1);

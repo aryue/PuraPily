@@ -8,10 +8,11 @@ const names=['openCommentEntry','scrollToComments','openForward','submitForward'
 const methods=names.map(name=>cls.members.find(n=>ts.isMethodDeclaration(n)&&n.name.getText(ast)===name).getText(ast)).join('\n');
 let likes=[],forwards=[],result={ok:true},reject=false,finish;
 const ctx={exports:{},AppStorage:{setOrCreate(){}},promptAction:{showToast(){}},TOP_EXTRA_GAP_VP:8,CONTENT_TOP_TARGET_VP:64,logInfo(){},
+ AppNavigation:{pushUrl(options){ctx.route=options;return Promise.resolve()}},
  setDynamicLike:async(id,value)=>{likes.push([id,value]);return result;},
  repostDynamic:async(id,text)=>{forwards.push([id,text]);if(reject)throw Error('offline');return result;}};
 vm.runInNewContext(ts.transpileModule('export class Page {'+methods+'}',{compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText,ctx);
-const p=new ctx.exports.Page();let route,scroll,cardY=128;
+const p=new ctx.exports.Page();let scroll,cardY=128;
 Object.assign(p,{item:{idStr:'123',forwardCount:4},forwardCount:4,likeState_:{liked:false,count:10},biliCookie:'test',
  hasLogin:()=>true,useSplitLayout:()=>false,statusBarVp_:24,topGap_:88,
  getUIContext:()=>({px2vp:x=>x/2,getRouter:()=>({pushUrl:x=>{route=x;return Promise.resolve();}}),getComponentUtils:()=>({getRectangleById:id=>id==='dynamic-detail-header'?{windowOffset:{y:48},size:{height:160}}:{windowOffset:{y:cardY},size:{height:100}}})}),
@@ -24,7 +25,7 @@ Object.assign(p,{item:{idStr:'123',forwardCount:4},forwardCount:4,likeState_:{li
  p.entrySheetOn=false;p.useSplitLayout=()=>true;p.scrollToComments();assert.equal(p.entrySheetOn,true,'visible split comments open input');
  await p.toggleLike();assert.equal(p.likeState_.liked,true);assert.equal(p.likeState_.count,11);
  result={ok:false,message:'fail'};await p.toggleLike();assert.equal(p.likeState_.liked,true);assert.equal(p.likeState_.count,11);
- p.hasLogin=()=>false;p.openForward();assert.equal(route.url,'pages/QrCodeLoginPage');
+ p.hasLogin=()=>false;p.openForward();assert.equal(ctx.route.url,'pages/QrCodeLoginPage');
  p.hasLogin=()=>true;p.repostSending=false;p.openForward();assert.equal(p.repostVisible,true);assert.equal(forwards.length,0,'opening never publishes');
  p.repostText='draft';await p.submitForward();assert.equal(p.repostVisible,true);assert.equal(p.repostText,'draft');assert.equal(p.repostSending,false);
  reject=true;await p.submitForward();assert.equal(p.repostText,'draft');assert.equal(p.repostSending,false);reject=false;

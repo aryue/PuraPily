@@ -10,7 +10,8 @@ const methods = ['playDynVideo', 'openDynDetail'].map(name => {
   while (depth) { end++; if (source[end] === '{') depth++; if (source[end] === '}') depth--; }
   return source.slice(start, end + 1);
 }).join('\n');
-const context = { exports: {}, prefetchVideoPlayback() {}, AppStorage: { get() { return 116; } }, promptAction: { showToast() {} } };
+const context = { exports: {}, prefetchVideoPlayback() {}, AppStorage: { get() { return 116; } }, promptAction: { showToast() {} },
+  AppNavigation: { target: [], pushUrl(route) { this.target.push(route); return Promise.resolve(); } } };
 vm.runInNewContext(ts.transpileModule('export class Page {' + methods + '}', {
   compilerOptions: { module: ts.ModuleKind.CommonJS }
 }).outputText, context);
@@ -18,7 +19,7 @@ for (const videoId of ['BV1test123456', '12345678']) {
   for (const type of ['DYNAMIC_TYPE_AV', 'DYNAMIC_TYPE_WORD', 'DYNAMIC_TYPE_DRAW', 'DYNAMIC_TYPE_FORWARD']) {
     const routes = [];
     const page = new context.exports.Page();
-    page.getUIContext = () => ({ getRouter: () => ({ pushUrl: route => { routes.push(route); return Promise.resolve(); } }) });
+    context.AppNavigation.target = routes;
     const video = { bvid: videoId, title: 'video', cover: 'cover' };
     const item = { type, idStr: 'dynamic-1', video: type === 'DYNAMIC_TYPE_AV' ? video : null,
       orig: type === 'DYNAMIC_TYPE_FORWARD' ? { type: 'DYNAMIC_TYPE_AV', video } : null };

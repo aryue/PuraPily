@@ -8,14 +8,15 @@ import { CoverFlight } from '../components/HomeCoverNode';
  * 自定义转场，也正是为了在布局后自己算几何。
  *
  * 本服务负责跨页交接封面 URL、卡片封面矩形（起点）与本次是否走 morph。
- * 播放页 Enter 瞬时到位；首页 Exit 用 380ms 的无位移转场把首页保留在播放页下面，
- * 返回时先 back、再由播放页的非零 Exit 撑住收缩画面。这样两侧露出的都是真实页面，
- * 不需要 componentSnapshot，也不会出现截图与实时首页不一致的接缝。
+ * 播放页 push 由 Navigation 瞬时到位，首页作为基础层保持 live；
+ * 返回时播放页申请 Navigation 的 POP hold，自己完成收缩后再释放转场。
+ * 这样两侧露出的都是真实页面，不需要 componentSnapshot，也不会出现截图与
+ * 实时首页不一致的接缝。
  *
- * ⚠️ `pageTransition()` 在页面创建时求值一次：
- *   · 首页用字段初始化的 `primeExitInstant()` 落开关快照；
- *   · 播放页用字段初始化的 `peekArmed()` 落「本次 push 是否真的 arm 过」快照。
- *   返回动画由页面自己消费到的 `coverMorphOwned` 决定，不再读全局 enterInstant。
+ * ⚠️ 开关与 armed 都是「本次 push」的时间点快照：
+ *   · 首页 `aboutToAppear` 调 `primeExitInstant()` 落开关快照；
+ *   · AppNavigation 在 push 前用 `peekArmed()` 判断本次是否瞬时；
+ *   · 返回动画由页面自己消费到的 `coverMorphOwned` 决定，不读全局 enterInstant。
  *   代价：开关切换后需重启一次才全量生效。
  */
 import { logInfo, logWarn } from '../utils/Logger';
@@ -48,8 +49,8 @@ export class HomeCardMorph {
    */
   static readonly RETURN_DURATION: number = 350;
   /**
-   * 播放页退出转场保留时长。必须覆盖「等首页重排 + 最短 250ms 收缩 + 收尾」，
-   * 又不能把页面留到用户已开始滑动之后太久；410ms 留出约 40~60ms 收尾。
+   * 历史 Router Exit 的持有预算，现由 AppNavigation 的 POP hold 接管；
+   * 保留该常量作为「等重排 + 250ms 收缩 + 收尾」的回归下限。
    */
   static readonly RETURN_HOLD_MS: number = 410;
   /** 换方向返回：收缩不得低于平台下限。 */
@@ -79,11 +80,7 @@ export class HomeCardMorph {
    *    通常远早于到达这里。提前切的那一帧会把页面几何对齐到当前封面矩形。
    */
   static readonly HANDOFF_SCALE: number = 0.88;
-  /**
-   * 首页 Exit 的保留时长：不是视觉动画时长，而是让真实首页一直垫在播放页下面。
-   * 封面解码/播放页首帧可能晚于飞行开始，Exit 太短会在 morph 启动前把首页销毁，
-   * 裁剪窗口四周就会闪窗口黑底。多留一段不可见的 live 底页，不影响播放页盖满后的画面。
-   */
+  /** 历史 Router Exit 的 live 下层预算；Navigation 基础层本身常驻，不再依赖该时长。 */
   static readonly LIVE_BACKDROP_MS: number = 2500;
   /** 共享元素 id 前缀（两端必须完全一致） */
   static readonly ID_PREFIX: string = 'home-cover-morph-';
@@ -121,10 +118,10 @@ export class HomeCardMorph {
   }
 
   /**
-   * 页面创建期快照：这次 push 是否真的登记过封面。
-   * `pageTransition()` 在 `aboutToAppear` 之后求值，不能直接读 armed（已被 consume 清掉）；
-   * 也不能沿用进程级的「上一次卡片跳转」标记 —— 相关推荐 push 出的第二个播放页
-   * 会误走 morph 转场。所以快照只看当前这次 armed。
+   * push 前快照：这次 push 是否真的登记过封面。
+   * 不能直接读 armed（播放页 aboutToAppear 会 consume）；也不能沿用进程级的
+   * 「上一次卡片跳转」标记 —— 相关推荐 push 出的第二个播放页会误走 morph 转场。
+   * 所以只认当前这次 armed 的时间窗。
    */
   static peekArmed(): boolean {
     return HomeCardMorph.armed && Date.now() - HomeCardMorph.armedAt <= 2500;

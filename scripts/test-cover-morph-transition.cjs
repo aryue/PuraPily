@@ -215,7 +215,7 @@ assert.match(page, /const dur = this\.da \? 0 : HomeCardMorph\.RETURN_DURATION;/
   '返回收缩时长口径必须保留');
 const returnBlock = page.slice(page.indexOf('  private beginReturnCoverMorph('),
   page.indexOf('  private disposeCoverMorph('));
-assert.match(returnBlock, /this\.startCoverMorphRotatedReturn\(\);[\s\S]{0,200}?return;[\s\S]{0,300}?router\.back\([\s\S]{0,180}?this\.startCoverMorphReturnFollow\(\);[\s\S]{0,160}?this\.animateCoverMorphReturn\(/,
+assert.match(returnBlock, /AppNavigation\.requestPopHold\(\);[\s\S]{0,240}?AppNavigation\.back\([\s\S]{0,180}?this\.startCoverMorphReturnFollow\(\);[\s\S]{0,160}?this\.animateCoverMorphReturn\(/,
   '撤回打断后必须恢复先 back、再收缩的路径');
 assert.match(returnBlock, /const quickReturn = this\.coverMorphActive && measuredP < 0\.999;/, 
   '进入中途返回必须识别为 quick return');
@@ -244,26 +244,24 @@ assert.match(page, /private disposeCoverMorph\(\): void \{[\s\S]{0,1400}?HomeCar
   '页面销毁必须清理服务状态');
 assert.match(page, /private disposeCoverMorph\(\): void \{[\s\S]{0,2400}?if \(this\.coverMorphOwned\) \{[\s\S]{0,120}?HomeCardMorph\.dispose\(\);/,
   '只有持有本次转场的页面才能清理服务状态');
-assert.match(page, /private readonly coverMorphEnterTransition: boolean = HomeCardMorph\.peekArmed\(\);/, 
-  'pageTransition 必须使用页面创建期的 armed 快照');
+assert.ok(!/pageTransition\(\)/.test(page), '导航目的地不得再声明 PageTransition');
+assert.match(page, /AppNavigation\.requestPopHold\(\);/, '返回前必须向导航层申请退出持有');
+assert.match(page, /AppNavigation\.finishPopHold\(\);/, '收缩结束必须释放导航退出持有');
 assert.match(page, /@State private coverMorphReturning: boolean = false;/, 
   '返回标志必须是 @State，改变返回分支时才会重建窗口几何');
 assert.match(page, /@State private coverMorphQuickReturn: boolean = false;/, 
   'quick return 标志必须是 @State');
 
-// ── 6) 播放页 Enter 瞬时、Exit 非零撑住；首页 Enter 瞬时、Exit 非零保留 live 页面 ──
-const phTrans = page.slice(page.indexOf('  pageTransition() {'), page.indexOf('  private xc: XComponentController'));
-assert.match(phTrans, /else if \(this\.coverMorphEnterTransition\) \{/, 
-  '播放页 morph 转场不得读取全局 enterInstant（相关推荐页会继承）');
-assert.match(phTrans, /PageTransitionEnter\(\{ type: RouteType\.None, duration: 0 \}\)\.opacity\(1\)/, 
-  '播放页进入必须瞬时到位');
-assert.match(phTrans, /PageTransitionExit\(\{ type: RouteType\.None, duration: HomeCardMorph\.RETURN_HOLD_MS, curve: Curve\.Linear \}\)\.opacity\(1\)/,
-  '播放页退出必须用非零、无位移的 Exit 撑住收缩');
-const idxTrans = index.slice(index.indexOf('  pageTransition() {'));
-assert.match(idxTrans, /PageTransitionEnter\(\{ type: RouteType\.None, duration: 0 \}\)\.opacity\(1\)/, 
-  '首页进入必须瞬时到位');
-assert.match(idxTrans, /PageTransitionExit\(\{ type: RouteType\.None, duration: HomeCardMorph\.LIVE_BACKDROP_MS, curve: Curve\.Linear \}\)\.opacity\(1\)/, 
-  '首页退出必须用足够长、无位移的 Exit 保留 live 页面');
+// ── 6) Navigation 接管转场：首页卡片 push 瞬时、播放页返回持有到收缩结束 ─────────
+const navigation = read('entry/src/main/ets/services/AppNavigation.ets');
+assert.ok(!/pageTransition\(\)/.test(index), '根页不得再声明 PageTransition');
+assert.match(index, /Navigation\(this\.pageStack\)/, 'Index 必须持有唯一 NavPathStack');
+assert.match(index, /\.navDestination\(this\.PageMap\)/, 'Index 必须注册路由表');
+assert.match(index, /\.customNavContentTransition\(/, 'Index 必须接管导航转场');
+assert.match(navigation, /HomeCardMorph\.peekArmed\(\) \|\| FloatingVideoTransition\.active\(\)/,
+  '首页共享元素与浮窗恢复必须让 push 瞬时到位');
+assert.match(navigation, /NavigationOperation\.POP/, '播放页返回必须在 POP 阶段持有退出页');
+assert.match(navigation, /finishTransition\(\)/, '收缩结束必须显式结束导航转场');
 
 // ── 7) 开关持久化（设置页 + EntryAbility 恢复 + --ps 联调）──────────────────────
 assert.match(ability, /pref\.getSync\('homeCardMorph', false\)/, 'EntryAbility 必须恢复开关');

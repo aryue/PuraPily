@@ -9,6 +9,7 @@ import { VideoCardFeedback } from '../services/VideoCardFeedback';
 import { resizeImageUrl } from '../utils/ImageUrl';
 import { cardItemBg, cardItemBorder } from '../utils/CardStyle';
 import { secondaryTextColor } from '../utils/SurfaceColors';
+import { AppNavigation } from '../services/AppNavigation';
 
 /** 多图网格单图角圆角：仅四角图加对应角（左上/右上/左下/右下） */
 interface DynCornerRadius {
@@ -87,7 +88,7 @@ export struct DynamicCardBody {
       return;
     }
     prefetchVideoPlayback(video.bvid, 0, AppStorage.get<number>('defaultVideoQn') ?? 116);
-    this.getUIContext().getRouter().pushUrl({
+    AppNavigation.pushUrl({
       url: 'pages/VideoPlayerPage',
       params: { bvid: video.bvid, title: video.title, coverUrl: video.cover, cid: 0 }
     }).catch(() => {});
@@ -97,7 +98,7 @@ export struct DynamicCardBody {
   private openOrigDetail(it: SpaceDynamicItem): void {
     const orig: SpaceDynamicItem | null = it.orig;
     if (orig && orig.idStr) {
-      this.getUIContext().getRouter().pushUrl({
+      AppNavigation.pushUrl({
         url: 'pages/DynamicDetailPage',
         params: { dynIdStr: orig.idStr, preload: orig }
       }).catch(() => {});
@@ -674,7 +675,7 @@ export struct DynamicCardBody {
       return;
     }
     // ⭐ 应用内跳转：优先 seasonId（与 PgcChannelPage.enterSeason 一致，传 mediaId），否则 epId
-    this.getUIContext().getRouter().pushUrl({
+    AppNavigation.pushUrl({
       url: 'pages/VideoPlayerPage',
       params: {
         mediaId: seasonId > 0 ? seasonId : 0,

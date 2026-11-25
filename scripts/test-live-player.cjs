@@ -73,7 +73,7 @@ assert.ok(etsSource.includes("List({ scroller: this.landscapeChatScroller })"),
   'comment tab uses a scrollable list bound to its own scroller');
 assert.ok(!etsSource.includes('liveLandscapePlayerRatio'),
   'split ratio is no longer persisted to preferences');
-assert.ok(etsSource.includes('this.landscapeRatio = this.initialLandscapeRatio(params)'),
+assert.ok(etsSource.includes('this.landscapeRatio = this.initialLandscapeRatio(params ?? undefined)'),
   'page entry resolves the ratio from instance-scoped defaults/inheritance');
 const areaChangeSource = etsSource.slice(etsSource.indexOf('.onAreaChange('), etsSource.indexOf('.onTouch(this.onVT)'));
 assert.ok(areaChangeSource.length > 0 && !areaChangeSource.includes('landscapeRatio ='),
@@ -96,6 +96,7 @@ function section(start, end) {
   return source.slice(a, b);
 }
 const ctx = { ...geometry.exports, exports: {}, clearTimeout, setTimeout, getLiveRoomInfo: async () => null, logInfo() {}, Curve: { EaseOut: 0 }, fetchLiveRoomsByArea: async () => [{ roomId: 3 }, { roomId: 2 }],
+  AppNavigation: { pushUrl: options => { ctx.lastPush = options; return Promise.resolve(); }, back: () => Promise.resolve() },
   fetchRecommendedLiveRooms: async () => [{ roomId: 1 }, { roomId: 2 }, { roomId: 3 }, { roomId: 3 }],
   AppStorage: { setOrCreate(key, value) { ctx.isFullscreenFlag = value; }, set() {}, get: () => undefined },
   window: { Orientation: { AUTO_ROTATION_LANDSCAPE: 1, PORTRAIT: 2, AUTO_ROTATION_RESTRICTED: 3, AUTO_ROTATION: 4 },

@@ -9,10 +9,10 @@ import { cardItemBg } from '../utils/CardStyle';
 import { pageBackgroundColor } from '../utils/SurfaceColors';
 import { PageHeader } from '../components/PageHeader';
 import { PageWallpaper } from '../components/PageWallpaper';
-import { FloatingVideoTransition } from '../services/FloatingVideoTransition';
+import { AppNavigation, NavPageHost } from '../services/AppNavigation';
 import { VideoListItem, videoListPublished } from '../components/VideoListItem';
 import { VideoCardFeedback } from '../services/VideoCardFeedback';
-import { router, curves, display, LazyColumnLayout, LazyColumnLayoutAttribute, LazyVWaterFlowLayout,
+import { curves, display, LazyColumnLayout, LazyColumnLayoutAttribute, LazyVWaterFlowLayout,
   LazyVWaterFlowLayoutAttribute, LengthMetrics } from '@kit.ArkUI';
 import { FirstScreenDataSource } from '../model/FirstScreenDataSource';
 import { resizeImageUrl } from '../utils/ImageUrl';
@@ -37,9 +37,8 @@ import { HomeBarScrollTracker } from '../utils/HomeBarScrollTracker';
 const TAB_KEYS: string[] = ['video', 'media_bangumi', 'live_user', 'bili_user', 'media_ft', 'article'];
 const RESULT_ORDER_KEYS: string[] = ['totalrank', 'pubdate', 'click', 'dm'];
 
-@Entry
 @Component({ freezeWhenInactive: true })
-struct SearchPage {
+export struct SearchPage {
   @StorageLink('pageWallpaperEnabled') pageWallpaperEnabled: boolean = false;
   @State searchText: string = '';
   @State isLoading: boolean = false;
@@ -208,8 +207,13 @@ struct SearchPage {
   private previousHideStatusBar: boolean = false;
   // 输入框控制器，用于自动聚焦和关闭键盘
   private inputController: TextInputController = new TextInputController();
+  navHost: NavPageHost | null = null;
+  navParams: Record<string, Object> | null = null;
 
   aboutToAppear() {
+    if (this.navHost) {
+      this.navHost.attach((): void => {}, (): void => {}, (): boolean | void => this.onBackPress());
+    }
     this.saveAndSetStatusBarTransparent();
     this.initOrientationAndListen();
     this.initSmartGrip();
@@ -217,7 +221,7 @@ struct SearchPage {
     // ⭐ 长按文本选取「搜索」直达：接收路由 keyword，待搜索历史加载完成后再自动搜索
     //   （立即 performSearch 会用未加载的空历史数组 addToSearchHistory，覆盖掉旧搜索历史）
     try {
-      const p = this.getUIContext().getRouter().getParams() as Record<string, Object>;
+      const p = this.navParams;
       this.fromHotRanking = p ? (p['fromHotRanking'] as boolean) === true : false;
       const kw = p ? ((p['keyword'] as string) || '') : '';
       // 外部关键词直达没有搜索首页这一层，返回应退出当前路由。
@@ -228,7 +232,7 @@ struct SearchPage {
         this.searchText = kw;
         this.hasActiveSearch = true;
         this.showSkeleton = true;
-        const tab = (p['tab'] as string) || '';
+        const tab = (p?.['tab'] as string) || '';
         if (tab) {
           this.pendingTab_ = tab;
         }
@@ -384,6 +388,7 @@ struct SearchPage {
   }
 
   aboutToDisappear() {
+    if (this.navHost) this.navHost.detach();
     this.searchRequestVersion++;
     this.sceneVersion++;
     this.settleHistoryDisintegration();
@@ -881,12 +886,12 @@ struct SearchPage {
 
   goBack(): void {
     this.triggerHaptic();
-    if (this.returnToCaller) { this.getUIContext().getRouter().back(); return; }
+    if (this.returnToCaller) { AppNavigation.back(); return; }
     if (this.hasActiveSearch || this.searchText.trim().length > 0) {
       this.returnToSearchLanding();
       return;
     }
-    router.back();
+    AppNavigation.back();
   }
 
   onBackPress(): boolean | void {
@@ -979,7 +984,7 @@ struct SearchPage {
         this.getUIContext().getPromptAction().showToast({ message: '番剧ID无效' });
         return;
       }
-      this.getUIContext().getRouter().pushUrl({
+      AppNavigation.pushUrl({
         url: 'pages/VideoPlayerPage',
         params: {
           mediaId: mediaId,
@@ -994,7 +999,7 @@ struct SearchPage {
 
     // 点击即进入播放器；缺 CID 时由共享详情请求补齐，页面转场不等待网络。
     prefetchVideoPlayback(item.id, item.cid || 0, AppStorage.get<number>('defaultVideoQn') ?? 116);
-    this.getUIContext().getRouter().pushUrl({
+    AppNavigation.pushUrl({
       url: 'pages/VideoPlayerPage',
       params: { bvid: item.id, aid: item.aid, cid: item.cid || 0,
         title: item.title, coverUrl: item.coverUrl }
@@ -1245,7 +1250,7 @@ struct SearchPage {
             .height(32)
             .onClick(() => {
               this.inputController.stopEditing();
-              this.getUIContext().getRouter().pushUrl({
+              AppNavigation.pushUrl({
                 url: 'pages/HotRankingPage', params: { items: this.hotSearchItems }
               }).catch((error: Error) => logError('[SearchPage] 打开完整榜单失败', error));
             })
@@ -1350,13 +1355,6 @@ struct SearchPage {
     }
     .width('100%').alignItems(HorizontalAlign.Start)
     .padding({ left: 14, right: 14, top: 8, bottom: 16 })
-  }
-
-  pageTransition() {
-    if (FloatingVideoTransition.active()) {
-      PageTransitionEnter({ duration: FloatingVideoTransition.direction === 'minimize' ? 0 : FloatingVideoTransition.DURATION }).opacity(1)
-      PageTransitionExit({ duration: FloatingVideoTransition.DURATION }).opacity(1)
-    }
   }
 
   build() {
@@ -2398,7 +2396,7 @@ struct SearchPage {
       this.triggerHaptic();
       const mid = parseInt(item.ownerMid, 10);
       if (mid && !isNaN(mid)) {
-        this.getUIContext().getRouter().pushUrl({
+        AppNavigation.pushUrl({
           url: 'pages/UpSpacePage',
           params: {
             mid: mid,
@@ -2504,7 +2502,7 @@ struct SearchPage {
 
   private openLiveRoom(roomId: string, ownerName: string): void {
     logInfo(`[SearchPage] 进入直播间 roomId=${roomId}`);
-    this.getUIContext().getRouter().pushUrl({
+    AppNavigation.pushUrl({
       url: 'pages/LivePlayerPage',
       params: { roomId: parseInt(roomId) }
     });

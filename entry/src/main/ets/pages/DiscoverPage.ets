@@ -13,6 +13,7 @@ import { HomeRefreshIndicator } from '../components/HomeRefreshIndicator';
 import { common } from '@kit.AbilityKit';
 import { logInfo, logWarn, logError, errMsg } from '../utils/Logger';
 import { window, mediaquery } from '@kit.ArkUI';
+import { AppNavigation } from '../services/AppNavigation';
 import { getPopularVideos, blacklistUploader, prefetchVideoPlayback } from '../api/BilibiliApi';
 import { RecommendItem } from '../model/RecommendItem';
 import { sendDislikeFeedback, sendDislikeUpFeedback } from '../api/FeedbackService';
@@ -277,7 +278,7 @@ export struct DiscoverPage {
     // ⭐ 预热详情（fire-and-forget）：把加载详情的 RTT 藏在转场+播放器初始化期间
     prefetchVideoPlayback(item.id.startsWith('BV') ? item.id : (item.aid > 0 ? String(item.aid) : item.id), item.cid || 0,
       AppStorage.get<number>('defaultVideoQn') ?? 116);
-    this.getUIContext().getRouter().pushUrl({
+    AppNavigation.pushUrl({
       url: 'pages/VideoPlayerPage',
       params: {
         bvid: item.id,

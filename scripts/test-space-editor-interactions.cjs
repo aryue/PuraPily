@@ -68,9 +68,11 @@ assert.equal(geometry.entryEditorTop(), 545, 'expanded editor keeps all its cont
 geometry.captureEntryOrigin(); assert.deepEqual(Array.from(geometry.entryOrigin), [22, 1187, 366, 42]);
 geometry.entryProgress = .5;
 assert.equal(geometry.entryFrameWidth(), 583); assert.equal(geometry.entryFrameHeight(), 177, 'morph interpolates one persistent viewport');
-const space = subject('pages/UpSpacePage.ts', 'UpSpacePage', ['openDynDetail'], { DYN_TYPE_AV: 'DYNAMIC_TYPE_AV' });
-let played = 0, routes = [];
-Object.assign(space, { playDynVideo() { played++; }, getUIContext: () => ({ getRouter: () => ({ pushUrl(r) { routes.push(r); return Promise.resolve(); } }) }) });
+let routes = [];
+const space = subject('pages/UpSpacePage.ts', 'UpSpacePage', ['openDynDetail'], { DYN_TYPE_AV: 'DYNAMIC_TYPE_AV',
+  AppNavigation: { pushUrl(route) { routes.push(route); return Promise.resolve(); } } });
+let played = 0;
+Object.assign(space, { playDynVideo() { played++; } });
 space.openDynDetail({ type: 'DYNAMIC_TYPE_AV', video: {}, idStr: '1' }); assert.equal(played, 1);
 space.openDynDetail({ type: 'DYNAMIC_TYPE_FORWARD', video: {}, idStr: '2' });
 assert.equal(routes[0].url, 'pages/DynamicDetailPage', 'forward remains a dynamic even when it contains video');

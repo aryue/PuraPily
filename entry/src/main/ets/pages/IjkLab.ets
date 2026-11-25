@@ -1,4 +1,5 @@
 import { getVideoPlayUrl } from '../api/BilibiliApi';
+import { AppNavigation } from '../services/AppNavigation';
 import { IjkPlaybackSession, IjkSourceFactory } from '../services/IjkPlaybackSession';
 import probe from 'libpurapily_ijk.so';
 
@@ -10,9 +11,8 @@ class NativeSourceFactory implements IjkSourceFactory {
   }
 }
 
-@Entry
 @Component
-struct IjkLab {
+export struct IjkLab {
   @State status: string = '准备播放';
   @State playing: boolean = false;
   @State playbackPosition: number = 0;
@@ -85,7 +85,7 @@ struct IjkLab {
           this.speed = this.speed === 1 ? 1.5 : this.speed === 1.5 ? 2 : 1;
           this.session?.setSpeed(this.speed);
         })
-        Button('返回').onClick(() => this.getUIContext().getRouter().back())
+        Button('返回').onClick(() => { AppNavigation.back(); })
       }
     }.width('100%').height('100%').backgroundColor(Color.Black).justifyContent(FlexAlign.Center)
   }

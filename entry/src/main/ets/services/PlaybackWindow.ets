@@ -66,11 +66,14 @@ export class PlaybackWindow {
     onPortraitLock: () => void, deferLandscapeMode: boolean = false): Promise<void> {
     this.landscapeExitPending = deferLandscapeMode;
     try {
-      if (!deferLandscapeMode) await win.disableLandscapeMultiWindow().catch(() => {});
       const origin = getOrigin();
       const orientation = origin ?? this.preferredOrientation();
       if (origin === undefined && orientation === window.Orientation.PORTRAIT) onPortraitLock();
+      // Start the rotation first; the landscape-multiwindow teardown may reflow the window and
+      // used to run before setPreferredOrientation, leaving a visible dead wait before rotation.
+      const disableLandscape = deferLandscapeMode ? null : win.disableLandscapeMultiWindow().catch(() => {});
       await win.setPreferredOrientation(orientation);
+      if (disableLandscape) await disableLandscape;
     } catch (_) {}
   }
 
@@ -81,9 +84,10 @@ export class PlaybackWindow {
   }
 
   async prepareFullscreen(win: window.Window, landscape: () => boolean): Promise<void> {
-    await win.enableLandscapeMultiWindow();
+    const enableLandscape = win.enableLandscapeMultiWindow().catch(() => {});
     await win.setPreferredOrientation(landscape()
       ? window.Orientation.AUTO_ROTATION_LANDSCAPE : window.Orientation.AUTO_ROTATION_PORTRAIT);
+    await enableLandscape;
   }
 
   async waitForStableViewport(matches: () => boolean, current: () => boolean): Promise<boolean> {

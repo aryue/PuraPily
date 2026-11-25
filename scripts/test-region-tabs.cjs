@@ -8,7 +8,8 @@ const compile = (code, ctx) => vm.runInNewContext(ts.transpileModule(code, {
 }).outputText, ctx);
 const section = (s, a, b) => s.slice(s.indexOf(a), s.indexOf(b, s.indexOf(a)));
 const channels = read('components/HomeChannelContainer.ets');
-const ctx = { exports: {}, Curve: { EaseOut: 0 }, logError() {}, AppStorage: { get: () => 0 } };
+const ctx = { exports: {}, Curve: { EaseOut: 0 }, logError() {}, AppStorage: { get: () => 0 },
+  AppNavigation: { pushUrl(options) { ctx.routed = options; return Promise.resolve(); }, back: () => Promise.resolve() } };
 compile(section(channels, 'export const CHANNEL_TABS', '@Component'), ctx);
 assert.deepEqual(Array.from(ctx.exports.CHANNEL_TABS, c => c.name), ['直播','推荐','热门','分区','番剧','影视']);
 for (let i = 0; i < 6; i++) assert.equal(ctx.exports.channelPagerIndex(ctx.exports.channelAtPager(i)), i);
@@ -45,7 +46,6 @@ async function main() {
   assert.equal(mapped.length, 1); assert.equal(mapped[0].pgcSeasonId, 123);
   assert.equal(mapped[0].id, 'ss123');
   const p = new ctx.exports.Page();
-  let routed;
   const source = () => ({ items: [], reloads: 0, staged: 0, reloadItems(a) { this.items = [...a]; this.reloads++; },
     replaceForViewport(a, batch) { assert.equal(batch, 2); this.staged++; this.reloadItems(a); },
     totalCount() { return this.items.length; } });
@@ -55,7 +55,7 @@ async function main() {
     paneDataSources: [source(), source()], paneScrollers: [scroller(), scroller()],
     paneItemSets: [[], []],
     waitForPaneLayout: async () => {},
-    getUIContext: () => ({ getRouter: () => ({ pushUrl: args => { routed = args; return Promise.resolve(); } }),
+    getUIContext: () => ({ getRouter: () => ({ pushUrl: args => { ctx.routed = args; return Promise.resolve(); } }),
       animateTo: (options, action) => { action(); options.onFinish?.(); } }),
     contentWidth: 300 });
   const restored = source();
@@ -137,8 +137,8 @@ async function main() {
   ctx.fetchRegionContent = async () => [{ id: 'new' }, { id: 'more' }];
   await p.loadRanking(false);
   assert.deepEqual(p.currentDataSource().items.map(r => r.id), ['new', 'more']);
-  p.onCardClick(mapped[0]); assert.equal(routed.params.mediaId, 123);
-  p.onCardClick({ pgcSeasonId: 0, id: 'BV1', aid: 42 }); assert.equal(routed.params.bvid, 'BV1');
+  p.onCardClick(mapped[0]); assert.equal(ctx.routed.params.mediaId, 123);
+  p.onCardClick({ pgcSeasonId: 0, id: 'BV1', aid: 42 }); assert.equal(ctx.routed.params.bvid, 'BV1');
   p.selectedRid = 188;
   ctx.fetchRegionContent = async () => { throw new Error('network unavailable'); };
   await p.loadRanking(true, true);

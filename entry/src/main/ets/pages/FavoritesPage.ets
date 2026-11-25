@@ -6,13 +6,13 @@ import { PageSurface } from '../components/PageSurface';
 import { cardItemBg } from '../utils/CardStyle';
 import { PageHeader } from '../components/PageHeader';
 import { PageWallpaper } from '../components/PageWallpaper';
-import { FloatingVideoTransition } from '../services/FloatingVideoTransition';
+import { AppNavigation, NavPageHost } from '../services/AppNavigation';
 import { VideoListItem } from '../components/VideoListItem';
 import { VideoCardFeedback } from '../services/VideoCardFeedback';
 import { FirstScreenDataSource } from '../model/FirstScreenDataSource';
 import { resizeImageUrl } from '../utils/ImageUrl';
 // FavoritesPage.ets - 我的收藏页面（同步B站官方收藏夹）
-import { router, mediaquery, window, curves } from '@kit.ArkUI';
+import { mediaquery, window, curves } from '@kit.ArkUI';
 import { logInfo, logWarn, logError } from '../utils/Logger';
 import { common } from '@kit.AbilityKit';
 import { preferences } from '@kit.ArkData';
@@ -48,9 +48,8 @@ class FavoriteFolderState {
   generation: number = 0;
 }
 
-@Entry
 @Component({ freezeWhenInactive: true })
-struct FavoritesPage {
+export struct FavoritesPage {
   @StorageLink('pageWallpaperEnabled') pageWallpaperEnabled: boolean = false;
   @StorageProp('otherCardGlassEnabled') otherCardGlassEnabled: boolean = true;
   @StorageLink('isDarkMode') isDarkMode: boolean = false;
@@ -164,8 +163,12 @@ struct FavoritesPage {
   private smartGripBottom: number = 0;
   private maxFloatBtnBottom: number = 592;
   private bottomSafeHeight: number = 0;
+  navHost: NavPageHost | null = null;
 
   async aboutToAppear(): Promise<void> {
+    if (this.navHost) {
+      this.navHost.attach((): void => {}, (): void => {}, (): boolean => this.onBackPress());
+    }
     this.initOrientation();
     this.checkImmersiveSupport();
     await this.checkLoginState();
@@ -175,6 +178,7 @@ struct FavoritesPage {
   }
 
   aboutToDisappear(): void {
+    if (this.navHost) this.navHost.detach();
     if (this.landscapeListener) {
       this.landscapeListener.off('change');
       this.landscapeListener = null;
@@ -453,7 +457,7 @@ struct FavoritesPage {
     // ⭐ 预热详情（fire-and-forget）：收藏页只传 bvid，播放页要等详情里的 cid 才能起播，
     //   在转场这一刻先把这次 RTT 发出去，与转场/播放器初始化重叠
     prefetchVideoPlayback(video.bvid, 0, AppStorage.get<number>('defaultVideoQn') ?? 116);
-    this.getUIContext().getRouter().pushUrl({
+    AppNavigation.pushUrl({
       url: 'pages/VideoPlayerPage',
       params: {
         bvid: video.bvid,
@@ -542,13 +546,6 @@ struct FavoritesPage {
 
   // ==================== Build ====================
 
-  pageTransition() {
-    if (FloatingVideoTransition.active()) {
-      PageTransitionEnter({ duration: FloatingVideoTransition.direction === 'minimize' ? 0 : FloatingVideoTransition.DURATION }).opacity(1)
-      PageTransitionExit({ duration: FloatingVideoTransition.DURATION }).opacity(1)
-    }
-  }
-
   build() {
     Stack() {
       Swiper(this.detailPager) {
@@ -606,7 +603,7 @@ struct FavoritesPage {
               HeaderBackButton({ onBack: () => {
                 this.triggerHaptic();
                 if (detail) this.goBackToFolderList();
-                else this.getUIContext().getRouter().back();
+                else AppNavigation.back();
               } })
               if (!detail) {
                 this.TabBar()
@@ -648,7 +645,7 @@ struct FavoritesPage {
         .fontColor(Color.White)
         .margin({ top: 16 })
         .onClick(() => {
-          this.getUIContext().getRouter().pushUrl({ url: 'pages/QrCodeLoginPage' }).catch(() => {});
+          AppNavigation.pushUrl({ url: 'pages/QrCodeLoginPage' }).catch(() => {});
         })
       Blank()
     }

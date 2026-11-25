@@ -18,7 +18,7 @@ import { AdjustmentMotion } from '../controlcenter/model/AdjustmentMotion';
 import { PlaybackAudioOutputMonitor } from '../utils/PlaybackAudioOutput';
 import { PlaybackAudioSession } from '../utils/PlaybackAudioSession';
 import { PlaybackMenuRow } from '../components/PlaybackMenuRow';
-import { PlayerLegacyVideoOptions, PlayerVideoOption } from '../components/PlayerLegacyVideoOptions';
+import { PlayerReferenceVideoOptions, PlayerVideoOption } from '../components/PlayerReferenceVideoOptions';
 import { PlayerLandscapeVideoOptions } from '../components/PlayerLandscapeVideoOptions';
 import { canDecodePlayUrl } from '../services/PlaybackCodecSupport';
 import { PlayerCreatorRow } from '../components/PlayerCreatorRow';
@@ -41,6 +41,7 @@ import { PageHeader } from '../components/PageHeader';
 import { AppContinuation, ContinuationPage } from '../services/AppContinuation';
 import { DanmakuInputBar } from '../components/DanmakuInputBar';
 import { FloatingVideoTransition, FloatingVideoRect } from '../services/FloatingVideoTransition';
+import { AppNavigation, NavPageHost } from '../services/AppNavigation';
 import { HomeCardMorph, HomeCardMorphRect } from '../services/HomeCardMorph';
 import { PlaybackViewportFrameCallback } from '../utils/PlaybackViewportFrameCallback';
 import { fmtCount } from '../utils/NumberFormat';
@@ -61,7 +62,7 @@ import { ReferenceFeedGestures } from '../utils/ReferenceFeedGestures';
 import { HOME_CHANNEL_CURVE, HOME_CHANNEL_DURATION } from '../utils/HomeChannelMotion';
 import { VideoInteractionResult } from '../api/VideoInteractionApi';
 // VideoPlayerPage.ets
-import { router, curves, SegmentButton, SegmentButtonOptions, componentUtils, display, KeyboardAvoidMode, LengthMetrics, AnimatorResult } from '@kit.ArkUI';
+import { curves, SegmentButton, SegmentButtonOptions, componentUtils, display, KeyboardAvoidMode, LengthMetrics, AnimatorResult } from '@kit.ArkUI';
 import { splitCubicBezierAtProgress } from '../utils/CubicBezierSplit';
 import { logInfo, logWarn, logError, errMsg } from '../utils/Logger';
 import { isCommentPictureDragAutoScroll } from '../components/CommentContentRenderer';
@@ -273,9 +274,10 @@ function imageUrlResize(url: string, width: number): string {
   return base + `@${width}w`;
 }
 
-@Entry
 @Component
-struct VideoPlayerPage {
+export struct VideoPlayerPage {
+  navHost: NavPageHost | null = null;
+  navParams: Record<string, Object> | null = null;
   @State fullscreenVideoScale: number = 1
   @State fullscreenVideoAngle: number = 0
   @State fullscreenVideoX: number = 0
@@ -569,22 +571,6 @@ struct VideoPlayerPage {
     }, () => { this.floatingCompact = 0; });
   }
 
-  pageTransition() {
-    if (FloatingVideoTransition.active()) {
-      PageTransitionEnter({ duration: FloatingVideoTransition.DURATION }).opacity(1)
-      PageTransitionExit({ duration: FloatingVideoTransition.direction === 'minimize' ? 0 : FloatingVideoTransition.DURATION, curve: Curve.EaseOut })
-        .opacity(1)
-
-    } else if (this.coverMorphEnterTransition) {
-      // ⭐ 共享元素新路径：进入同帧到位；退出用非零、无位移的 Exit 撑住收缩画面。
-      //    ⚠️ 读页面创建期快照，不读全局 enterInstant —— 后者会被相关推荐 push 出的
-      //       第二个播放页继承，导致普通进入也走 0ms 转场、返回还朝上一张卡片收缩。
-      //    ⚠️ 返回时先 back：首页立即成为 live 下层，退出页继续在上层播放收缩。
-      PageTransitionEnter({ type: RouteType.None, duration: 0 }).opacity(1)
-      PageTransitionExit({ type: RouteType.None, duration: HomeCardMorph.RETURN_HOLD_MS, curve: Curve.Linear }).opacity(1)
-    }
-  }
-
   private xc: XComponentController = new XComponentController()
   private nativeSurfaceId_: string = ''
   /** ⭐ DASH 转播站桥（DASH 双流场景用；FLV/离线时为 null） */
@@ -602,11 +588,6 @@ struct VideoPlayerPage {
   @State @Watch('onWaitingFirstFrameChanged') waitingForFirstFrame: boolean = true;
   // ═══ 首页卡片封面共享元素转场（新路径，开关 homeCardMorph）═══
   // 旧路径（开关关闭）这些状态恒为 false/0，build 里不挂任何节点。
-  /**
-   * 页面创建期快照：这次 push 是否真的由首页卡片 arm 过。
-   * 字段初始化早于 aboutToAppear / pageTransition，此时 armed 还没被 consume。
-   */
-  private readonly coverMorphEnterTransition: boolean = HomeCardMorph.peekArmed();
   /** 本页是否真正消费了这次卡片转场；返回只认本页所有权，避免别的播放页清状态 */
   private coverMorphOwned: boolean = false;
   @State coverMorphActive: boolean = false;
@@ -2616,6 +2597,7 @@ struct VideoPlayerPage {
           this.startCoverMorphReturnFollow();
           this.animateCoverMorphReturn(dur, () => {
             this.restoreSettledCover();
+            AppNavigation.finishPopHold();
             logInfo(`[HomeCardMorph] rotated shrink settled at ` +
               `${this.morphWinW().toFixed(1)}x${this.morphWinH().toFixed(1)} ` +
               `(${this.morphWinX().toFixed(1)},${this.morphWinY().toFixed(1)})`);
@@ -2632,7 +2614,8 @@ struct VideoPlayerPage {
         animateTo({
           expectedFrameRateRange: { min: 60, max: 120, expected: 120 },
           duration: this.da ? 0 : HomeCardMorph.ROTATED_RETURN_FALLBACK_MS,
-          curve: Curve.FastOutSlowIn
+          curve: Curve.FastOutSlowIn,
+          onFinish: (): void => { AppNavigation.finishPopHold(); }
         }, () => {
           this.coverMorphFallbackExitProgress = 1;
         });
@@ -2697,8 +2680,8 @@ struct VideoPlayerPage {
   }
 
   /**
-   * 返回：先 router.back() 让首页立即成为 live 下层，再由播放页的非零 Exit 撑住画面，
-   * 同步把窗口从整页收回到卡片矩形。收缩结束不做二次 pop，正常生命周期会随 Exit 销毁页面。
+   * 返回：先让 Navigation 开始 pop 并持有退出页，让首页立即成为 live 下层，
+   * 再由播放页自身收缩窗口。收缩结束释放导航转场，页面随 pop 收尾销毁。
    */
   /**
    * 返回落点：把进入时记录的卡片矩形校验/clamp 回首页可视区。
@@ -2747,7 +2730,7 @@ struct VideoPlayerPage {
       // 封面还没开始 morph，页面仍是透明的，直接 pop；不要动半成品几何。
       logInfo('[HomeCardMorph] return before morph start, plain back');
       this.morphAspectReady = true;
-      if (backUrl.length > 0) router.back({ url: backUrl }); else router.back();
+      if (backUrl.length > 0) AppNavigation.back({ url: backUrl }); else AppNavigation.back();
       return true;
     }
     const to = this.coverMorphReturnRect();
@@ -2860,14 +2843,17 @@ struct VideoPlayerPage {
         logInfo(`[HomeCardMorph] rotated return waiting for home reflow ` +
           `stale=(${this.coverMorphRotatedStaleRect.x.toFixed(1)},${this.coverMorphRotatedStaleRect.y.toFixed(1)}) ` +
           `${this.coverMorphRotatedStaleRect.width.toFixed(1)}x${this.coverMorphRotatedStaleRect.height.toFixed(1)}`);
-        if (backUrl.length > 0) router.back({ url: backUrl }); else router.back();
+        AppNavigation.requestPopHold();
+        if (backUrl.length > 0) AppNavigation.back({ url: backUrl }); else AppNavigation.back();
         this.startCoverMorphRotatedReturn();
         return;
       }
-      if (backUrl.length > 0) router.back({ url: backUrl }); else router.back();
+      AppNavigation.requestPopHold();
+      if (backUrl.length > 0) AppNavigation.back({ url: backUrl }); else AppNavigation.back();
       this.startCoverMorphReturnFollow();
       this.animateCoverMorphReturn(dur, () => {
         this.restoreSettledCover();
+        AppNavigation.finishPopHold();
         logInfo(`[HomeCardMorph] shrink settled at ${this.morphWinW().toFixed(1)}x${this.morphWinH().toFixed(1)} ` +
           `(${this.morphWinX().toFixed(1)},${this.morphWinY().toFixed(1)})`);
       });
@@ -3537,7 +3523,7 @@ struct VideoPlayerPage {
     this.saveWatchHistory(true);
 
     // The same system window remains visible over the app and desktop.
-    router.back();
+    AppNavigation.back();
     FloatingVideoTransition.finish();
   }
 
@@ -4507,6 +4493,10 @@ struct VideoPlayerPage {
   }
 
   async aboutToAppear() {
+    if (this.navHost) {
+      this.navHost.attach((): void => this.onPageShow(), (): void => this.onPageHide(),
+        (): boolean => this.onBackPress());
+    }
     // ⭐ 首页卡片封面共享元素（新路径，开关 homeCardMorph）：必须放在任何 await / 异步分支
     //    之前 —— 首次 build 就要挂上与首页卡片同 id 的封面占位，框架才会把它当成共享元素。
     const coverMorphConsumed: boolean = HomeCardMorph.consume();
@@ -4636,7 +4626,7 @@ struct VideoPlayerPage {
     }
     // ⭐ 同步预判 PGC（番剧/影视）：在任何 await 之前设 isPgc_，避免首次 build 用 16:9 渲染后跳到 3:4
     try {
-      const _p0 = router.getParams() as Record<string, Object>;
+      const _p0 = this.navParams;
       if (_p0) {
         this.referenceLandscapeRestoreRatio(_p0['landscapePlayerRatio']);
         const _ep = typeof _p0['epId'] === 'number' ? _p0['epId'] : parseInt(_p0['epId'] as string, 10) || 0;
@@ -4700,7 +4690,7 @@ struct VideoPlayerPage {
       this.rotationMode = this.rotationFreeMode;
     }
 
-    const p = router.getParams() as Record<string, Object>;
+    const p = this.navParams;
     if (p?.['openComments'] === true) {
       this.at = 1;
       this.tabSelIdx = [1];
@@ -5277,7 +5267,7 @@ struct VideoPlayerPage {
   /** 页面隐藏瞬间的路由栈顶；pushUrl 尚未完成时可能仍是本页，故只作辅助判断。 */
   private currentTopPage(): string {
     try {
-      const state = router.getState();
+      const state = AppNavigation.getState();
       const raw = state.path.endsWith('/') ? `${state.path}${state.name}` : state.path;
       return this.normalizeRoutePath(raw);
     } catch (_e) {
@@ -5479,7 +5469,11 @@ struct VideoPlayerPage {
   onPageShow(): void {
     this.loadDanmakuDisplaySettings();
     this.playerPageVisible = true;
-    if (this.fs && this.referenceLayout && !this.isPcDevice) this.fullscreenDeviceOrientation.start();
+    if (this.fs && this.referenceLayout && !this.isPcDevice) {
+      this.fullscreenDeviceOrientation.start();
+      this.fullscreenDeviceOrientation.refreshRotationLock(
+        this.getUIContext().getHostContext() as common.UIAbilityContext);
+    }
     // ⭐ 登记「我是当前最上层的播放页实例」。被 push 出来的同路由页会覆盖这个值，
     //    被覆盖的旧页因此在切后台时不会误判自己仍在栈顶（见 onAppBackgroundConfirmed）。
     const previousTopId = this.topPlayerPageInstanceId();
@@ -5531,6 +5525,7 @@ struct VideoPlayerPage {
   }
 
   aboutToDisappear() {
+    if (this.navHost) this.navHost.detach();
     this.disposeCoverMorph();
     this.playbackWindow_.cancelBarsRefresh();
     IjkWarmPool.get().releaseScene(this.pageInstanceId_);
@@ -5944,7 +5939,7 @@ struct VideoPlayerPage {
     if (this.commentThread) { this.closeCommentThread(); return; }
     if (this.isLightsOff) { this.turnLightsOn(); return; }
     if (this.fs) { this.toggleFS(); return; }
-    // ⚠️ 防重入：官方文档把"路由跳转"也算作 PRESS_BACK 的触发源 ⇒ 我们主动 router.back()
+    // ⚠️ 防重入：官方文档把"路由跳转"也算作 PRESS_BACK 的触发源 ⇒ 我们主动 AppNavigation.back()
     //   有可能再打回同一个回调（双重返回）；800ms 内的重复调用一律丢弃。
     //   用户的"第二次滑动"此时页面早已退出，不会被误吞。
     const now: number = Date.now();
@@ -6178,7 +6173,7 @@ struct VideoPlayerPage {
   }
 
   private onRelatedVideoClick(item: RecommendItem): void {
-    this.getUIContext().getRouter().pushUrl({
+    AppNavigation.pushUrl({
       url: 'pages/VideoPlayerPage',
       params: {
         bvid: item.id,
@@ -8105,7 +8100,7 @@ struct VideoPlayerPage {
           this.getUIContext().getPromptAction().closeCustomDialog(this.textSelectDialogId_);
           this.textSelectDialogId_ = -1;
         }
-        this.getUIContext().getRouter().pushUrl({
+        AppNavigation.pushUrl({
           url: 'pages/SearchPage',
           params: { keyword: keyword }
         }).catch((err: Error) => {
@@ -8422,6 +8417,9 @@ struct VideoPlayerPage {
     this.isAnimatingToFS = true;
     const reached = this.fsPanProgress >= 0.62;
     if (reached) {
+      if (this.cv) this.resetCT();
+      this.cv = false;
+      this.cancelDelayHide();
       // ⭐ 等待系统旋转完成后再翻转全屏（和点击全屏一致）
       await this.prepareFullscreenEnvironment();
       if (!this.referenceAlive) return;
@@ -8473,7 +8471,11 @@ struct VideoPlayerPage {
 
   private async prepareFullscreenEnvironment(): Promise<void> {
     if (!this.mw || this.isPcDevice) return;  // ⭐ PC：窗口不旋转，跳过旋转准备（窗口内全屏）
-    if (this.referenceLayout) this.fullscreenDeviceOrientation.start();
+    if (this.referenceLayout) {
+      this.fullscreenDeviceOrientation.start();
+      this.fullscreenDeviceOrientation.refreshRotationLock(
+        this.getUIContext().getHostContext() as common.UIAbilityContext);
+    }
     try {
       await this.playbackWindow_.prepareFullscreen(this.mw, () => this.fullscreenTargetLandscape());
     } catch (_e) {
@@ -8490,7 +8492,7 @@ struct VideoPlayerPage {
   }
 
   // ⭐ 仅恢复屏幕方向和多窗口横屏状态（不管理状态栏），用于退出全屏动画期间提前执行
-  private async restoreOrientationOnly(): Promise<void> {
+  private async restoreOrientationOnly(deferLandscapeMode?: boolean): Promise<void> {
     if (!this.mw || this.isPcDevice) return;
     this.fullscreenDeviceOrientation.stop();
     await this.playbackWindow_.restoreAfterFullscreen(this.mw,
@@ -8498,7 +8500,7 @@ struct VideoPlayerPage {
       () => {
         this.isLs = false;
         this.isLandscapeVertical = false;
-      }, this.fullscreenReturningToPortrait());
+      }, deferLandscapeMode ?? this.fullscreenReturningToPortrait());
   }
 
   private fullscreenReturningToPortrait(): boolean {
@@ -8519,8 +8521,14 @@ struct VideoPlayerPage {
   private fullscreenReturnLandscape(): boolean {
     const source = this.fullscreenSource;
     if (!source) return this.isLs;
-    return this.fullscreenDeviceOrientation.returnLandscape(source.orientation, source.isLandscape,
+    // 手机不支持锁定横屏：系统锁定开启时非全屏态只能是竖屏；平板保持锁定方向。
+    const phoneViewport = Math.min(this.cw, this.ch) < 600;
+    const target = this.fullscreenDeviceOrientation.returnLandscape(source.orientation, source.isLandscape,
+      phoneViewport,
       this.getUIContext().getHostContext() as common.UIAbilityContext);
+    logInfo(`[FSOrient] return target=${target} sourceOrientation=${source.orientation} ` +
+      `sourceLandscape=${source.isLandscape} currentWindowLandscape=${this.isLs}`);
+    return target;
   }
 
   private restoreFullscreenSource(): void {
@@ -8581,7 +8589,7 @@ struct VideoPlayerPage {
         this.fullscreenRotationTarget === target;
       const ready = await this.playbackWindow_.waitForStableViewport(
         () => this.cw > 0 && this.ch > 0 && (this.cw > this.ch) === target &&
-          this.isLs === target && !this.rotationInProgress, current);
+          this.isLs === target, current);
       if (!current()) return;
       if (ready) {
         this.commitFullscreenRotationLayout();
@@ -8617,6 +8625,10 @@ struct VideoPlayerPage {
     this.isAnimatingToFS = true;
     this.playbackWindow_.cancelTransitionWait();
     if (!this.mw) { this.isAnimatingToFS = false; return; }
+
+    if (this.cv) this.resetCT();
+    this.cv = false;
+    this.cancelDelayHide();
 
     // ⭐ 快照当前内容分支：fs 期间冻结渲染该分支，避免旋转切分支导致重挂载+解码风暴
     this.snapshotPreFsBranch();
@@ -8718,6 +8730,8 @@ struct VideoPlayerPage {
     this.showEpisodeSheet = false;
     setTimeout(() => { this.icp = false; }, 0);
     if (this.cv) this.resetCT();
+    this.cv = false;
+    this.cancelDelayHide();
 
     if (this.referenceLayout && !this.isPcDevice && this.fullscreenSource) {
       const target = this.fullscreenReturnLandscape();
@@ -8845,14 +8859,14 @@ struct VideoPlayerPage {
     if (this.commentThread) { this.closeCommentThread(); return; }
     if (this.fs) {
       this.toggleFS().finally(() => setTimeout(() => {
-        if (this.referenceAlive && this.playerPageVisible) router.back();
+        if (this.referenceAlive && this.playerPageVisible) AppNavigation.back();
       }, 300));
     } else if (this.beginReturnCoverMorph()) {
       // 共享元素返回：封面收回卡片后再 pop（内部 onFinish 里 release + back）
       logInfo('[HomeCardMorph] goBack handed to return morph');
     } else {
       this.release();
-      router.back();
+      AppNavigation.back();
     }
   }
 
@@ -8860,14 +8874,14 @@ struct VideoPlayerPage {
     AppStorage.setOrCreate<boolean>('goHome', true);
     if (this.fs) {
       this.toggleFS().finally(() => setTimeout(() => {
-        if (this.referenceAlive && this.playerPageVisible) router.back({ url: 'pages/Index' });
+        if (this.referenceAlive && this.playerPageVisible) AppNavigation.back({ url: 'pages/Index' });
       }, 300));
     } else if (this.beginReturnCoverMorph('pages/Index')) {
       // 回首页：先 pop 让真实首页立即成为下层，再收回卡片矩形
       logInfo('[HomeCardMorph] goHome handed to return morph');
     } else {
       this.release();
-      router.back({ url: 'pages/Index' });
+      AppNavigation.back({ url: 'pages/Index' });
     }
   }
 
@@ -9733,7 +9747,7 @@ struct VideoPlayerPage {
     return this.isMirrorControls && this.fs;
   }
 
-  private selectLegacyScale(mode: string): void {
+  private selectScaleOption(mode: string): void {
     const previousMode = this.sm;
     this.sm = mode;
     const switchingFromStretch = previousMode === 'stretch' && mode !== 'stretch';
@@ -9772,7 +9786,18 @@ struct VideoPlayerPage {
         }
       })
     } else {
-      this.legacyVideoOptions(true)
+      PlayerReferenceVideoOptions({
+        title: '画面比例',
+        options: this.sl_.map((item: SO): PlayerVideoOption => ({ key: item.mode, label: item.label })),
+        selected: this.sm,
+        isDarkMode: this.isDarkMode,
+        fullscreen: this.fs,
+        onClose: () => { this.sp = false; this.ip = false; this.cv = true; this.resetCT(); },
+        onSelect: (mode: string) => {
+          this.sp = false; this.ip = false; this.cv = true; this.resetCT();
+          this.selectScaleOption(mode);
+        }
+      })
     }
   }
 
@@ -9789,35 +9814,18 @@ struct VideoPlayerPage {
         }
       })
     } else {
-      this.legacyVideoOptions(false)
-    }
-  }
-
-  @Builder
-  legacyVideoOptions(scalePanel: boolean) {
-    PlayerLegacyVideoOptions({
-      title: scalePanel ? '画面比例' : '画质选择',
-      options: scalePanel
-        ? this.sl_.map((item: SO): PlayerVideoOption => ({ key: item.mode, label: item.label }))
-        : this.getQlList().map((item: QI): PlayerVideoOption => ({ key: item.qn.toString(), label: item.label })),
-      selected: scalePanel ? this.sm : this.qn.toString(),
-      landscape: this.isLs, fullscreen: this.fs, mirror: this.mirrorPopup(), instant: this.icp, scalePanel: scalePanel,
-      selectedColor: this.playerFollowTheme ? this.customThemeColor : '#FB7299',
-      selectedBackground: this.playerFollowTheme ? '#' + this.opacityToHexAlpha(15) + this.customThemeColor.slice(1)
-        : 'rgba(255, 85, 170, 0.15)',
-      onClose: () => {
-        if (scalePanel) this.sp = false;
-        else this.qp = false;
-        this.ip = false;
-        if (this.cv) this.resetCT();
-      },
-      onSelect: (key: string) => {
-        if (scalePanel) this.selectLegacyScale(key);
-        else {
-          this.qp = false; this.ip = false; this.switchQ(Number(key));
+      PlayerReferenceVideoOptions({
+        title: '画质选择',
+        options: this.getQlList().map((item: QI): PlayerVideoOption => ({ key: item.qn.toString(), label: item.label })),
+        selected: this.qn.toString(),
+        isDarkMode: this.isDarkMode,
+        fullscreen: this.fs,
+        onClose: () => { this.qp = false; this.ip = false; this.cv = true; this.resetCT(); },
+        onSelect: (quality: string) => {
+          this.qp = false; this.ip = false; this.cv = true; this.resetCT(); this.switchQ(Number(quality));
         }
-      }
-    })
+      })
+    }
   }
 
   private referenceSetSleep(minutes: number): void {
@@ -9995,7 +10003,7 @@ struct VideoPlayerPage {
 
   // ⭐ 跳转到离线缓存列表页（提示条点击）
   private goToOfflineCachePage(): void {
-    this.getUIContext().getRouter().pushUrl({ url: 'pages/OfflineCachePage' }).catch((err: Error) => {
+    AppNavigation.pushUrl({ url: 'pages/OfflineCachePage' }).catch((err: Error) => {
       logWarn(`[OfflineCache] 跳转缓存页失败: ${errMsg(err)}`);
     });
   }
@@ -10357,7 +10365,8 @@ struct VideoPlayerPage {
         referenceHalfScreen: this.referenceHalfScreenControlsActive(),
         referenceLandscapeHalfScreen: this.referenceHalfScreenControlsActive() && this.isLs,
         referenceLandscapeFullscreen: this.referenceLayout && this.fs && this.isLs,
-        hidePlaybackControls: this.referenceLayout && !this.fs && !this.isLs && (this.referenceFeed || this.referenceModeAnimating),
+        hidePlaybackControls: this.referenceLayout &&
+          (!this.fs && !this.isLs && (this.referenceFeed || this.referenceModeAnimating)),
         isPlaying: $play,
         videoTitle: this.vd?.title || this.vi.title || '',
         skipMarksJson: $skipMarksJson_,
@@ -10394,7 +10403,6 @@ struct VideoPlayerPage {
         // ⭐ 提示弹层把"返回"转交回本页（弹层吃掉了系统返回键/侧滑，见 VideoControls 弹层注释）
         onOverlayBack: () => { this.onOverlayBack_(); },
         onBackPress: () => { if (this.fs) { this.toggleFS(); } else { this.goBack(); } },
-        onHomePress: () => { this.goHome(); },
         togglePlayPause: () => { this.togglePP(); },
         seekTo: (time: number) => { this.seek(time, false, true); },
         // ⭐ 进度条交互（Slider 的 Down / Up / Cancel）：拖动中冻结 ct 并抑制控制栏自动隐藏，
@@ -14057,7 +14065,7 @@ struct VideoPlayerPage {
 
   /** UP 主页入口的统一跳转（头像与昵称共用；mid 缺失时不跳） */
   private referenceOpenUpSpace(): void {
-    if (this.vd?.owner.mid) router.pushUrl({ url: 'pages/UpSpacePage', params: {
+    if (this.vd?.owner.mid) AppNavigation.pushUrl({ url: 'pages/UpSpacePage', params: {
       mid: this.vd.owner.mid, upName: this.vd.owner.name, upFace: this.vd.owner.face
     } });
   }
@@ -14128,7 +14136,7 @@ struct VideoPlayerPage {
         if (this.referenceIntroTags.length > 0) {
           PlayerVideoIntroTags({
             tags: this.referenceIntroTags, expanded: this.referenceDescriptionExpanded, dark: this.isDarkMode,
-            onSelect: (keyword: string) => { router.pushUrl({ url: 'pages/SearchPage', params: { keyword } }); }
+            onSelect: (keyword: string) => { AppNavigation.pushUrl({ url: 'pages/SearchPage', params: { keyword } }); }
           })
         }
         Column().height(10)

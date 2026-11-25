@@ -12,7 +12,8 @@ import { restoreBackgroundPlayback } from '../services/BackgroundPlaybackPrefere
 import { AbilityConstant, UIAbility, Want, wantConstant, Configuration } from '@kit.AbilityKit';
 import { AppContinuation, ContinuationSnapshot, CONTINUATION_KEY, CONTINUATION_MIN_VERSION } from '../services/AppContinuation';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { window, router, uiObserver } from '@kit.ArkUI';
+import { window } from '@kit.ArkUI';
+import { AppNavigation, AppRouteListener, EMPTY_ROUTE_PARAMS } from '../services/AppNavigation';
 import { preferences } from '@kit.ArkData';
 import { rpc } from '@kit.IPCKit';
 import { BusinessError } from '@kit.BasicServicesKit';
@@ -44,15 +45,10 @@ export default class EntryAbility extends UIAbility {
   private cellularPrefetchLaunchOverride: boolean | null = null;
   private continuationPage: string = '';
   private continuationObserverRegistered: boolean = false;
-  private continuationPageChanged: (info: uiObserver.RouterPageInfo) => void = (info: uiObserver.RouterPageInfo): void => {
-    const path = AppContinuation.normalizePage(info.path.endsWith('/') ? info.path + info.name : info.path);
-    if (info.state === uiObserver.RouterPageState.ON_PAGE_SHOW) {
-      this.continuationPage = path;
-      this.setContinuationAvailable(AppContinuation.isPlaybackPage(path) && !AppStorage.get<boolean>('floatingPiPActive'));
-    } else if (info.state === uiObserver.RouterPageState.ON_PAGE_HIDE && this.continuationPage === path) {
-      this.continuationPage = '';
-      this.setContinuationAvailable(false);
-    }
+  private continuationRouteChanged: AppRouteListener = (path: string): void => {
+    const page = AppContinuation.normalizePage(path);
+    this.continuationPage = page;
+    this.setContinuationAvailable(AppContinuation.isPlaybackPage(page) && !AppStorage.get<boolean>('floatingPiPActive'));
   };
 
   private setContinuationAvailable(available: boolean): void {
@@ -148,7 +144,7 @@ export default class EntryAbility extends UIAbility {
       AppStorage.setOrCreate('mixAudioWithOtherApps', pref.getSync('mixAudioWithOtherApps', false) === true);
       AppStorage.setOrCreate('startupCdnRace', pref.getSync('startupCdnRace', false) === true);
       // 首页卡片 → 播放页 封面共享元素转场（实验开关，默认关闭）。
-      // ⚠️ Index 的 pageTransition 只在页面创建时求值，所以这个值必须在 loadContent 之前就位。
+      // Index 在 aboutToAppear 里落开关快照；该值必须在 loadContent 之前就位。
       AppStorage.setOrCreate('homeCardMorph', pref.getSync('homeCardMorph', false) === true);
       for (const key of ['ijkWarmSlotsWifi', 'ijkWarmSlotsCellular']) {
         const count = pref.getSync(key, 1);
@@ -174,7 +170,7 @@ export default class EntryAbility extends UIAbility {
     this.registerCalleeHandlers();
     PersistentStorage.persistProp('statusBarHeight', 40);
     this.setContinuationAvailable(false);
-    uiObserver.on('routerPageUpdate', this.context, this.continuationPageChanged);
+    AppNavigation.subscribeTopChanged(this.continuationRouteChanged);
     this.continuationObserverRegistered = true;
 
     if (launchParam.launchReason === AbilityConstant.LaunchReason.CONTINUATION) {
@@ -253,8 +249,7 @@ export default class EntryAbility extends UIAbility {
   /** 仅用于实验页：surface 改绑测量（不影响正式播放链路）。 */
   private openSurfaceLab(bvid: string): void {
     try {
-      this.context.windowStage.getMainWindowSync().getUIContext().getRouter()
-        .pushUrl({ url: 'pages/SurfaceRebindLab', params: { bvid: bvid } })
+      AppNavigation.pushUrl({ url: 'pages/SurfaceRebindLab', params: { bvid: bvid } })
         .catch((error: BusinessError) => {
           hilog.error(DOMAIN, TAG, 'surface lab navigation failed: %{public}s', errMsg(error));
         });
@@ -281,7 +276,7 @@ export default class EntryAbility extends UIAbility {
 
   onDestroy(): void {
     if (this.continuationObserverRegistered) {
-      uiObserver.off('routerPageUpdate', this.context, this.continuationPageChanged);
+      AppNavigation.unsubscribeTopChanged(this.continuationRouteChanged);
       this.continuationObserverRegistered = false;
     }
     HighRefreshService.getInstance().destroy();
@@ -313,12 +308,12 @@ export default class EntryAbility extends UIAbility {
       AppStorage.setOrCreate('cellularPrefetch', String(want.parameters['cellularPrefetch']) !== 'off');
     }
     if (want.parameters?.['levelBarLab'] === true) {
-      this.context.windowStage.getMainWindowSync().getUIContext().getRouter().pushUrl({ url: 'pages/LevelBarLab' });
+      AppNavigation.pushUrl({ url: 'pages/LevelBarLab' });
       return;
     }
     // 联调入口：aa start --ps audioLab true 直达音频输出测试页（路由与星闪/蓝牙设备对照）。
     if (String(want.parameters?.['audioLab']) === 'true') {
-      this.context.windowStage.getMainWindowSync().getUIContext().getRouter().pushUrl({ url: 'pages/AudioOutputLab' });
+      AppNavigation.pushUrl({ url: 'pages/AudioOutputLab' });
       return;
     }
     if (want.parameters?.['surfaceLab'] !== undefined) {
@@ -326,8 +321,7 @@ export default class EntryAbility extends UIAbility {
       return;
     }
     if (want.parameters?.['ijkLab'] !== undefined) {
-      this.context.windowStage.getMainWindowSync().getUIContext().getRouter()
-        .pushUrl({ url: 'pages/IjkLab' })
+      AppNavigation.pushUrl({ url: 'pages/IjkLab' })
         .catch((error: BusinessError) => {
           hilog.error(DOMAIN, TAG, 'ijk lab navigation failed: %{public}s', errMsg(error));
         });
@@ -350,14 +344,12 @@ export default class EntryAbility extends UIAbility {
       return AbilityConstant.OnContinueResult.MISMATCH;
     }
     try {
-      const uiRouter = this.context.windowStage.getMainWindowSync().getUIContext().getRouter();
-      const state = uiRouter.getState();
-      const path = state.path.endsWith('/') ? state.path + state.name : state.path;
+      const path = AppNavigation.currentPath();
       if (!AppContinuation.isPlaybackPage(path) || AppStorage.get<boolean>('floatingPiPActive')) {
         this.continuationToast('仅支持在在线播放页使用接续');
         return AbilityConstant.OnContinueResult.REJECT;
       }
-      const snapshot = AppContinuation.snapshot(path, uiRouter.getParams() as Record<string, Object> ?? {});
+      const snapshot = AppContinuation.snapshot(path, AppNavigation.getParams() ?? EMPTY_ROUTE_PARAMS);
       if (!snapshot) {
         this.continuationToast('当前内容暂不支持接续，请在在线播放页重试');
         return AbilityConstant.OnContinueResult.REJECT;
@@ -423,7 +415,7 @@ export default class EntryAbility extends UIAbility {
 
     hilog.info(DOMAIN, TAG, 'deep link navigating to: %{public}s', result.page);
     try {
-      router.pushUrl({ url: result.page, params: result.params });
+      AppNavigation.pushUrl({ url: result.page, params: result.params });
     } catch (e) {
       hilog.error(DOMAIN, TAG, 'deep link navigation failed: %{public}s', JSON.stringify(e));
     }
@@ -572,8 +564,7 @@ export default class EntryAbility extends UIAbility {
       const snapshot = this.pendingContinuation;
       this.pendingContinuation = null;
       if (snapshot && snapshot.destination.page !== 'pages/Index') {
-        const uiRouter = windowStage.getMainWindowSync().getUIContext().getRouter();
-        uiRouter.pushUrl({ url: snapshot.destination.page, params: snapshot.destination.params }).catch((error: BusinessError) => {
+        AppNavigation.pushUrl({ url: snapshot.destination.page, params: snapshot.destination.params }).catch((error: BusinessError) => {
           hilog.error(DOMAIN, TAG, 'Continuation navigation failed: %{public}s', errMsg(error));
         });
       }
@@ -587,8 +578,7 @@ export default class EntryAbility extends UIAbility {
       if (this.pendingIjkLab) {
         this.pendingIjkLab = false;
         setTimeout(() => {
-          windowStage.getMainWindowSync().getUIContext().getRouter()
-            .pushUrl({ url: 'pages/IjkLab' })
+          AppNavigation.pushUrl({ url: 'pages/IjkLab' })
             .catch((error: BusinessError) => {
               hilog.error(DOMAIN, TAG, 'ijk lab navigation failed: %{public}s', errMsg(error));
             });
@@ -604,8 +594,7 @@ export default class EntryAbility extends UIAbility {
       if (this.pendingAudioLab) {
         this.pendingAudioLab = false;
         setTimeout(() => {
-          windowStage.getMainWindowSync().getUIContext().getRouter()
-            .pushUrl({ url: 'pages/AudioOutputLab' })
+          AppNavigation.pushUrl({ url: 'pages/AudioOutputLab' })
             .catch((error: BusinessError) => {
               hilog.error(DOMAIN, TAG, 'audio lab navigation failed: %{public}s', errMsg(error));
             });
@@ -669,9 +658,7 @@ export default class EntryAbility extends UIAbility {
     //    「已跳到 UP 空间等页面后再切后台」，后者不允许恢复后台播放。
     let topPage = '';
     try {
-      const uiRouter = this.context.windowStage.getMainWindowSync().getUIContext().getRouter();
-      const state = uiRouter.getState();
-      topPage = state.path.endsWith('/') ? `${state.path}${state.name}` : state.path;
+      topPage = AppNavigation.currentPath();
     } catch (_e) {
       topPage = '';
     }

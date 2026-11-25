@@ -9,7 +9,7 @@ const start = source.indexOf('  private referenceOpenUpSpace(');
 const builderAt = source.indexOf('  @Builder\n  ReferenceUpRow(');
 assert.ok(start > 0 && builderAt > start, 'referenceOpenUpSpace must sit right before ReferenceUpRow');
 const snippet = source.slice(start, builderAt);
-const context = { exports: {}, router: { pushes: [], pushUrl(opts) { this.pushes.push(opts); } } };
+const context = { exports: {}, AppNavigation: { pushes: [], pushUrl(opts) { this.pushes.push(opts); } } };
 vm.runInNewContext(ts.transpileModule(`export class Page { ${snippet} }`, {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 }
 }).outputText, context);
@@ -18,15 +18,15 @@ const page = new context.exports.Page();
 // 1) 空间跳转收敛在 referenceOpenUpSpace：带 mid 才跳，参数齐全。
 page.vd = { owner: { mid: 42, name: 'UP 主', face: 'face.url' } };
 page.referenceOpenUpSpace();
-assert.equal(context.router.pushes.length, 1);
-assert.equal(context.router.pushes[0].url, 'pages/UpSpacePage');
-assert.equal(context.router.pushes[0].params.mid, 42);
+assert.equal(context.AppNavigation.pushes.length, 1);
+assert.equal(context.AppNavigation.pushes[0].url, 'pages/UpSpacePage');
+assert.equal(context.AppNavigation.pushes[0].params.mid, 42);
 page.vd = { owner: { mid: 0, name: 'x', face: '' } };
 page.referenceOpenUpSpace();
-assert.equal(context.router.pushes.length, 1, 'missing mid must not navigate');
+assert.equal(context.AppNavigation.pushes.length, 1, 'missing mid must not navigate');
 page.vd = undefined;
 page.referenceOpenUpSpace();
-assert.equal(context.router.pushes.length, 1, 'undefined detail must not navigate');
+assert.equal(context.AppNavigation.pushes.length, 1, 'undefined detail must not navigate');
 
 // 2) 连刷信息层（compact）：入口行自身必须退出触摸测试（留白透传给页面级单击显隐），
 //    主页触点收窄为头像与昵称本身。

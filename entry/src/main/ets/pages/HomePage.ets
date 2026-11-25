@@ -1,4 +1,5 @@
 import { CoverFlight } from '../components/HomeCoverNode';
+import { AppNavigation } from '../services/AppNavigation';
 import { HomeInitialLoading } from '../components/HomeInitialLoading';
 import { GlassMaterial } from '../utils/GlassMaterial';
 import { PageSurface } from '../components/PageSurface';
@@ -1312,7 +1313,7 @@ export struct HomePage {
       const x = ui.px2vp(Number(info.windowOffset.x));
       const y = ui.px2vp(Number(info.windowOffset.y));
       // ⚠️ 不要因为「卡片没完全显示」就放弃接管：首页滚动时半露卡片很常见，
-      //    一旦 return undefined 就 arm 不上，播放页走原 pageTransition = 用户看到的
+      //    一旦 return undefined 就 arm 不上，播放页走默认导航转场 = 用户看到的
       //    「打开未完全显示的卡片变成推拉动画」。只要与可视区有交集就照常做，
       //    越界那部分由窗口自然裁掉；完全不可见（点不到，防脏数据）才回退。
       const margin = 4;
@@ -1383,7 +1384,7 @@ export struct HomePage {
     // ⭐ 番剧卡片（App 推荐 feed 的 bangumi）：走 PGC 入口，
     //   避免把分集/季id当 aid 传入播放页被解析成撞号的 UGC 视频
     if (item.pgcEpId > 0) {
-      this.getUIContext().getRouter().pushUrl({
+      AppNavigation.pushUrl({
         url: 'pages/VideoPlayerPage',
         params: {
           epId: item.pgcEpId,
@@ -1398,7 +1399,7 @@ export struct HomePage {
       return;
     }
     if (item.pgcSeasonId > 0) {
-      this.getUIContext().getRouter().pushUrl({
+      AppNavigation.pushUrl({
         url: 'pages/VideoPlayerPage',
         params: {
           mediaId: item.pgcSeasonId,
@@ -1414,7 +1415,7 @@ export struct HomePage {
     prefetchVideoPlayback(item.id.startsWith('BV') ? item.id : (item.aid > 0 ? String(item.aid) : item.id), item.cid,
       AppStorage.get<number>('defaultVideoQn') ?? 116);
 
-    this.getUIContext().getRouter().pushUrl({
+    AppNavigation.pushUrl({
       url: 'pages/VideoPlayerPage',
       params: {
         bvid: item.id,

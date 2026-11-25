@@ -17,6 +17,7 @@ const ctx={exports:{},logInfo(){},logWarn(){},
  setTimeout:callback=>{timers.set(++timerId,callback);return timerId},clearTimeout:id=>timers.delete(id),
  setInterval:callback=>{timers.set(++timerId,callback);return timerId},clearInterval:id=>timers.delete(id),
  AppStorage:{get:key=>storage.get(key),set:(key,value)=>storage.set(key,value),setOrCreate:(key,value)=>storage.set(key,value)},
+ AppNavigation:{pushUrl:async options=>{routes.push(options);ctx.LiveViewHelper.handlers={newPlayerPage:true}}},
  PlayerService:{getInstance:()=>player},
  PiPWindow:{isPiPEnabled:()=>true,PiPState:S,PiPTemplateType:{VIDEO_PLAY:0},VideoPlayControlGroup:{FAST_FORWARD_BACKWARD:102},
  PiPControlType:{VIDEO_PLAY_PAUSE:0},PiPControlStatus:{PLAY:1,PAUSE:0},
@@ -31,7 +32,7 @@ const ctx={exports:{},logInfo(){},logWarn(){},
 vm.runInNewContext(ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020}}).outputText,ctx);
 async function main(){
  const pip=ctx.exports.FloatingPiP.getInstance();
- const ui={getHostContext:()=>({}),getRouter:()=>({pushUrl:async options=>{routes.push(options);ctx.LiveViewHelper.handlers={newPlayerPage:true}}})};
+ const ui={getHostContext:()=>({})};
  assert.equal(await pip.open(ui,1920,1080),true);const first=controllers[0];
  assert.equal(first.starts,1);assert.equal(first.auto,false,'already-visible PiP cannot auto-start another desktop session');
  pip.foreground();storage.set('appInBackground',true);pip.foreground();storage.set('appInBackground',false);pip.foreground();

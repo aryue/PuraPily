@@ -16,7 +16,7 @@ const methods = [
   between('  private snapshotPreFsBranch():', '  /** ⭐ 关灯+竖屏非全屏'),
   between('  private contentBranchKey():', '  /** ⭐ 转场状态翻转'),
   between('  private manageSB(', '  async initW()'),
-  between('  private async restoreOrientationOnly():', '  private restoreFullscreenSource():'),
+  between('  private async restoreOrientationOnly(', '  private restoreFullscreenSource():'),
   between('  private restoreFullscreenSource():', '  // ⭐ 带动画进入全屏'),
   between('  private applyPlaybackWindowSize(', '  /** 根据新的窗口尺寸'),
   between('  private referenceSetFeed(value:', '  private referenceStopFeedMotion()'),
@@ -133,7 +133,8 @@ async function test(feed) {
   const directionPage = new context.exports.Page();
   const requested = [];
   Object.assign(directionPage, { referenceLayout: true, isPcDevice: false,
-    fullscreenDeviceOrientation: { start() {} },
+    fullscreenDeviceOrientation: { start() {}, refreshRotationLock() {} },
+    getUIContext: () => ({ getHostContext: () => ({}) }),
     mw: { enableLandscapeMultiWindow: async () => {}, setPreferredOrientation: async value => requested.push(value) } });
   for (const isLandscape of [false, true]) for (const ar of [9/16, 3/4, 1, 16/9]) {
     Object.assign(directionPage, { ar, isLs: isLandscape, fullscreenSource: { isLandscape } });
@@ -157,7 +158,8 @@ async function test(feed) {
     Object.assign(compiledPage, { referenceLayout: true, isPcDevice: false, isLs: true,
       ar: 9/16, fullscreenSource: { isLandscape: true }, mw: directionPage.mw,
       playbackWindow_: directionPage.playbackWindow_,
-      fullscreenDeviceOrientation: directionPage.fullscreenDeviceOrientation });
+      fullscreenDeviceOrientation: directionPage.fullscreenDeviceOrientation,
+      getUIContext: () => ({ getHostContext: () => ({}) }) });
     await compiledPage.prepareFullscreenEnvironment();
     assert.equal(requested.at(-1), 2, 'compiled portrait video fullscreen must preserve landscape');
   }

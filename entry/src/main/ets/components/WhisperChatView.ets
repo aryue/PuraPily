@@ -10,6 +10,7 @@ import { logInfo, logWarn, logError, errMsg } from '../utils/Logger';
 import { ImGrpcService, ImFetchResult } from '../services/ImGrpcService';
 import { getUserInfo, prefetchVideoPlayback } from '../api/BilibiliApi';
 import { ImMessage, ImMsgType } from '../model/ImMessage';
+import { AppNavigation } from '../services/AppNavigation';
 import { WhisperInputBar } from './WhisperInputBar';
 import { FullImagePreview } from './FullImagePreview';
 import { ChatEmote, ChatTextSegment } from '../utils/ChatEmote';
@@ -530,7 +531,7 @@ export struct WhisperChatView {
       // ⚠️ 路由不支持 URL 查询参数（?bvid= 报 Uri error），改用 params 对象传参
       prefetchVideoPlayback(bvid, 0, AppStorage.get<number>('defaultVideoQn') ?? 116);
       const params: Record<string, Object> = { 'bvid': bvid, 'title': title, 'coverUrl': coverUrl };
-      this.getUIContext().getRouter().pushUrl({ url: 'pages/VideoPlayerPage', params: params }).catch((err: Error) => {
+      AppNavigation.pushUrl({ url: 'pages/VideoPlayerPage', params: params }).catch((err: Error) => {
         logError(`[WhisperChat] 跳转视频失败: ${errMsg(err)}`);
       });
     } catch (err) {
@@ -546,7 +547,7 @@ export struct WhisperChatView {
     Stack({ alignContent: Alignment.Start }) {
       this.titleContentBuilder();
       Row() {
-        HeaderBackButton({ onBack: () => this.getUIContext().getRouter().back() })
+        HeaderBackButton({ onBack: () => { AppNavigation.back(); } })
       }.width('100%').height('100%').padding({ left: 16 }).hitTestBehavior(HitTestMode.Transparent)
     }.width('100%').height('100%')
   }

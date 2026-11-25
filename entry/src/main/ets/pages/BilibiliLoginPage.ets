@@ -1,4 +1,5 @@
 import { PageHeader } from '../components/PageHeader';
+import { AppNavigation } from '../services/AppNavigation';
 import { PageWallpaper } from '../components/PageWallpaper';
 // BilibiliLoginPage.ets
 import { webview } from '@kit.ArkWeb';
@@ -9,9 +10,8 @@ import { common } from '@kit.AbilityKit';
 import { verifyLoginSession } from '../api/BilibiliApi';
 import { hasLoginSession } from '../utils/LoginCookie';
 
-@Entry
 @Component
-struct BilibiliLoginPage {
+export struct BilibiliLoginPage {
   @StorageLink('pageWallpaperEnabled') pageWallpaperEnabled: boolean = false;
   @StorageLink('statusBarHeight') statusBarHeight: number = 40;
   @StorageLink('navIndicatorHeight') navIndicatorHeight: number = 0;
@@ -92,7 +92,7 @@ struct BilibiliLoginPage {
         if (hasLoginSession(bestCookie)) {
           this.cookieExtracted = true;
           if (await this.saveCookie(bestCookie)) {
-            setTimeout(() => this.getUIContext().getRouter().back(), 800);
+            setTimeout(() => { AppNavigation.back(); }, 800);
             return;
           }
           this.cookieExtracted = false;
@@ -121,7 +121,7 @@ struct BilibiliLoginPage {
     if (this.webController.accessBackward()) {
       this.webController.backward();
     } else {
-      this.getUIContext().getRouter().back();
+      AppNavigation.back();
     }
   }
 

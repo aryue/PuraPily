@@ -10,10 +10,10 @@ import { cardItemBg } from '../utils/CardStyle';
 import { PageHeader } from '../components/PageHeader';
 import { PageSurface } from '../components/PageSurface';
 import { PageWallpaper } from '../components/PageWallpaper';
-import { FloatingVideoTransition } from '../services/FloatingVideoTransition';
 import { VideoListItem } from '../components/VideoListItem';
+import { AppNavigation, NavPageHost } from '../services/AppNavigation';
 // UpSpacePage.ets — UP主个人空间页
-import { router, mediaquery, window } from '@kit.ArkUI';
+import { mediaquery, window } from '@kit.ArkUI';
 import { GlassMaterial } from '../utils/GlassMaterial';
 import { deviceInfo } from '@kit.BasicServicesKit';
 import { LengthMetrics } from '@kit.ArkUI';
@@ -111,9 +111,8 @@ function fmtPubdate(ts: number): string {
   return `${Math.floor(diff / 31536000)}年前`;
 }
 
-@Entry
 @Component({ freezeWhenInactive: true })
-struct UpSpacePage {
+export struct UpSpacePage {
   @StorageLink('pageWallpaperEnabled') pageWallpaperEnabled: boolean = false;
   // 路由参数
   @State mid: number = 0;
@@ -249,11 +248,16 @@ struct UpSpacePage {
   // 沉浸光感分段胶囊的玻璃条高（官方 SegmentButton 内在高 ~40.5，回归官方比例）；
   // 内容 34 居中、上下各 3vp 对称余量——系统内缩（~3vp，在哪侧未知）最多造成 1vp 视觉偏差
   @State segBarH: number = 40;
+  navHost: NavPageHost | null = null;
+  navParams: Record<string, Object> | null = null;
 
   async aboutToAppear(): Promise<void> {
+    if (this.navHost) {
+      this.navHost.attach((): void => {}, (): void => {}, (): boolean => this.onBackPress());
+    }
     this.isPageActive = true;
     // 获取路由参数
-    const params = router.getParams() as Record<string, Object>;
+    const params = this.navParams;
     if (params) {
       this.mid = (params['mid'] as number) || 0;
       this.upName = (params['upName'] as string) || '';
@@ -271,6 +275,7 @@ struct UpSpacePage {
   }
 
   aboutToDisappear(): void {
+    if (this.navHost) this.navHost.detach();
     this.isPageActive = false;
     this.spaceSearchVersion++;
     this.spaceSearchLoading = false;
@@ -478,7 +483,7 @@ struct UpSpacePage {
     }
     // ⭐ 预热详情（fire-and-forget）：把加载 cid 的 RTT 藏进转场+播放器初始化
     prefetchVideoPlayback(video.bvid, 0, AppStorage.get<number>('defaultVideoQn') ?? 116);
-    this.getUIContext().getRouter().pushUrl({
+    AppNavigation.pushUrl({
       url: 'pages/VideoPlayerPage',
       params: {
         bvid: video.bvid,
@@ -500,7 +505,7 @@ struct UpSpacePage {
 
   private goBack(): void {
     if (this.spaceSearchOpen) { this.closeSpaceSearch(); return; }
-    router.back();
+    AppNavigation.back();
   }
 
   onBackPress(): boolean {
@@ -612,7 +617,7 @@ struct UpSpacePage {
   private playVideo(item: UpSpaceVideoItem): void {
     // ⭐ 预热详情（fire-and-forget）：把加载 cid 的 RTT 藏进转场+播放器初始化
     prefetchVideoPlayback(item.bvid, 0, AppStorage.get<number>('defaultVideoQn') ?? 116);
-    this.getUIContext().getRouter().pushUrl({
+    AppNavigation.pushUrl({
       url: 'pages/VideoPlayerPage',
       params: {
         bvid: item.bvid,
@@ -645,7 +650,7 @@ struct UpSpacePage {
         this.getUIContext().getPromptAction().showToast({ message: '请先登录', duration: 1500 });
         return;
       }
-      router.pushUrl({
+      AppNavigation.pushUrl({
         url: 'pages/WhisperDetailPage',
         params: {
           'talkerId': this.mid,
@@ -775,13 +780,6 @@ struct UpSpacePage {
       .padding({ top: 12, bottom: 12 })
     }
     .width('100%')
-  }
-
-  pageTransition() {
-    if (FloatingVideoTransition.active()) {
-      PageTransitionEnter({ duration: FloatingVideoTransition.direction === 'minimize' ? 0 : FloatingVideoTransition.DURATION }).opacity(1)
-      PageTransitionExit({ duration: FloatingVideoTransition.DURATION }).opacity(1)
-    }
   }
 
   build() {
@@ -1877,7 +1875,7 @@ struct UpSpacePage {
     if (kw.endsWith('#')) kw = kw.substring(0, kw.length - 1);
     kw = kw.trim();
     if (!kw) return;
-    this.getUIContext().getRouter().pushUrl({ url: 'pages/SearchPage', params: { keyword: kw } }).catch(() => {});
+    AppNavigation.pushUrl({ url: 'pages/SearchPage', params: { keyword: kw } }).catch(() => {});
   }
 
   /** ⭐ 点击正文 @某人：进 TA 的空间（mid 来自富文本节点 rid） */
@@ -1889,7 +1887,7 @@ struct UpSpacePage {
     }
     let name: string = seg.text ?? '';
     if (name.startsWith('@')) name = name.substring(1);
-    this.getUIContext().getRouter().pushUrl({
+    AppNavigation.pushUrl({
       url: 'pages/UpSpacePage',
       params: { mid: mid, upName: name, upFace: '' }
     }).catch(() => {});
@@ -2070,7 +2068,7 @@ struct UpSpacePage {
       this.getUIContext().getPromptAction().showToast({ message: '暂无详情链接', duration: 1500 });
       return;
     }
-    this.getUIContext().getRouter().pushUrl({
+    AppNavigation.pushUrl({
       url: 'pages/VideoPlayerPage',
       params: {
         mediaId: seasonId > 0 ? seasonId : 0,
@@ -2097,7 +2095,7 @@ struct UpSpacePage {
       this.getUIContext().getPromptAction().showToast({ message: '无法打开该动态', duration: 1500 });
       return;
     }
-    this.getUIContext().getRouter().pushUrl({
+    AppNavigation.pushUrl({
       url: 'pages/DynamicDetailPage',
       params: { dynIdStr: item.idStr, preload: item }
     }).catch(() => {});
@@ -2106,7 +2104,7 @@ struct UpSpacePage {
   /** 点击作者行 → 打开该作者的空间 */
   private openUpSpace(item: SpaceDynamicItem): void {
     if (!item.authorName) return;
-    this.getUIContext().getRouter().pushUrl({
+    AppNavigation.pushUrl({
       url: 'pages/UpSpacePage',
       params: {
         mid: item.authorMid,

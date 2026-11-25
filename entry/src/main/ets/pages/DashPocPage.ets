@@ -1,4 +1,5 @@
 import { HeaderBackButton } from '../components/HeaderBackButton';
+import { AppNavigation } from '../services/AppNavigation';
 /**
  * DASH PoC 验证页
  *
@@ -82,9 +83,8 @@ interface PickAudioResult {
   r: RawDashAudio | null;
 }
 
-@Entry
 @Component
-struct DashPocPage {
+export struct DashPocPage {
   @StorageLink('isDarkMode') isDarkMode: boolean = false;
   @StorageLink('statusBarHeight') statusBarHeight: number = 0;
   @State bvid: string = '';
@@ -756,7 +756,7 @@ struct DashPocPage {
     Column() {
       // 标题栏
       Row() {
-        HeaderBackButton({ onBack: () => this.getUIContext().getRouter().back() })
+        HeaderBackButton({ onBack: () => { AppNavigation.back(); } })
 
         Text('DASH PoC 验证')
           .fontSize(20)

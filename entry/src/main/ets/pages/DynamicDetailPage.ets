@@ -31,6 +31,7 @@ import { fmtRelativeTime } from '../utils/TimeFormat';
 import { resizeImageUrl } from '../utils/ImageUrl';
 import { themeHexAlpha } from '../utils/ThemeColor';
 import { secondaryTextColor, tertiaryTextColor } from '../utils/SurfaceColors';
+import { AppNavigation, NavPageHost } from '../services/AppNavigation';
 
 /**
  * HdsNavigation（MINI 模式）标题栏高度（vp）。
@@ -91,9 +92,8 @@ interface DynamicCommentCache {
   hasMore: boolean;
 }
 
-@Entry
 @Component({ freezeWhenInactive: true })
-struct DynamicDetailPage {
+export struct DynamicDetailPage {
   @StorageLink('pageWallpaperEnabled') pageWallpaperEnabled: boolean = false;
   @StorageLink('hideNavigationIndicator') hideNavigationIndicator: boolean = false;
   @StorageLink('isDarkMode') isDarkMode: boolean = false;
@@ -353,8 +353,13 @@ struct DynamicDetailPage {
   private touchStartWX: number = 0;
   private touchStartWY: number = 0;
   private touchMoved: boolean = false;
+  navHost: NavPageHost | null = null;
+  navParams: Record<string, Object> | null = null;
 
   aboutToAppear(): void {
+    if (this.navHost) {
+      this.navHost.attach((): void => {}, (): void => this.onPageHide(), (): boolean => this.onBackPress());
+    }
     this.layoutActive = true;
     try {
       const d = display.getDefaultDisplaySync();
@@ -384,7 +389,7 @@ struct DynamicDetailPage {
     // 入口 sheet 盖在页面之上 ⇒ 回顶按钮下限抬高；历史落盘的位置可能低于新下限，这里夹一次
     this.dynDetailFloatBtnY = Math.max(this.floatBtnMinBottom(),
       Math.min(this.floatBtnMaxBottom(), this.dynDetailFloatBtnY));
-    const params = this.getUIContext().getRouter().getParams() as Record<string, Object>;
+    const params = this.navParams;
     if (!params) {
       this.err = '参数缺失';
       this.loading = false;
@@ -411,6 +416,7 @@ struct DynamicDetailPage {
 
 
   aboutToDisappear(): void {
+    if (this.navHost) this.navHost.detach();
     this.releaseEntryKeyboard();
     this.layoutActive = false;
     this.commentRequests.clear();
@@ -901,7 +907,7 @@ struct DynamicDetailPage {
   private async likeComment(c: ObservableComment): Promise<void> {
     if (!this.hasLogin()) {
       promptAction.showToast({ message: '登录后才能点赞', duration: 1500 });
-      this.getUIContext().getRouter().pushUrl({ url: 'pages/QrCodeLoginPage' }).catch(() => {});
+      AppNavigation.pushUrl({ url: 'pages/QrCodeLoginPage' }).catch(() => {});
       return;
     }
     const it = this.item;
@@ -941,7 +947,7 @@ struct DynamicDetailPage {
   private async submitComment(content: string, pictures: CommentImageDraft[]): Promise<boolean> {
     if (!this.hasLogin()) {
       promptAction.showToast({ message: '登录后才能发评论', duration: 1500 });
-      this.getUIContext().getRouter().pushUrl({ url: 'pages/QrCodeLoginPage' }).catch(() => {});
+      AppNavigation.pushUrl({ url: 'pages/QrCodeLoginPage' }).catch(() => {});
       return false;
     }
     const it = this.item;
@@ -1014,7 +1020,7 @@ struct DynamicDetailPage {
     if (!it) return;
     if (!this.hasLogin()) {
       promptAction.showToast({ message: '登录后才能点赞', duration: 1500 });
-      this.getUIContext().getRouter().pushUrl({ url: 'pages/QrCodeLoginPage' }).catch(() => {});
+      AppNavigation.pushUrl({ url: 'pages/QrCodeLoginPage' }).catch(() => {});
       return;
     }
     if (this.liking_) return;
@@ -1074,7 +1080,7 @@ struct DynamicDetailPage {
     if (!this.item || this.repostSending) return;
     if (!this.hasLogin()) {
       promptAction.showToast({ message: '登录后才能转发', duration: 1500 });
-      this.getUIContext().getRouter().pushUrl({ url: 'pages/QrCodeLoginPage' }).catch(() => {});
+      AppNavigation.pushUrl({ url: 'pages/QrCodeLoginPage' }).catch(() => {});
       return;
     }
     this.repostVisible = true;
@@ -1129,7 +1135,7 @@ struct DynamicDetailPage {
     if (!it || it.authorMid <= 0) return;
     if (!this.hasLogin()) {
       promptAction.showToast({ message: '登录后才能关注', duration: 1500 });
-      this.getUIContext().getRouter().pushUrl({ url: 'pages/QrCodeLoginPage' }).catch(() => {});
+      AppNavigation.pushUrl({ url: 'pages/QrCodeLoginPage' }).catch(() => {});
       return;
     }
     if (this.followBusy_) return;
@@ -1157,7 +1163,7 @@ struct DynamicDetailPage {
   private openUpSpace(): void {
     const it = this.item;
     if (!it || !it.authorName) return;
-    this.getUIContext().getRouter().pushUrl({
+    AppNavigation.pushUrl({
       url: 'pages/UpSpacePage',
       params: { mid: it.authorMid, upName: it.authorName, upFace: it.authorFace }
     }).catch(() => {});
@@ -1431,7 +1437,7 @@ struct DynamicDetailPage {
   @Builder
   HeaderBackControl() {
     Row() {
-      HeaderBackButton({ onBack: () => this.getUIContext().getRouter().back() })
+      HeaderBackButton({ onBack: () => { AppNavigation.back(); } })
     }.width('100%').height(TITLE_BAR_H_VP).padding({ left: 16 }).id('dynamic-detail-header')
       .onAreaChange(() => this.queueTopGapCorrection())
       .hitTestBehavior(HitTestMode.Transparent)

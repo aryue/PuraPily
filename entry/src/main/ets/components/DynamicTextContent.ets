@@ -1,4 +1,5 @@
 import { DynTextSegment } from '../api/BilibiliApi';
+import { AppNavigation } from '../services/AppNavigation';
 
 /**
  * 动态正文渲染（文字 / B站表情图 / #话题#胶囊 / @某人 混排）
@@ -38,7 +39,7 @@ export struct DynamicTextContent {
     if (kw.endsWith('#')) kw = kw.substring(0, kw.length - 1);
     kw = kw.trim();
     if (!kw) return;
-    this.getUIContext().getRouter().pushUrl({ url: 'pages/SearchPage', params: { keyword: kw } }).catch(() => {});
+    AppNavigation.pushUrl({ url: 'pages/SearchPage', params: { keyword: kw } }).catch(() => {});
   }
 
   /** ⭐ 点击正文里的 @某人：进 TA 的空间（mid 来自富文本节点 rid，缺失就提示而不是静默无反应） */
@@ -50,7 +51,7 @@ export struct DynamicTextContent {
     }
     let name: string = seg.text ?? '';
     if (name.startsWith('@')) name = name.substring(1);
-    this.getUIContext().getRouter().pushUrl({
+    AppNavigation.pushUrl({
       url: 'pages/UpSpacePage',
       params: { mid: mid, upName: name, upFace: '' }
     }).catch(() => {});

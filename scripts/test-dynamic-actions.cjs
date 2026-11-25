@@ -14,6 +14,7 @@ function extract(source, name) {
 const source = fs.readFileSync(root + 'pages/DynamicsPage.ts', 'utf8');
 let likeResult = { ok: true }, forwardResult = { ok: true }, calls = 0;
 const context = { exports: {}, prefetchVideoPlayback() {}, AppStorage: { get() { return 116; } }, promptAction: { showToast() {} }, logError() {},
+  AppNavigation: { targetPage: null, pushUrl(route) { this.targetPage.routes.push(route); return Promise.resolve(); } },
   ObservableDynLike: { from: (liked, count) => ({ liked, count }) },
   setDynamicLike: async () => { calls++; return likeResult; }, repostDynamic: async () => forwardResult };
 const methods = ['likeStateOf', 'syncLikeStates', 'syncDynLikeCopies', 'toggleDynLike', 'playDynVideo',
@@ -26,6 +27,7 @@ function page() {
   Object.assign(p, { isLoggedIn: true, likeStates_: new Map(), likingIds_: new Set(), dynFeedCache: new Map(),
     tabFeeds: [{ items: [] }, { items: [] }], routes: [], goToLogin() { p.login = true; }, saveTabFeed() {},
     getUIContext: () => ({ getRouter: () => ({ pushUrl: r => { p.routes.push(r); return Promise.resolve(); } }) }) });
+  context.AppNavigation.targetPage = p;
   return p;
 }
 (async () => {
@@ -70,11 +72,11 @@ function page() {
   q.tabFeeds = [{ items: [item] }, { items: [item] }]; forwardResult = { ok: true }; await q.submitDynForward();
   assert.equal(item.forwardCount, 5, 'same item in two tabs only increments once'); assert.equal(q.repostVisible, false);
   const player = fs.readFileSync(root + 'pages/VideoPlayerPage.ts', 'utf8');
-  const initStart = player.indexOf('    const p = router.getParams()');
+  const initStart = player.indexOf('    const p = this.navParams');
   const init = player.slice(initStart, player.indexOf('    this.continuationRestore_', initStart));
-  const state = {};
+  const state = { navParams: { openComments: true } };
   vm.runInNewContext('(function(){' + ts.transpileModule(init, {}).outputText + '}).call(state)', {
-    state, router: { getParams: () => ({ openComments: true }) }
+    state
   });
   assert.equal(state.at, 1); assert.equal(state.referenceTabProgress, 1);
   const actions = fs.readFileSync(root + 'components/DynamicFeedActions.ts', 'utf8');

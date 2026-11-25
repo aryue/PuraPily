@@ -36,6 +36,8 @@ export struct VideoCardComponent {
   private openAfterEntrance: boolean = false;
   @StorageProp('videoCardEdgeLight') videoCardEdgeLight: boolean = false;
   @StorageLink('cardFeedbackRevision') feedbackRevision: number = 0;
+  @StorageProp('homeNavCovered') navCovered: boolean = false;
+  @StorageProp('homeEntranceSettleRevision') @Watch('settleEntrance') settleRevision: number = 0;
 
   @StorageProp('homeMorphFlyingCard') flyingCard: string = '';
   @StorageProp('homeCardMorph') liveMorph: boolean = false;
@@ -83,7 +85,9 @@ export struct VideoCardComponent {
   }
 
   private prepareEntrance(): void {
-    this.entranceScale = this.revealedCardIds && !this.revealedCardIds.has(this.item.id) ? 0.2 : 1;
+    this.entranceRunning = false;
+    this.openAfterEntrance = false;
+    this.entranceScale = this.revealedCardIds && !this.navCovered && !this.revealedCardIds.has(this.item.id) ? 0.2 : 1;
     if (this.entranceScale === 1) return;
     // A recycled node may keep its previous visible ratio and miss the new item's callback.
     this.entranceTimer = setTimeout(() => {
@@ -138,6 +142,16 @@ export struct VideoCardComponent {
       this.openAfterEntrance = false;
       this.onCardClick?.(this.item, this.liveHost?.flight(this.item.id));
     }
+  }
+
+  /** Navigation 返回首页时强制结束被冻结/取消的入场，避免卡片停在 0.2 缩放。 */
+  private settleEntrance(): void {
+    this.clearEntranceTimers();
+    this.entranceRevision++;
+    this.revealedCardIds?.add(this.item.id);
+    this.entranceScale = 1;
+    this.entranceRunning = false;
+    this.openAfterEntrance = false;
   }
 
   private openCard(): void {

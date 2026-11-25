@@ -3,12 +3,11 @@ import { GlassMaterial } from '../utils/GlassMaterial';
 import { HeaderBackButton } from '../components/HeaderBackButton';
 import { gradientTitleBarStyle } from '../utils/HeaderStyle';
 import { PageWallpaper } from '../components/PageWallpaper';
-import { FloatingVideoTransition } from '../services/FloatingVideoTransition';
 import { VideoListItem } from '../components/VideoListItem';
 import { VideoCardFeedback } from '../services/VideoCardFeedback';
 import { resizeImageUrl } from '../utils/ImageUrl';
 // WatchHistoryPage.ets - 观看历史页面
-import { router, mediaquery, window, LengthMetrics, curves } from '@kit.ArkUI';
+import { mediaquery, window, LengthMetrics, curves } from '@kit.ArkUI';
 import { logInfo, logWarn, logError } from '../utils/Logger';
 import { common } from '@kit.AbilityKit';
 import { preferences } from '@kit.ArkData';
@@ -24,6 +23,7 @@ import { motion } from '@kit.MultimodalAwarenessKit';
 import { ImmersiveLightWrapper } from '../components/ImmersiveLightWrapper';
 import { HdsMiniBarButton } from '../components/infra/HdsMiniBarButton';
 import { StatusBarUtils } from '../utils/StatusBarUtils';
+import { AppNavigation, NavPageHost } from '../services/AppNavigation';
 import { FrameCallback } from '@ohos.arkui.UIContext';
 
 class HistoryFirstFrameCallback extends FrameCallback {
@@ -38,9 +38,8 @@ class HistoryFirstFrameCallback extends FrameCallback {
   }
 }
 
-@Entry
 @Component({ freezeWhenInactive: true })
-struct WatchHistoryPage {
+export struct WatchHistoryPage {
   @StorageLink('pageWallpaperEnabled') pageWallpaperEnabled: boolean = false;
   @State historyList: WatchHistoryItem[] = [];
   @StorageLink('cardFeedbackRevision') @Watch('onCardFeedbackChange') feedbackRevision: number = 0;
@@ -138,8 +137,12 @@ struct WatchHistoryPage {
   @StorageProp('biliCookie') @Watch('onHistorySessionChanged') historySession: string = '';
   private helper: WatchHistoryHelper = WatchHistoryHelper.getInstance();
   private searchDebounceTimer: number = -1;
+  navHost: NavPageHost | null = null;
 
   aboutToAppear() {
+    if (this.navHost) {
+      this.navHost.attach((): void => this.onPageShow(), (): void => this.onPageHide(), null);
+    }
     this.historyPageActive = true;
     this.getUIContext().postFrameCallback(new HistoryFirstFrameCallback(() => {
       if (!this.historyPageActive || this.historyStarted) return;
@@ -244,6 +247,7 @@ struct WatchHistoryPage {
   }
 
   aboutToDisappear() {
+    if (this.navHost) this.navHost.detach();
     this.historyPageActive = false;
     this.historyRequestVersion++;
     if (this.landscapeListener) {
@@ -449,7 +453,7 @@ struct WatchHistoryPage {
     logInfo(`[WatchHistory] 播放视频: bvid=${item.bvid}, aid=${item.aid}, playProgress=${item.playProgress}, totalDuration=${item.totalDuration}`);
 
     // 注：优先使用bvid，如果没有bvid但有aid，VideoPlayerPage会通过aid获取视频信息
-    this.getUIContext().getRouter().pushUrl({
+    AppNavigation.pushUrl({
       url: 'pages/VideoPlayerPage',
       params: {
         bvid: item.bvid || '',  // 可能为空，但aid会有值
@@ -473,7 +477,7 @@ struct WatchHistoryPage {
 
   goBack(): void {
     this.triggerHaptic();
-    router.back();
+    AppNavigation.back();
   }
 
   // 搜索文本变化处理（带防抖，避免每次按键都触发 WaterFlow 重排）
@@ -654,13 +658,6 @@ struct WatchHistoryPage {
         if (!this.isEditMode) { this.isEditMode = true; this.toggleSelect(item.id); }
       }
     })
-  }
-
-  pageTransition() {
-    if (FloatingVideoTransition.active()) {
-      PageTransitionEnter({ duration: FloatingVideoTransition.direction === 'minimize' ? 0 : FloatingVideoTransition.DURATION }).opacity(1)
-      PageTransitionExit({ duration: FloatingVideoTransition.DURATION }).opacity(1)
-    }
   }
 
   private toggleHeaderSearch(): void {

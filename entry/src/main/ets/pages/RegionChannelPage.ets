@@ -1,4 +1,5 @@
 import { resizeImageUrl } from '../utils/ImageUrl';
+import { AppNavigation } from '../services/AppNavigation';
 import { HomeInitialLoading } from '../components/HomeInitialLoading';
 import { HomeChannelCardEntrance } from '../components/HomeChannelCardEntrance';
 import { HOME_SEARCH_ROW_HEIGHT, homeHeaderTopInset } from '../utils/HomeHeaderLayout';
@@ -270,7 +271,7 @@ export struct RegionChannelPage {
       prefetchVideoPlayback(item.id || String(item.aid), item.cid || 0,
         AppStorage.get<number>('defaultVideoQn') ?? 116);
     }
-    this.getUIContext().getRouter().pushUrl({
+    AppNavigation.pushUrl({
       url: 'pages/VideoPlayerPage',
       params
     }).catch((error: Error) => logError('[RegionChannelPage] 跳转失败', error));

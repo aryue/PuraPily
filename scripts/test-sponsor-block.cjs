@@ -16,6 +16,7 @@ const settings = read('entry/src/main/ets/pages/SponsorBlockPage.ets');
 const profile = read('entry/src/main/ets/pages/ProfilePage.ets');
 const ability = read('entry/src/main/ets/entryability/EntryAbility.ets');
 const routes = read('entry/src/main/resources/base/profile/main_pages.json');
+const navShell = read('entry/src/main/ets/components/NavRouteShell.ets');
 
 // 1) 分类与跳过方式：12 类、5 种模式；零长度片段是时间点标记。
 for (const key of ['sponsor', 'selfpromo', 'exclusive_access', 'interaction', 'poi_highlight',
@@ -105,7 +106,8 @@ assert.ok((api.match(/clipInfoList: clipInfoList/g) || []).length >= 3,
   'all playurl branches must copy clipInfoList');
 
 // 8) 设置入口与路由。
-assert.ok(routes.includes('"pages/SponsorBlockPage"'), 'SponsorBlockPage route missing');
+assert.ok(navShell.includes("this.routeName === 'SponsorBlockPage'"), 'SponsorBlockPage route missing');
+assert.ok(!routes.includes('pages/SponsorBlockPage'), 'SponsorBlockPage must be a NavDestination, not a router page');
 assert.ok(profile.includes("'setting-entry-sponsor-block'") &&
   profile.includes("url: 'pages/SponsorBlockPage'"),
   'playback settings must link to SponsorBlockPage');

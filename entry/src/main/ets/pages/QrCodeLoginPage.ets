@@ -2,7 +2,7 @@ import { PageSurface } from '../components/PageSurface';
 import { PageHeader } from '../components/PageHeader';
 import { PageWallpaper } from '../components/PageWallpaper';
 // QrCodeLoginPage.ets — 扫码登录（纯API方案，不依赖WebView Cookie同步延迟）
-import { router } from '@kit.ArkUI';
+import { AppNavigation } from '../services/AppNavigation';
 import { logInfo, logWarn, logError } from '../utils/Logger';
 import { saveLoginCredentials } from '../utils/CredentialStore';
 import { common } from '@kit.AbilityKit';
@@ -19,11 +19,10 @@ import { mergeLoginCookies, hasLoginSession } from '../utils/LoginCookie';
 import { TvQrAuthorization, TvAuthorizationState } from '../services/TvQrAuthorization';
 import { authorizeCurrentAccount } from '../services/CurrentAccountAuthorization';
 
-interface QrCodeLoginParams { tvMode?: boolean; }
+export interface QrCodeLoginParams { tvMode?: boolean; }
 
-@Entry
 @Component
-struct QrCodeLoginPage {
+export struct QrCodeLoginPage {
   @StorageLink('isDarkMode') isDarkMode: boolean = true;
   @StorageLink('pageWallpaperEnabled') pageWallpaperEnabled: boolean = false;
   @State qrContent: string = '';
@@ -49,11 +48,12 @@ struct QrCodeLoginPage {
   private lastPollAt: number = 0;
   private tvAuthorizationSession: number = -1;
   private loginPageActive: boolean = true;
+  navParams: QrCodeLoginParams | null = null;
 
   async aboutToAppear(): Promise<void> {
     this.loginPageActive = true;
     this.canAuthorizeCurrentAccount = hasLoginSession(AppStorage.get<string>('biliCookie') || '');
-    const params = this.getUIContext().getRouter().getParams() as QrCodeLoginParams;
+    const params = this.navParams;
     if (params?.tvMode === true) this.isTvMode = true;
     await this.generateQrCode();
   }
@@ -159,7 +159,7 @@ struct QrCodeLoginPage {
           this.isPolling = false;
           this.statusSubText = '客户端授权已保存，即将返回';
           setTimeout(() => {
-            if (this.loginPageActive && generation === this.loginGeneration) this.getUIContext().getRouter().back();
+            if (this.loginPageActive && generation === this.loginGeneration) AppNavigation.back();
           }, 800);
         } else if (state.status === QrCodeStatus.ERROR || state.status === QrCodeStatus.EXPIRED) {
           this.isExpired = true;
@@ -304,7 +304,7 @@ struct QrCodeLoginPage {
     }
 
     // 延迟返回上一页
-    setTimeout(() => this.getUIContext().getRouter().back(), 800);
+    setTimeout(() => { AppNavigation.back(); }, 800);
   }
 
   /** 重新生成二维码 */
@@ -334,7 +334,7 @@ struct QrCodeLoginPage {
 
   /** 切换到 WebView 登录 */
   private switchToWebLogin(): void {
-    router.replaceUrl({ url: 'pages/BilibiliLoginPage' }).catch((err: Error) => {
+    AppNavigation.replaceUrl({ url: 'pages/BilibiliLoginPage' }).catch((err: Error) => {
       logError('跳转Web登录失败', err);
     });
   }

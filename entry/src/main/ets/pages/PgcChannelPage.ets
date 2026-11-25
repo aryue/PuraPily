@@ -1,4 +1,5 @@
 import { HomeChannelCover } from '../components/HomeChannelCover';
+import { AppNavigation } from '../services/AppNavigation';
 import { HomeInitialLoading } from '../components/HomeInitialLoading';
 import { HomeChannelCardEntrance } from '../components/HomeChannelCardEntrance';
 import { GlassMaterial } from '../utils/GlassMaterial';
@@ -585,7 +586,7 @@ export struct PgcChannelPage {
       } catch (_) { }
       return;
     }
-    this.getUIContext().getRouter().pushUrl({
+    AppNavigation.pushUrl({
       url: 'pages/VideoPlayerPage',
       params: {
         // ⭐ 优先传 seasonId：/pgc/view/web/season 才能返回完整分集（episodes）；

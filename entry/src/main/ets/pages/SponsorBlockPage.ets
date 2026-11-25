@@ -1,4 +1,5 @@
 import { preferences } from '@kit.ArkData';
+import { AppNavigation } from '../services/AppNavigation';
 import { common } from '@kit.AbilityKit';
 import { deviceInfo } from '@kit.BasicServicesKit';
 import { LengthMetrics } from '@kit.ArkUI';
@@ -25,9 +26,8 @@ import { SponsorBlockPrefs } from '../utils/SponsorBlockPrefs';
  * - 番剧片头/片尾：playurl clip_info_list 的独立开关，默认跳过一次；
  * - 所有值写入 AppStorage 立即生效，并落盘到 my_app_settings。
  */
-@Entry
 @Component
-struct SponsorBlockPage {
+export struct SponsorBlockPage {
   @StorageLink('pageWallpaperEnabled') pageWallpaperEnabled: boolean = false;
   @StorageLink('isDarkMode') isDarkMode: boolean = true;
   @StorageLink('statusBarHeight') statusBarHeight: number = 0;
@@ -236,7 +236,7 @@ struct SponsorBlockPage {
 
         PageHeader({ withTabs: false }) {
           Row({ space: 10 }) {
-            HeaderBackButton({ onBack: () => this.getUIContext().getRouter().back() })
+            HeaderBackButton({ onBack: () => { AppNavigation.back(); } })
             Text('空降助手').fontSize(18).fontWeight(FontWeight.Medium)
               .fontColor(this.isDarkMode ? '#E7E9EB' : '#18191C')
           }.height(44).width('100%').padding({ left: 8, top: this.statusBarHeight })

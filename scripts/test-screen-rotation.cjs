@@ -50,7 +50,7 @@ function load(file, methods) {
       on: (_id, callback) => { trackerContext.sample = callback; },
       off: (_id, callback) => { assert.equal(callback, trackerContext.sample); trackerContext.sample = undefined; } },
     settings: { general: { ACCELEROMETER_ROTATION_STATUS: 'rotation' }, getValueSync: () => trackerContext.rotation },
-    Date: { now: () => trackerContext.now }, now: 100, rotation: '1' };
+    Date: { now: () => trackerContext.now }, now: 100, rotation: '1', logInfo() {} };
   const trackerSource = fs.readFileSync(path.join(base, 'utils/FullscreenDeviceOrientation.ets'), 'utf8')
     .replace(/^import .*$/gm, '');
   vm.runInNewContext(ts.transpileModule(trackerSource, {
@@ -58,13 +58,19 @@ function load(file, methods) {
   }).outputText, trackerContext);
   const tracker = new trackerContext.exports.FullscreenDeviceOrientation();
   tracker.start();
-  const target = (policy, current = true) => tracker.returnLandscape(policy, current, {});
+  const target = (policy, current = true, phone = false) => tracker.returnLandscape(policy, current, phone, {});
   assert.equal(target(Orientation.AUTO_ROTATION), true, 'missing data falls back to the current window');
   trackerContext.sample({ x: 1, y: 9, z: 0 });
   assert.equal(target(Orientation.AUTO_ROTATION), false, 'upright device can return directly to portrait');
   assert.equal(target(Orientation.AUTO_ROTATION_RESTRICTED), false);
   trackerContext.rotation = '0';
-  assert.equal(target(Orientation.AUTO_ROTATION_RESTRICTED), true, 'respect system auto-rotation lock');
+  assert.equal(target(Orientation.AUTO_ROTATION_RESTRICTED, true, true), false,
+    'locked phone always returns portrait');
+  assert.equal(target(Orientation.AUTO_ROTATION_RESTRICTED, true, false), false,
+    'locked tablet follows the live device posture');
+  trackerContext.sample({ x: 9, y: 1, z: 0 });
+  assert.equal(target(Orientation.AUTO_ROTATION_RESTRICTED, false, false), true,
+    'locked tablet in landscape keeps landscape');
   assert.equal(target(Orientation.AUTO_ROTATION_LANDSCAPE), true, 'respect app landscape lock');
   trackerContext.sample({ x: -9, y: 1, z: 0 });
   assert.equal(target(Orientation.AUTO_ROTATION, false), true, 'sideways device can return directly to landscape');
@@ -74,7 +80,7 @@ function load(file, methods) {
   assert.equal(target(Orientation.AUTO_ROTATION, false), false, 'flat data cannot revive a stale sample');
   tracker.stop();
   assert.equal(trackerContext.sample, undefined);
-  const p = load('pages/VideoPlayerPage.ets', ['async restoreOrientationOnly():', 'fullscreenReturningToPortrait():']);
+  const p = load('pages/VideoPlayerPage.ets', ['async restoreOrientationOnly(', 'fullscreenReturningToPortrait():']);
   const applied = [];
   Object.assign(p, { fullscreenDeviceOrientation: { stop() {} },
     mw: { disableLandscapeMultiWindow: async () => {}, setPreferredOrientation: async value => applied.push(value) } });

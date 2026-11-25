@@ -3,8 +3,9 @@ import { GlassMaterial } from '../utils/GlassMaterial';
 import { pageBackgroundColor } from '../utils/SurfaceColors';
 import { PageWallpaper } from '../components/PageWallpaper';
 import { NativeHeaderGlass } from '../components/NativeHeaderGlass';
-import { FloatingVideoTransition } from '../services/FloatingVideoTransition';
 import { HomeCardMorph } from '../services/HomeCardMorph';
+import { AppNavigation } from '../services/AppNavigation';
+import { NavRouteShell } from '../components/NavRouteShell';
 import { HOME_SEARCH_ROW_HEIGHT, HOME_CHANNEL_ROW_HEIGHT } from '../utils/HomeHeaderLayout';
 import { common } from '@kit.AbilityKit';
 import { window, uiMaterial } from '@kit.ArkUI';
@@ -35,6 +36,8 @@ struct Index {
   private tabs: TabsController = new TabsController();
   @State private homeHeaderSearchWidth: number = 200;
   private lastExitBackTime: number = 0;
+  private homeSurfaceActive: boolean = true;
+  private homeSurfaceInitialized: boolean = false;
   private mainWindow: window.Window | null = null;
   private warmHostCtl: XComponentController = new XComponentController();
   private sizeListener: ((size: window.Size) => void) | null = null;
@@ -57,6 +60,8 @@ struct Index {
   @State immersiveHeader: boolean = false;
   @State ready: boolean = false;
   @StorageLink('continuationMainTab') @Watch('updateHomeActivity') activeTab: number = 0;
+  @StorageLink('navStackDepth') @Watch('onNavDepthChanged') navStackDepth: number = 0;
+  private readonly pageStack: NavPathStack = new NavPathStack();
   @StorageLink('floatingBottomBar') @Watch('updateSearchVisibility') floatingBottomBar: boolean = true;
   @StorageLink('homeBarsHidden') @Watch('updateSearchVisibility') bottomBarHidden: boolean = false;
   @StorageLink('homeSearchRowHeight') searchRowHeight: number = HOME_SEARCH_ROW_HEIGHT;
@@ -72,14 +77,14 @@ struct Index {
   @StorageLink('homeChannelPosition') channelPosition: number = 2;
   @State homeTabCenters: number[] = [32, 88, 144, 200, 256, 312];
   @StorageLink('homeScrollOffset') homeScrollOffset: number = 0;
-  /**
-   * 封面共享元素转场（开关 homeCardMorph）：页面实例化时就落定首页 Exit 快照。
-   * `pageTransition()` 在页面创建后求值一次，那时 `aboutToAppear` 可能还没跑到（它是 async），
-   * 所以快照必须放在字段初始化里；pageTransition 只读这个结果。
-   */
-  private readonly morphExitLocked: boolean = HomeCardMorph.primeExitInstant();
-
   async aboutToAppear(): Promise<void> {
+    // Keeps the shared-element switch snapshot in the same lifecycle order as the old
+    // pageTransition path; card clicks can only happen after this page has appeared.
+    HomeCardMorph.primeExitInstant();
+    this.pageStack.setInterception({
+      didShow: (): void => { this.onNavigationChanged(); }
+    });
+    AppNavigation.bind(this.pageStack);
     this.updateHomeActivity();
     const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
     try {
@@ -167,7 +172,14 @@ struct Index {
   }
 
   private updateHomeActivity(): void {
-    AppStorage.setOrCreate('homeFeedActive', this.pageVisible && this.activeTab === 0);
+    AppStorage.setOrCreate('homeNavCovered', this.navStackDepth > 0);
+    const surfaceActive = this.pageVisible && this.activeTab === 0 && this.navStackDepth === 0;
+    AppStorage.setOrCreate('homeFeedActive', surfaceActive);
+    if (this.homeSurfaceInitialized && surfaceActive && !this.homeSurfaceActive) {
+      this.bumpHomeEntranceSettle();
+    }
+    this.homeSurfaceActive = surfaceActive;
+    this.homeSurfaceInitialized = true;
     if (this.activeTab !== 0) IjkWarmPool.get().activateHomeScene('');
     this.updateMessagePolling();
     this.updateSearchVisibility();
@@ -182,7 +194,7 @@ struct Index {
   }
 
   private updateMessagePolling(): void {
-    if (!this.pageVisible || this.activeTab !== 0 || this.appInBackground ||
+    if (!this.pageVisible || this.activeTab !== 0 || this.navStackDepth !== 0 || this.appInBackground ||
       !this.messageCookie.includes('SESSDATA=')) {
       this.stopMessagePolling();
       return;
@@ -250,21 +262,55 @@ struct Index {
   onPageShow(): void {
     this.lastExitBackTime = 0;
     this.pageVisible = true;
+    AppNavigation.markIndexVisible(true);
+    AppNavigation.notifyAppForeground();
+    this.navStackDepth = this.pageStack.size();
     this.updateHomeActivity();
     this.restoreSystemBars();
-    if (AppStorage.get<boolean>('goHome')) {
-      AppStorage.set('goHome', false);
-      this.activeTab = 0;
-      this.tabs.changeIndex(0);
-    }
+    this.consumeGoHomeRequest();
   }
 
   onPageHide(): void {
     AppStorage.setOrCreate('nativeCardLightActive', false);
     this.lastExitBackTime = 0;
     this.pageVisible = false;
+    AppNavigation.markIndexVisible(false);
+    AppNavigation.notifyAppBackground();
     // Frozen child components may defer @Watch delivery; stop list prefetch synchronously.
     this.updateHomeActivity();
+  }
+
+  onNavDepthChanged(): void {
+    this.updateHomeActivity();
+    this.consumeGoHomeRequest();
+    if (this.navStackDepth === 0) {
+      this.lastExitBackTime = 0;
+      this.restoreSystemBars();
+    }
+  }
+
+  private onNavigationChanged(): void {
+    this.navStackDepth = this.pageStack.size();
+    AppNavigation.emitTopChanged();
+    this.updateHomeActivity();
+    this.consumeGoHomeRequest();
+    if (this.navStackDepth === 0) {
+      this.lastExitBackTime = 0;
+      this.restoreSystemBars();
+    }
+  }
+
+  private consumeGoHomeRequest(): void {
+    if (this.navStackDepth !== 0) return;
+    if (!AppStorage.get<boolean>('goHome')) return;
+    AppStorage.set('goHome', false);
+    this.activeTab = 0;
+    this.tabs.changeIndex(0);
+  }
+
+  private bumpHomeEntranceSettle(): void {
+    const revision = (AppStorage.get<number>('homeEntranceSettleRevision') ?? 0) + 1;
+    AppStorage.setOrCreate('homeEntranceSettleRevision', revision);
   }
 
   private restoreSystemBars(): void {
@@ -303,7 +349,7 @@ struct Index {
   }
 
   private navigate(page: string): void {
-    this.getUIContext().getRouter().pushUrl({ url: page }).catch((error: Error) => {
+    AppNavigation.pushUrl({ url: page }).catch((error: Error) => {
       logError('[Index] navigation failed', error);
     });
   }
@@ -449,17 +495,9 @@ struct Index {
     .onClick(() => this.selectTab(index))
   }
 
-  pageTransition() {
-    if (FloatingVideoTransition.active()) {
-      PageTransitionEnter({ duration: FloatingVideoTransition.direction === 'minimize' ? 0 : FloatingVideoTransition.DURATION }).opacity(1)
-      PageTransitionExit({ duration: FloatingVideoTransition.DURATION }).opacity(1)
-    } else if (this.morphExitLocked) {
-      // ⭐ 共享元素新路径（开关 homeCardMorph）：进入瞬时切页；退出用同样时长、无位移的
-      //    转场把真实首页留在下面。返回时先 router.back()，首页作为 live 背景立即出现，
-      //    播放页的非零 Exit 再撑住自己的收缩画面，不需要首页截图底板。
-      PageTransitionEnter({ type: RouteType.None, duration: 0 }).opacity(1)
-      PageTransitionExit({ type: RouteType.None, duration: HomeCardMorph.LIVE_BACKDROP_MS, curve: Curve.Linear }).opacity(1)
-    }
+  @Builder
+  PageMap(name: string, param: Object) {
+    NavRouteShell({ routeName: name, routeParam: param === undefined ? null : param })
   }
 
   build() {
@@ -475,7 +513,7 @@ struct Index {
         .position({ x: 0, y: 0 })
     Stack() {
       if (this.ready) {
-        Navigation() {
+        Navigation(this.pageStack) {
           Column() {
             Stack({ alignContent: Alignment.Top }) {
               Tabs({ controller: this.tabs, index: this.activeTab }) {
@@ -506,10 +544,14 @@ struct Index {
           barStyle: BarStyle.STACK,
           backgroundColor: Color.Transparent
         })
+        .navDestination(this.PageMap)
+        .customNavContentTransition((from: NavContentInfo, to: NavContentInfo,
+          operation: NavigationOperation): NavigationAnimatedTransition | undefined =>
+          AppNavigation.navTransition(from, to, operation))
         .ignoreLayoutSafeArea([LayoutSafeAreaType.SYSTEM], [LayoutSafeAreaEdge.TOP, LayoutSafeAreaEdge.BOTTOM])
         .width('100%').height('100%')
         .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP, SafeAreaEdge.BOTTOM])
-        if (this.floatingBottomBar) {
+        if (this.floatingBottomBar && this.navStackDepth === 0) {
           Stack({ alignContent: Alignment.Bottom }) {
             FloatingBottomBar({
               activeIndex: this.activeTab,

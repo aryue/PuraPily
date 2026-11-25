@@ -43,7 +43,7 @@ function loadCard(componentName, methodNames) {
 
 const { source, Card } = loadCard('VideoCardComponent',
   ['aboutToAppear', 'aboutToReuse', 'aboutToRecycle', 'aboutToDisappear', 'prepareEntrance',
-    'clearEntranceTimers', 'revealEntrance', 'completeEntrance', 'openCard']);
+    'clearEntranceTimers', 'revealEntrance', 'completeEntrance', 'openCard', 'settleEntrance']);
 const revealedCardIds = new Set();
 const animations = [];
 const animateToImmediately = (options, update) => {
@@ -107,7 +107,7 @@ assert.match(home, /entranceCenterX: this\.cardEntranceCenterX\(index\)/);
 
 const { Card: ChannelCard } = loadCard('HomeChannelCardEntrance',
   ['aboutToAppear', 'aboutToDisappear', 'clearEntranceTimers', 'clearEntranceFallback',
-    'updateEntrance', 'reveal', 'completeEntrance', 'anchorId']);
+    'updateEntrance', 'reveal', 'completeEntrance', 'anchorId', 'settleEntrance']);
 const channelCard = Object.assign(new ChannelCard(), {
   cardKey: 'channel-card', gridId: 'grid', channelIndex: 3, activeChannel: 2, paneActive: true,
   homeActive: true, visible: false, entranceScale: 1, entranceTimer: -1,
@@ -138,5 +138,30 @@ assert.equal(channelCard.entranceLayer, false);
 channelCard.visible = true;
 channelCard.updateEntrance();
 assert.equal(animations.length, 3);
+assert.match(source, /homeNavCovered/, 'compiled card must skip entrance while Navigation covers home');
+assert.match(source, /homeEntranceSettleRevision/, 'compiled card must listen for the Navigation return settle signal');
+const settledCard = Object.assign(new Card(), {
+  item: { id: 'settled' }, revealedCardIds: new Set(), navCovered: false, entranceScale: 0.2,
+  entranceRevision: 0, entranceTimer: -1, entranceCompletionTimer: -1, entranceSettleTimer: -1
+});
+settledCard.settleEntrance();
+assert.equal(settledCard.entranceScale, 1, 'Navigation return hard-settles a card frozen at 0.2');
+assert.ok(settledCard.revealedCardIds.has('settled'));
+const coveredCard = Object.assign(new Card(), {
+  item: { id: 'covered' }, revealedCardIds: new Set(), navCovered: true, entranceScale: 0.2,
+  entranceRevision: 0, entranceTimer: -1, entranceCompletionTimer: -1, entranceSettleTimer: -1
+});
+coveredCard.aboutToAppear();
+assert.equal(coveredCard.entranceScale, 1, 'cards created while Navigation covers home never start compact');
+assert.ok(!timers.size);
+const settledChannel = Object.assign(new ChannelCard(), {
+  cardKey: 'settled-channel', gridId: 'grid', channelIndex: 3, activeChannel: 3, paneActive: true,
+  homeActive: true, navCovered: false, visible: true, entranceScale: 0.2, entranceTimer: -1,
+  entranceCompletionTimer: -1, entranceSettleTimer: -1, entranceRevision: 0,
+  revealedCardIds: new Set(), entranceLayer: true
+});
+settledChannel.settleEntrance();
+assert.equal(settledChannel.entranceScale, 1, 'channel cards also hard-settle on Navigation return');
+assert.equal(settledChannel.entranceLayer, false);
 assert.equal(timers.size, 0);
 console.log('PASS home card first frame, visibility fallback, pivot and reuse');

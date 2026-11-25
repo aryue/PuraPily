@@ -62,6 +62,17 @@ let route = { path: 'pages/', name: 'Index' };
 let routeParams = {};
 const uiRouter = { getState: () => route, getParams: () => routeParams,
   pushUrl: async options => calls.push(['push', options]) };
+const navListeners = [];
+const AppNavigationMock = {
+  currentPath: () => route.path.endsWith('/') ? route.path + route.name : route.path,
+  getParams: () => routeParams,
+  pushUrl: async options => calls.push(['push', options]),
+  subscribeTopChanged(listener) { navListeners.push(listener); },
+  unsubscribeTopChanged(listener) {
+    const index = navListeners.indexOf(listener);
+    if (index >= 0) navListeners.splice(index, 1);
+  }
+};
 const win = { getUIContext: () => ({ getRouter: () => uiRouter, getPromptAction: () => ({ showToast: () => {} }) }) };
 const stage = { getMainWindowSync: () => win, loadContent: (url, cb) => { calls.push(['load', url]); cb({ code: 0 }, {}); } };
 const hosted = { hasActivePlayer: false, playerState: null, release: () => calls.push(['release']) };
@@ -71,9 +82,16 @@ const observer = { RouterPageState: { ON_PAGE_SHOW: 2, ON_PAGE_HIDE: 3 }, on() {
 const ability = compile(read('entry/src/main/ets/entryability/EntryAbility.ets'), name => {
   if (name === '@kit.AbilityKit') return { UIAbility: class {}, AbilityConstant: constants,
     wantConstant: { Params: { SUPPORT_CONTINUE_PAGE_STACK_KEY: 'stack', SUPPORT_CONTINUE_SOURCE_EXIT_KEY: 'exit' } } };
-  if (name === '@kit.PerformanceAnalysisKit') return { hilog: { info() {}, error() {} } };
+  if (name === '@kit.PerformanceAnalysisKit') return { hilog: { info() {}, warn() {}, error() {} } };
   if (name === '@kit.ArkUI') return { uiObserver: observer };
+  if (name.endsWith('/AppNavigation')) return { AppNavigation: AppNavigationMock,
+    EMPTY_ROUTE_PARAMS: {}, AppRoutes: { INDEX: 'Index', VIDEO_PLAYER: 'VideoPlayerPage', LIVE_PLAYER: 'LivePlayerPage' } };
   if (name.endsWith('/ReferenceAppearance')) return { syncThemeConfiguration() {} };
+  if (name.endsWith('/BackgroundPlaybackPreference')) return { restoreBackgroundPlayback() {} };
+  if (name.endsWith('/PrivacyLog')) return { redactPrivateLog: value => value };
+  if (name.endsWith('/StatusBarUtils')) return { StatusBarUtils: { updateStatusBarColor() {} } };
+  if (name.endsWith('/BiliLinkParser')) return { BiliLinkParser: { parse: () => null }, BiliLinkResult: class {} };
+  if (name.endsWith('/FormUtils')) return { default: { updateCardPlayStatus() {} } };
   if (name.endsWith('/CredentialStore')) return { initializeLoginCredentials: async () => {} };
   if (name.endsWith('/AppContinuation')) return service;
   if (name.endsWith('/PlayerService')) return { PlayerService: { getInstance: () => hosted, setAppContext() {} } };
@@ -86,7 +104,7 @@ const ability = compile(read('entry/src/main/ets/entryability/EntryAbility.ets')
   // 字号/密度在 loadContent 之前由 AppScaleService 下发，本用例不关心，全部空实现。
   if (name.endsWith('/AppScaleService')) return { AppScaleService: { watchSystemFontScale() {}, applyFromPrefsAtStartup: async () => {} } };
   if (name.endsWith('/ErrorLogCollector')) return { setErrorLogContext() {} };
-  if (name.endsWith('/Logger')) return { errMsg: String };
+  if (name.endsWith('/Logger')) return { errMsg: String, setVerboseLog() {} };
   return {};
 }).default;
 const a = new ability();
@@ -122,15 +140,13 @@ assert.equal(a.onContinue({}), constants.OnContinueResult.REJECT);
 storage.set('floatingPiPActive', false);
 hosted.hasActivePlayer = false;
 for (const page of ['Index', 'SearchPage', 'SettingsPage', 'LivePlayerPage', 'VideoPlayerPage']) {
-  a.continuationPageChanged({ path: 'pages/' + page + '.js', name: page, state: 2 });
+  a.continuationRouteChanged('pages/' + page + '.js');
   assert.equal(calls.at(-1)[1], page.endsWith('PlayerPage') ? 0 : 1);
 }
-a.continuationPageChanged({ path: 'pages/VideoPlayerPage', name: 'VideoPlayerPage', state: 3 });
+a.continuationRouteChanged('pages/SearchPage');
 assert.equal(calls.at(-1)[1], 1, 'leaving playback disables the system continuation entry');
-a.continuationPageChanged({ path: 'pages/LivePlayerPage', name: 'LivePlayerPage', state: 2 });
-const beforeStaleHide = calls.length;
-a.continuationPageChanged({ path: 'pages/VideoPlayerPage', name: 'VideoPlayerPage', state: 3 });
-assert.equal(calls.length, beforeStaleHide);
+a.continuationRouteChanged('pages/LivePlayerPage');
+assert.equal(calls.at(-1)[1], 0, 'live playback keeps continuation available');
 
 async function main() {
   const cold = new ability();

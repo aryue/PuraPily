@@ -11,7 +11,7 @@ import { PlayerBottomPlaybackMenu } from './PlayerBottomPlaybackMenu';
 // VideoControls.ets - 视频/直播播放控制组件
 // materialStyle: 0~4 对应 ImmersiveStyle (ULTRA_THIN=0, THIN=1, REGULAR=2, THICK=3, ULTRA_THICK=4)
 import { PlayerStatusSampler } from '../utils/PlayerStatusSampler';
-import { display, curves, uiMaterial } from '@kit.ArkUI';
+import { curves, uiMaterial } from '@kit.ArkUI';
 import { SeekThumb } from '../model/SeekThumb';
 import { MaterialUtil } from '../utils/MaterialUtil';
 import { ImmersiveLightWrapper } from './ImmersiveLightWrapper';
@@ -278,7 +278,7 @@ export struct VideoControls {
   @Prop liveUname: string = '';
 
   // ⭐ 视频名称（点播：显示在进度条上方）
-  @Prop @Watch('onVideoTitleChange') videoTitle: string = '';
+  @Prop videoTitle: string = '';
 
   // 额外属性
   blurAmount: number = 0; // 拖拽时的模糊量
@@ -291,7 +291,6 @@ export struct VideoControls {
   //     以 `reason === DismissReason.PRESS_BACK` 回调进来；我们在这个回调里把返回语义
   //     转交给页面（见四个 bindPopup 的 onWillDismiss）。
   onOverlayBack: () => void = () => {};
-  onHomePress: () => void = () => {};
   togglePlayPause: () => void = () => {};
   seekTo: (time: number) => void = (_time: number) => {};
   // ⭐ 进度条交互状态回调（Slider 的 Down / Up / Cancel 触发）：
@@ -365,22 +364,12 @@ export struct VideoControls {
 
   // ⭐ 顶部中间状态（网速·时间·电量，仅点播全屏）
   @State private status: PlayerStatusSampler = new PlayerStatusSampler();
-  // 窗口太窄的横屏全屏页没有自绘状态条。
-  @State @Watch('refreshStatusSampling') topBarWidth: number = 0;
   private statusOwnerAttached: boolean = false;
-  @State mirrorIconAngle: number = 0;
-  @State lockPulse: number = 1;
-  @State titleFade: number = 1;
   // ⭐ 挂载首帧禁用入场 transition：进出全屏时控制栏全新挂载，重放滑入动画会与全屏动画叠加产生闪烁
   @State controlsMounted: boolean = false;
-  // onAreaChange 顶栏高度节流：仅变化超过 1vp 才写 AppStorage
-  private lastTopBarHeight: number = -1;
   private statusStripLayout(): string {
-    if (this.referenceLandscapeHalfScreen || this.referenceHalfScreen) return '';
     if (this.referenceLandscapeFullscreen) return 'center';
-    if (!this.isFullscreen || this.liveMode) return '';
-    if (this.isPortraitDisplay()) return 'sides';
-    return this.topBarWidth > 600 ? 'center' : '';
+    return '';
   }
 
   private refreshStatusSampling(): void {
@@ -1432,113 +1421,6 @@ export struct VideoControls {
     .hitTestBehavior(HitTestMode.None)
   }
 
-  // ⭐ 顶部状态（竖屏全屏）：时间·网速锚定左上角，电量锚定右上角
-  @Builder
-  topBarStatusLeft() {
-    Row() {
-      Text(this.status.clockText)
-        .fontSize(14)
-        .fontWeight(FontWeight.Bold)
-        .fontColor('#FFFFFF')
-        .width(48)
-        .maxLines(1)
-        .textAlign(TextAlign.Center)
-        .transition(this.gatedT(
-          TransitionEffect.OPACITY.animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 250, curve: Curve.EaseInOut, delay: 40 })
-            .combine(TransitionEffect.translate({ y: 6 }).animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 250, curve: Curve.EaseOut, delay: 40 }))
-        ))
-      Text('·')
-        .fontSize(14)
-        .fontColor('#FFFFFF')
-        .opacity(0.5)
-        .margin({ left: 5, right: 5 })
-      // 网速（图标 + 定宽文本：右对齐→右侧稳定、数值变化向左生长）
-      Image($r('app.media.heart_rate'))
-        .width(20)
-        .height(20)
-        .fillColor('#FFFFFF')
-        .opacity(0.85)
-        .margin({ right: 2 })
-        .scale({ x: this.status.speedPulse ? 1.1 : 1, y: this.status.speedPulse ? 1.1 : 1 })
-        .animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 250, curve: Curve.Sharp })
-        .transition(this.gatedT(
-          TransitionEffect.OPACITY.animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 250, curve: Curve.EaseInOut })
-            .combine(TransitionEffect.scale({ x: 0.92, y: 0.92 }).animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 250, curve: Curve.EaseOut }))
-        ))
-      Text(this.status.speedText)
-        .fontSize(14)
-        .fontWeight(FontWeight.Bold)
-        .fontColor('#FFFFFF')
-        .width(66)
-        .maxLines(1)
-        .textAlign(TextAlign.End)
-        .transition(this.gatedT(
-          TransitionEffect.OPACITY.animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 250, curve: Curve.EaseInOut, delay: 40 })
-            .combine(TransitionEffect.translate({ y: 6 }).animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 250, curve: Curve.EaseOut, delay: 40 }))
-        ))
-    }
-    .alignItems(VerticalAlign.Center)
-    .position({ x: 16, y: 10 })
-    .hitTestBehavior(HitTestMode.None)
-  }
-
-  // ⭐ 顶部右侧状态：电量（仅横屏点播全屏显示，锚定右上角）
-  @Builder
-  topBarStatusRight() {
-    Row() {
-      Text(this.status.batteryText)
-        .fontSize(14)
-        .fontWeight(FontWeight.Bold)
-        .fontColor('#FFFFFF')
-        .width(40)
-        .maxLines(1)
-        .textAlign(TextAlign.Start)
-        .transition(this.gatedT(
-          TransitionEffect.OPACITY.animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 250, curve: Curve.EaseInOut, delay: 40 })
-            .combine(TransitionEffect.translate({ y: 6 }).animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 250, curve: Curve.EaseOut, delay: 40 }))
-        ))
-        Image($r(this.status.isCharging ? 'app.media.battery_charge14' : 'app.media.batteryfull_32'))
-        .width(20)
-        .height(20)
-        .fillColor(this.status.isLowBattery ? '#FF5A5A' : this.status.isMediumBattery ? '#FFB300' : this.status.isCharging ? '#57C15A' : '#FFFFFF')
-        .opacity(this.status.isLowBattery ? (this.status.blinkPhase ? 0.4 : 1)
-          : this.status.isCharging ? (this.status.blinkPhase ? 0.75 : 1) : 0.85)
-        .margin({ left: 2 })
-        .animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 500, curve: Curve.Linear })
-        .transition(this.gatedT(
-          TransitionEffect.OPACITY.animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 250, curve: Curve.EaseInOut })
-            .combine(TransitionEffect.scale({ x: 0.92, y: 0.92 }).animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 250, curve: Curve.EaseOut }))
-        ))
-    }
-    .alignItems(VerticalAlign.Center)
-    .position({ x: '100%', y: 10 })
-    .translate({ x: '-100%' })
-    .padding({ right: 16 })
-    .hitTestBehavior(HitTestMode.None)
-  }
-
-  /** 横屏全屏判断：显示方向为竖屏时不显示状态条 */
-  private isPortraitDisplay(): boolean {
-    try {
-      const d = display.getDefaultDisplaySync();
-      return d.height > d.width;
-    } catch (_) {
-      return false;
-    }
-  }
-
-  /** 标题变化：快速淡出后淡入（切集 crossfade） */
-  private onVideoTitleChange() {
-    this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 150, curve: Curve.EaseIn }, () => {
-      this.titleFade = 0;
-    });
-    setTimeout(() => {
-      this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 280, curve: Curve.EaseInOut }, () => {
-        this.titleFade = 1;
-      });
-    }, 160);
-  }
-
   // ⭐ 挂载首帧禁用入场过渡：进/出全屏时控制栏全新挂载，重放 transition 会与全屏动画叠加产生闪烁
   private gatedT(effect: TransitionEffect): TransitionEffect {
     return this.controlsMounted ? effect : TransitionEffect.IDENTITY;
@@ -1688,551 +1570,25 @@ export struct VideoControls {
   }
 
   // Preserve each action and the mirrored ordering of the fullscreen toolbar.
-  @Builder
-  topBgButton() {
-    Row() {
-      this.topGlassAction($r(this.isBackgroundPlayback ? 'app.media.nosign' : this.referenceLayout ? 'app.media.ref_headphones' : 'app.media.headphones_fill'),
-        '后台播放', 'fullscreen-header-background', () => { this.toggleBackgroundPlayback(); })
-    }.margin(this.isMirrorControls && this.isFullscreen && !this.liveMode ? { left: 18 } : { right: 18 })
-  }
-
-  @Builder
-  topScaleButton() {
-    Row() {
-      this.topGlassAction(this.referenceLayout ? $r('app.media.ref_scale') : $r('app.media.ic_desktop_servicewidgets'),
-        '画面比例', 'fullscreen-header-scale', () => { this.showScaleOptions(); })
-    }.margin(this.isMirrorControls && this.isFullscreen && !this.liveMode ? { left: 18 } : { right: 18 })
-  }
-
-  @Builder
-  topMoreButton() {
-    this.topGlassAction(this.referenceLayout ? $r('app.media.ref_more_horizontal') : $r('app.media.navigation_more'),
-      '更多', 'fullscreen-header-more', () => { this.onMorePress(); })
-  }
-
   // UP主头像+名字胶囊（点击返回）
-  @Builder
-  upOwnerPill() {
-    Row() {
-      if (this.isMirrorControls && this.isFullscreen && !this.liveMode) {
-        if (this.videoOwnerName !== '') {
-          Text(this.videoOwnerName)
-            .fontSize(13)
-            .fontColor('#FFFFFF')
-            .margin({ right: this.videoOwnerFace !== '' ? 8 : 0 })
-            .maxLines(1)
-        }
-        if (this.videoOwnerFace !== '') {
-          Image(this.videoOwnerFace)
-            .width(30)
-            .height(30)
-            .borderRadius(15)
-            .objectFit(ImageFit.Cover)
-        }
-      } else {
-        if (this.videoOwnerFace !== '') {
-          Image(this.videoOwnerFace)
-            .width(30)
-            .height(30)
-            .borderRadius(15)
-            .objectFit(ImageFit.Cover)
-        }
-        if (this.videoOwnerName !== '') {
-          Text(this.videoOwnerName)
-            .fontSize(13)
-            .fontColor('#FFFFFF')
-            .margin({ left: this.videoOwnerFace !== '' ? 8 : 0 })
-            .maxLines(1)
-        }
-      }
-    }
-    .alignItems(VerticalAlign.Center)
-    // 内部边距镜像翻转：标准「头像5·名字15」，镜像「名字5…」对应为头像距边5/名字距边15（反射对称）
-    .padding(this.isMirrorControls && this.isFullscreen && !this.liveMode ? { left: 15, right: 5, top: 4, bottom: 4 } : { left: 5, right: 15, top: 4, bottom: 4 })
-    .borderRadius(19)
-    .backgroundColor('rgba(0,0,0,0.4)')
-    .onClick(() => {
-      this.onBackPress();
-    })
-  }
-
   // 关注按钮（胶囊外圆形遮罩：已关注主题色、未关注半透明白）
-  @Builder
-  followButton() {
-    FollowGlassButton({ followed: this.isFollowed, buttonWidth: 76, buttonHeight: 34,
-      accent: this.isFollowed ? this.followColor : 'rgba(255,255,255,0.45)',
-      textColor: this.isFollowed ? this.followColor : '#FFFFFF', fill: 'rgba(0,0,0,0.4)',
-      onActivate: () => this.toggleFollow()
-    }).margin(this.isMirrorControls && this.isFullscreen && !this.liveMode ? { right: 6 } : { left: 6 })
-  }
-
   // ⭐ 上一集按钮（仅全屏且有上一集；图标为下一集水平翻转）
-  @Builder
-  btnPrev() {
-    if (this.isFullscreen && this.hasPreviousEpisode) {
-      Column() {
-        Image($r('app.media.ic_public_play_next'))
-          .width(24)
-          .height(24)
-          .scale({ x: -1, y: 1 })
-          .fillColor('#FFFFFF')
-      }
-      .width(40)
-      .height(40)
-      .justifyContent(FlexAlign.Center)
-      .alignItems(HorizontalAlign.Center)
-      .margin(this.isMirrorControls && this.isFullscreen && !this.liveMode ? { left: 18 } : { right: 18 })
-      .onClick(() => {
-        this.togglePreviousEpisode();
-      })
-    }
-  }
-
   // 播放/暂停按钮（点播模式）
-  @Builder
-  btnPlay() {
-    Column() {
-      Image(this.isPlaying ? (this.referenceLayout ? $r('app.media.ref_pause') : $r('app.media.pause'))
-        : (this.referenceLayout ? $r('app.media.ref_play_triangle') : $r('app.media.ic_public_play')))
-        .width(24)
-        .height(24)
-        .fillColor('#FFFFFF')
-    }
-    .width(40)
-    .height(40)
-    .justifyContent(FlexAlign.Center)
-    .alignItems(HorizontalAlign.Center)
-    .margin(this.isMirrorControls && this.isFullscreen && !this.liveMode ? { left: 18 } : { right: 18 })
-    .onClick(() => {
-      this.togglePlayPause();
-    })
-  }
-
   // ⭐ 下一集按钮（仅全屏且有下一集）
-  @Builder
-  btnNext() {
-    if (this.isFullscreen && this.hasNextEpisode) {
-      Column() {
-        Image($r('app.media.ic_public_play_next'))
-          .width(24)
-          .height(24)
-          .fillColor('#FFFFFF')
-      }
-      .width(40)
-      .height(40)
-      .justifyContent(FlexAlign.Center)
-      .alignItems(HorizontalAlign.Center)
-      .margin(this.isMirrorControls && this.isFullscreen && !this.liveMode ? { left: 18 } : { right: 18 })
-      .onClick(() => {
-        this.toggleNextEpisode();
-      })
-    }
-  }
-
   // 弹幕开关按钮
-  @Builder
-  btnDanmaku() {
-    Column() {
-      Image($r('app.media.chat_bubble_text_square_solid'))
-        .width(24)
-        .height(24)
-        .fillColor(this.isDanmakuEnabled ? '#FFFFFF' : 'rgba(255,255,255,0.45)')
-    }
-    .width(40)
-    .height(40)
-    .justifyContent(FlexAlign.Center)
-    .alignItems(HorizontalAlign.Center)
-    .onClick(() => {
-      this.toggleDanmaku();
-    })
-  }
-
   // ⭐ 发弹幕胶囊按钮（间距由胶囊单独承担：8+14+12=34vp 视觉间隙）
   // 与评论页输入胶囊同款 capsule 材质，全圆角；视频上的前景保持白色保证可读。
-  @Builder
-  btnDanmakuSend() {
-    Row() {
-      NativeGlassInput({ inputHeight: 32 }) {
-        Row() {
-          Image($r('app.media.danmfas')).width(18).height(18).fillColor('#FFFFFF').margin({ right: 5 })
-          Text('发弹幕').fontSize(12).fontColor(Color.White)
-        }.width('100%').height('100%').justifyContent(FlexAlign.Center)
-          .onClick(() => this.onDanmakuPress())
-      }
-    }.width(88)
-      .margin(this.isMirrorControls && this.isFullscreen && !this.liveMode ? { right: 14 } : { left: 14 })
-  }
-
   // ▶▶ 倍速按钮（仅全屏点播）
-  @Builder
-  btnRate() {
-    if (this.isFullscreen && !this.liveMode) {
-      Column() {
-        Text(this.playbackRate.toFixed(1) + 'x')
-          .fontSize(12)
-          .fontColor('#FFFFFF')
-      }
-      .width(40)
-      .height(40)
-      .justifyContent(FlexAlign.Center)
-      .alignItems(HorizontalAlign.Center)
-      .margin(this.isMirrorControls && this.isFullscreen && !this.liveMode ? { left: 18 } : { right: 18 })
-      .onClick(() => {
-        const rates = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0];
-        const currentIndex = rates.indexOf(this.playbackRate);
-        const nextIndex = (currentIndex + 1) % rates.length;
-        this.setPlaybackRate(rates[nextIndex]);
-      })
-    }
-  }
-
   // HD 画质按钮（仅全屏点播）
-  @Builder
-  btnHd() {
-    if (this.isFullscreen && !this.liveMode) {
-      Column() {
-        Image($r('app.media.hd_24px_rounded'))
-          .width(24)
-          .height(24)
-          .fillColor('#FFFFFF')
-      }
-      .width(40)
-      .height(40)
-      .justifyContent(FlexAlign.Center)
-      .alignItems(HorizontalAlign.Center)
-      .margin(this.isMirrorControls && this.isFullscreen && !this.liveMode ? { left: 18 } : { right: 18 })
-      .onClick(() => {
-        this.showQualityOptions();
-      })
-    }
-  }
-
   // 全屏评论浮层按钮（仅全屏点播）
 
 
   // 选集按钮（仅全屏且有多集）
-  @Builder
-  btnEpisodes() {
-    if (this.isFullscreen && this.hasMultipleEpisodes) {
-      Column() {
-        Image($r('app.media.externaldrive_fill_3'))
-          .width(24)
-          .height(24)
-          .fillColor('#FFFFFF')
-      }
-      .width(40)
-      .height(40)
-      .justifyContent(FlexAlign.Center)
-      .alignItems(HorizontalAlign.Center)
-      .margin(this.isMirrorControls && this.isFullscreen && !this.liveMode ? { left: 18 } : { right: 18 })
-      .onClick(() => {
-        this.onEpisodePress();
-      })
-    }
-  }
-
   // 全屏切换按钮
-  @Builder
-  btnFs() {
-    if (!this.liveMode) {
-      Column() {
-        Image(this.isFullscreen ? (this.referenceLayout ? $r('app.media.ref_apk_minimize') : $r('app.media.reduce_31'))
-          : (this.referenceLayout ? $r('app.media.ref_fullscreen') : $r('app.media.full_screen_32')))
-          .width(24)
-          .height(24)
-          .fillColor('#FFFFFF')
-      }
-      .width(40)
-      .height(40)
-      .justifyContent(FlexAlign.Center)
-      .alignItems(HorizontalAlign.Center)
-      .onClick(() => {
-        this.toggleFullscreen();
-      })
-    }
-  }
-
   // 顶部返回按钮：全屏点播时显示「头像+名字」胶囊（点击返回）+ 胶囊外关注按钮；无资料时回退为返回箭头
-  @Builder
-  topBarBackButton(slideFrom: number) {
-    if (this.isFullscreen && !this.liveMode && (this.videoOwnerFace !== '' || this.videoOwnerName !== '')) {
-      Row() {
-        if (this.isMirrorControls && this.isFullscreen && !this.liveMode) {
-          // ⭐ 镜像：内部顺序反序（关注 → 胶囊），胶囊内名字→头像
-          this.followButton();
-          this.upOwnerPill();
-        } else {
-          this.upOwnerPill();
-          this.followButton();
-        }
-      }
-      .height(48)
-      // 边距 3/6：标准左缘 19+3=22；镜像右缘 16+6=22（反射对称）
-      .padding({ left: 3, right: 6 })
-      .alignItems(VerticalAlign.Center)
-    .transition(this.gatedT(
-      TransitionEffect.OPACITY.animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.EaseInOut })
-        .combine(TransitionEffect.translate({ x: slideFrom }).animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.EaseInOut }))
-    ))
-
-    } else {
-      HeaderBackButton({ iconColor: '#FFFFFF', onBack: () => this.onBackPress() })
-    }
-  }
-
   // 顶部右侧按钮组（后台播放/比例/更多，仅点播全屏，纯图标）
-  @Builder
-  topBarRightButtons(slideFrom: number) {
-    if (this.isFullscreen && !this.liveMode) {
-      // 图标 22vp 宽、间距 36vp → 列心距 58vp，与底部右侧按钮列（40+18）对齐
-      Row() {
-        if (this.isMirrorControls && this.isFullscreen && !this.liveMode) {
-          // ⭐ 镜像：组内顺序反序
-          this.topMoreButton();
-          this.topScaleButton();
-          this.topBgButton();
-        } else {
-          this.topBgButton();
-          this.topScaleButton();
-          this.topMoreButton();
-        }
-      }
-      .alignItems(VerticalAlign.Center)
-      // 9vp：使「更多」图标右缘/列心与底部「全屏」按钮列对齐（16+9+11=36）；镜像时补左侧 3vp 保持 22vp 边距
-      .margin(this.isMirrorControls && this.isFullscreen && !this.liveMode ? { left: 6, right: 9 } : { right: 9 })
-    .transition(this.gatedT(
-      TransitionEffect.OPACITY.animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.EaseInOut })
-        .combine(TransitionEffect.translate({ x: slideFrom }).animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.EaseInOut }))
-    ))
-
-    }
-  }
-
   // 底部左侧按钮组（点播：上一集/播放/下一集/弹幕开关/发弹幕；直播：LIVE 标识+在线人数/下一集）
-  @Builder
-  bottomLeftGroup(slideFrom: number) {
-    // 播放、静音、弹幕按钮 - 点播模式
-    if (!this.liveMode) {
-      Row() {
-        if (this.isMirrorControls && this.isFullscreen && !this.liveMode) {
-          // ⭐ 镜像：组内顺序反序
-          this.btnDanmakuSend();
-          this.btnDanmaku();
-          this.btnNext();
-          this.btnPlay();
-          this.btnPrev();
-        } else {
-          this.btnPrev();
-          this.btnPlay();
-          this.btnNext();
-          this.btnDanmaku();
-          this.btnDanmakuSend();
-        }
-      }
-      .height(40)
-      .padding({ left: 4, right: 4 })
-      .alignItems(VerticalAlign.Center)
-      // ⭐ 补偿图标矢量左侧空隙：图标左缘与时间/进度条对齐；镜像后改为补偿右侧
-      .margin(this.isMirrorControls && this.isFullscreen && !this.liveMode ? { right: -6 } : { left: -6 })
-    .transition(this.gatedT(
-      TransitionEffect.OPACITY.animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.EaseInOut })
-        .combine(TransitionEffect.translate({ x: slideFrom }).animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.EaseInOut }))
-    ))
-
-    }
-
-    // 直播模式：LIVE 标识 + 在线人数
-    if (this.liveMode) {
-      Row() {
-        Row({ space: 6 }) {
-          Circle().width(8).height(8).fill('#FF3333')
-          Text('LIVE')
-            .fontSize(13).fontColor(Color.White).fontWeight(FontWeight.Bold)
-          if (this.liveOnline > 0) {
-            Text(`${this.liveOnline}`)
-              .fontSize(12).fontColor('#FF9999')
-          }
-        }
-        .padding({ left: 14, right: 14, top: 8, bottom: 8 })
-
-        // 下一集按钮（有下一集时显示）
-        if (this.hasNextEpisode) {
-          Column() {
-            Image($r('app.media.ic_public_play_next'))
-              .width(24)
-              .height(24)
-              .fillColor('#FFFFFF')
-          }
-          .width(40)
-          .height(40)
-          .justifyContent(FlexAlign.Center)
-          .alignItems(HorizontalAlign.Center)
-          .onClick(() => {
-            this.toggleNextEpisode();
-          })
-        }
-      }
-      .alignItems(VerticalAlign.Center)
-    }
-  }
-
   // 底部右侧按钮组（倍速/画质/选集/全屏；grouped=true 时包一层 Row，镜像对调时保持组内紧凑）
-  @Builder
-  bottomRightGroup(grouped: boolean, slideFrom: number) {
-    if (grouped) {
-      Row() {
-        Blank()
-        if (this.isMirrorControls && this.isFullscreen && !this.liveMode) {
-          // ⭐ 镜像：组内顺序反序
-          this.btnFs();
-          this.btnEpisodes();
-
-          this.btnHd();
-          this.btnRate();
-        } else {
-        this.btnRate();
-        this.btnHd();
-        this.btnEpisodes();
-        this.btnFs();
-        }
-      }
-      .height(42)
-      .alignItems(VerticalAlign.Center)
-    .transition(this.gatedT(
-      TransitionEffect.OPACITY.animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.EaseInOut })
-        .combine(TransitionEffect.translate({ x: slideFrom }).animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.EaseInOut }))
-    ))
-    } else {
-      Row() {
-        if (this.isFullscreen && !this.liveMode) {
-          Blank()
-          this.btnRate();
-        } else if (!this.liveMode) {
-          Blank()
-        }
-        this.btnHd();
-
-        this.btnEpisodes();
-        this.btnFs();
-      }
-      .alignItems(VerticalAlign.Center)
-    .transition(this.gatedT(
-      TransitionEffect.OPACITY.animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.EaseInOut })
-        .combine(TransitionEffect.translate({ x: slideFrom }).animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.EaseInOut }))
-    ))
-    }
-  }
-
-  // ⭐ 侧边按钮组（镜像切换 + 锁定/解锁）：'left'/'right' 决定贴边方向，左右对称
-  // 切换+锁定为一个整体（固定 92vp 高），组合中心对齐屏幕中心；切换按钮隐藏时槽位留空，锁定按钮不跳动
-  @Builder
-  sideButtons(side: string) {
-    if (this.isFullscreen) {
-      Column({ space: 12 }) {
-        // 切换按钮槽位（恒定 40 高；隐藏时保留占位，Transparent 不拦截手势）
-        Column() {
-          if (this.isControlsVisible && !this.liveMode) {
-            Column() {
-              Image($r('app.media.ic_gallery_collage'))
-                .width(24)
-                .height(24)
-                .fillColor('#FFFFFF')
-                .rotate({ angle: this.mirrorIconAngle })
-            }
-            .justifyContent(FlexAlign.Center)
-            .alignItems(HorizontalAlign.Center)
-            .width(40)
-            .height(40)
-            .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.85 })
-            .transition(this.gatedT(
-      TransitionEffect.OPACITY.animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.EaseInOut })
-        .combine(TransitionEffect.scale({ x: 0.6, y: 0.6 }).animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.EaseInOut }))
-    ))
-
-            .onClick(() => {
-              // ⭐ 先通知播放页取消延迟隐藏并持久化，再切状态（animateTo 让四组按钮滑移过渡）
-              this.onMirrorToggle();
-              this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.EaseInOut }, () => {
-                this.mirrorIconAngle += 180;
-                this.isMirrorControls = !this.isMirrorControls;
-              });
-            })
-          }
-        }
-        .width(40)
-        .height(40)
-        .justifyContent(FlexAlign.Center)
-        .alignItems(HorizontalAlign.Center)
-        .hitTestBehavior(HitTestMode.Transparent)
-
-        // 第二槽位（恒定 40 高；隐藏时保留占位，Transparent 不拦截手势——组高保持 92，整组不位移）
-        Column() {
-          if ((side === 'right') !== (this.isMirrorControls && !this.liveMode)) {
-            // 右侧：评论按钮（全屏点播，控制栏可见时显示）
-            if (this.isControlsVisible && !this.liveMode) {
-              Column() {
-        Image($r('app.media.comment_reply'))
-                  .width(24)
-                  .height(24)
-                  .fillColor('#FFFFFF')
-              }
-              .justifyContent(FlexAlign.Center)
-              .alignItems(HorizontalAlign.Center)
-              .width(40)
-              .height(40)
-              .clickEffect({ level: ClickEffectLevel.LIGHT, scale: 0.85 })
-              .transition(this.gatedT(
-      TransitionEffect.OPACITY.animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.EaseInOut, delay: 60 })
-        .combine(TransitionEffect.scale({ x: 0.6, y: 0.6 }).animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.EaseInOut, delay: 60 }))
-    ))
-              .hitTestBehavior(HitTestMode.Default)
-              .onClick(() => {
-                this.onCommentPress();
-              })
-            }
-          } else {
-            // 锁定入口复用顶栏独立的原生交互玻璃。
-            if (this.isFullscreen && ((!this.isLocked && this.isControlsVisible) || (this.isLocked && this.showUnlockButton))) {
-              Column() {
-                HeaderGlassControl({ label: this.isLocked ? '解锁' : '锁定', controlId: 'fullscreen-lock',
-                  onActivate: () => {
-                    this.lockPulse = this.lockPulse === 1 ? 1.15 : 1;
-                    this.toggleLock();
-                  } }) {
-                  Image(this.isLocked ? $r('app.media.ic_public_lock') : $r('app.media.ic_public_unlock'))
-                    .width(22).height(22).fillColor('#FFFFFF').hitTestBehavior(HitTestMode.None)
-                }
-              }
-              .justifyContent(FlexAlign.Center)
-              .alignItems(HorizontalAlign.Center)
-              .width(40)
-              .height(40)
-              .animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 },
-                duration: 400,
-                curve: Curve.Friction
-              })
-              .scale({ x: this.lockPulse, y: this.lockPulse })
-              .transition(this.gatedT(
-      TransitionEffect.OPACITY.animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.EaseInOut, delay: 60 })
-        .combine(TransitionEffect.scale({ x: 0.6, y: 0.6 }).animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.EaseInOut, delay: 60 }))
-    ))
-              .hitTestBehavior(HitTestMode.Default)
-            }
-          }
-        }
-        .width(40)
-        .height(40)
-        .justifyContent(FlexAlign.Center)
-        .alignItems(HorizontalAlign.Center)
-        .hitTestBehavior(HitTestMode.Transparent)
-      }
-      .position({ x: side === 'left' ? 0 : '100%', y: '50%' })
-      .transition(this.gatedT(TransitionEffect.OPACITY.animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.EaseInOut })))
-      // 组合（92vp 高）中心对齐屏幕中心：y 上移自身一半高度；切换中心 50%-26、锁定中心 50%+26，间距 12
-      // x：右侧 -76、左侧 +36，两边距屏幕边缘均 36vp（右侧 100%-76-40 → 36）
-      .translate({ x: side === 'left' ? 36 : -76, y: '-50%' })
-    }
-  }
 
   private hasSeekDuration(): boolean {
     return Number.isFinite(this.duration) && this.duration > 0;
@@ -2327,53 +1683,52 @@ export struct VideoControls {
   }
 
   @Builder
-  ReferenceLandscapeFullscreenControls() {
-    Column() {
-      Stack({ alignContent: Alignment.TopStart }) {
-        Row({ space: 6 }) {
-          HeaderBackButton({ iconColor: '#FFFFFF', onBack: () => this.onBackPress() })
-          Text(this.videoTitle)
-            .fontSize(15).fontColor('#FFFFFF').maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-            .layoutWeight(1)
-          Row({ space: 14 }) {
-            Stack({ alignContent: Alignment.TopStart }) {
-              Column() {
-                HeaderGlassControl({ label: '点赞', controlId: 'fullscreen-header-like', onActivate: () => this.onLikePress() }) {
-                  Image($r('app.media.ref_like')).width(23).height(23)
-                    .fillColor(this.isLiked ? '#D34E7E' : '#FFFFFF').hitTestBehavior(HitTestMode.None)
-                }
-              }.width(40).height(40)
-              Text(this.likeCountLabel).fontSize(9).fontColor('#FFFFFF').maxLines(1)
-                .position({ x: 28, y: 0 }).hitTestBehavior(HitTestMode.None)
-            }.width(40).height(40)
+  ReferenceFullscreenTopBar() {
+    Stack({ alignContent: Alignment.TopStart }) {
+      Row({ space: 6 }) {
+        HeaderBackButton({ iconColor: '#FFFFFF', onBack: () => this.onBackPress() })
+        Text(this.videoTitle)
+          .fontSize(15).fontColor('#FFFFFF').maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .layoutWeight(1)
+        Row({ space: 14 }) {
+          Stack({ alignContent: Alignment.TopStart }) {
             Column() {
-              HeaderGlassControl({ label: '不喜欢', controlId: 'fullscreen-header-dislike', onActivate: () => this.onDislikePress() }) {
-                Image($r('app.media.ref_dislike')).width(23).height(23)
-                  .fillColor(this.isDisliked ? '#D34E7E' : '#FFFFFF').hitTestBehavior(HitTestMode.None)
+              HeaderGlassControl({ label: '点赞', controlId: 'fullscreen-header-like', onActivate: () => this.onLikePress() }) {
+                Image($r('app.media.ref_like')).width(23).height(23)
+                  .fillColor(this.isLiked ? '#D34E7E' : '#FFFFFF').hitTestBehavior(HitTestMode.None)
               }
             }.width(40).height(40)
-            // 投币与左侧点赞/不喜欢同口径：单色 SVG + 染色，选中沿用 #D34E7E；
-            // 原来选中态切的是 APK 位图（烘焙了 #FF6699），和邻居的粉色不是一个色号。
-            this.topGlassAction($r('app.media.ref_coin'),
-              '投币', 'fullscreen-header-coin', () => { this.onCoinPress(); },
-              this.isCoined ? '#D34E7E' : '#FFFFFF')
-            this.topGlassAction($r('app.media.ref_share'), '分享', 'fullscreen-header-share', () => { this.onSharePress(); })
-            this.topGlassAction($r('app.media.ref_more'), '更多', 'fullscreen-header-more', () => { this.onMorePress(); })
-          }.alignItems(VerticalAlign.Center)
-        }
-        // 横向 30/30 = 底部控件全屏档同一套边距（见 PLAYER_TOP_BAR_INSET_X 注释）；
-        // 纵向 30 + 行高 72 让开自绘状态条，按钮落在 31~71。
-        .width('100%').height(PLAYER_TOP_BAR_ROW_H)
-        .padding({ left: PLAYER_TOP_BAR_INSET_X, right: PLAYER_TOP_BAR_INSET_X, top: PLAYER_TOP_BAR_PAD_TOP })
-        .alignItems(VerticalAlign.Center)
-        .linearGradient({ direction: GradientDirection.Bottom, colors: [['#66000000', 0], ['#00000000', 1]] })
-        this.topBarStatusInfo()
+            Text(this.likeCountLabel).fontSize(9).fontColor('#FFFFFF').maxLines(1)
+              .position({ x: 28, y: 0 }).hitTestBehavior(HitTestMode.None)
+          }.width(40).height(40)
+          Column() {
+            HeaderGlassControl({ label: '不喜欢', controlId: 'fullscreen-header-dislike', onActivate: () => this.onDislikePress() }) {
+              Image($r('app.media.ref_dislike')).width(23).height(23)
+                .fillColor(this.isDisliked ? '#D34E7E' : '#FFFFFF').hitTestBehavior(HitTestMode.None)
+            }
+          }.width(40).height(40)
+          this.topGlassAction($r('app.media.ref_coin'),
+            '投币', 'fullscreen-header-coin', () => { this.onCoinPress(); },
+            this.isCoined ? '#D34E7E' : '#FFFFFF')
+          this.topGlassAction($r('app.media.ref_share'), '分享', 'fullscreen-header-share', () => { this.onSharePress(); })
+          this.topGlassAction($r('app.media.ref_more'), '更多', 'fullscreen-header-more', () => { this.onMorePress(); })
+        }.alignItems(VerticalAlign.Center)
       }
-      .width('100%').height(PLAYER_TOP_BAR_BAND_H)
+      .width('100%').height(PLAYER_TOP_BAR_ROW_H)
+      .padding({ left: PLAYER_TOP_BAR_INSET_X, right: PLAYER_TOP_BAR_INSET_X, top: PLAYER_TOP_BAR_PAD_TOP })
+      .alignItems(VerticalAlign.Center)
+      .linearGradient({ direction: GradientDirection.Bottom, colors: [['#66000000', 0], ['#00000000', 1]] })
+      this.topBarStatusInfo()
+    }
+    .width('100%').height(PLAYER_TOP_BAR_BAND_H)
+  }
 
+  @Builder
+  ReferenceLandscapeFullscreenControls() {
+    Column() {
+      this.ReferenceFullscreenTopBar()
       Blank().layoutWeight(1)
-
       this.ReferenceLandscapeBottomControls()
     }
     .width('100%').height('100%')
@@ -2500,289 +1855,9 @@ export struct VideoControls {
           this.ReferenceHalfScreenControls()
         } else if (this.referenceLandscapeFullscreen) {
           this.ReferenceLandscapeFullscreenControls()
-        } else {
-        Column() {
-          // 顶部控制栏（全屏/直播均显示）：Stack 使状态条水平居中不受两侧按钮宽度影响
-          if (this.isFullscreen || this.liveMode) {
-            Stack() {
-              Row() {
-                if (this.isMirrorControls && this.isFullscreen && !this.liveMode) {
-                  // ⭐ 镜像布局：右侧按钮组对调到左侧，返回按钮到右侧（组内顺序不变）
-                  this.topBarRightButtons(45);
-                  Blank()
-                  this.topBarBackButton(-45);
-                } else {
-                  this.topBarBackButton(45);
 
-                  // 直播模式：LIVE 标识 + 直播间信息
-                  if (this.liveMode) {
-                    Column({ space: 2 }) {
-                      Row({ space: 6 }) {
-                        Circle().width(8).height(8).fill('#FF3333')
-                        Text('LIVE')
-                          .fontSize(13).fontColor(Color.White).fontWeight(FontWeight.Bold)
-                      }
-                      Text(this.liveTitle)
-                        .fontSize(15).fontColor(Color.White).fontWeight(FontWeight.Medium)
-                        .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-                    }
-                    .margin({ left: 12 })
-                    .layoutWeight(1)
-                  }
-
-                  if (!this.liveMode) {
-                    Blank()
-                  }
-
-                  // 后台播放/比例/更多按钮组（仅点播全屏，纯图标）
-                  this.topBarRightButtons(-45);
-                }
-              }
-              .width('100%')
-              .padding({ left: 19, right: 16, top: 20 + this.statusBarHeight })
-              .alignItems(VerticalAlign.Center)
-              .onAreaChange((_oldArea: Area, newArea: Area) => {
-                // 忽略 0 宽等无效测量（重渲染期间可能回传），避免状态栏被误隐藏
-                const w = Number(newArea.width);
-                if (w > 0) {
-                  this.topBarWidth = w;
-                }
-                // 顶栏实测高度（vp）写入 AppStorage：播放页据此限定顶部触摸保护范围（横屏/竖屏/密度自适应）
-                // ⭐ 节流：仅变化超过 1vp 才写入，避免旋转/重渲染期间高频触发播放页侧刷新
-                const h = Number(newArea.height);
-                if (h > 0 && Math.abs(h - this.lastTopBarHeight) > 1) {
-                  this.lastTopBarHeight = h;
-                  AppStorage.setOrCreate('fullscreenTopBarHeight', h);
-                }
-              })
-              // ⭐ 吞掉顶栏区域触摸，防止命中测试异常时穿透到视频层触发「单击隐藏控制栏」
-              .onTouch(() => {
-              })
-              .linearGradient({
-                direction: GradientDirection.Bottom,
-                colors: [['rgba(0,0,0,0.7)', 0], ['rgba(0,0,0,0)', 1]]
-              })
-
-              // 状态条：横屏全屏→居中显示；竖屏全屏→网速·时间左上角、电量右上角
-              if (this.statusStripLayout() === 'sides') {
-                this.topBarStatusLeft();
-                this.topBarStatusRight();
-              } else if (this.statusStripLayout() === 'center') {
-                this.topBarStatusInfo();
-              }
-            }
-          }
-
-          // ⭐ 非全屏（竖屏）左上角「返回首页」+ 右上角「更多」按钮
-          if (!this.isFullscreen && !this.liveMode) {
-            Row() {
-              Column() {
-                Image(this.referenceLayout ? $r('app.media.ref_home') : $r('app.media.backtohome_page'))
-                  .width(24)
-                  .height(24)
-                  .fillColor('#FFFFFF')
-              }
-              .width(40)
-              .height(40)
-              .justifyContent(FlexAlign.Center)
-              .alignItems(HorizontalAlign.Center)
-              .transition(this.gatedT(
-                TransitionEffect.OPACITY.animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.EaseInOut })
-                  .combine(TransitionEffect.translate({ x: 24 }).animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.EaseInOut }))
-              ))
-              .onClick(() => {
-                this.onHomePress();
-              })
-              Blank()
-              Column() {
-                Image(this.referenceLayout ? $r('app.media.ref_more_horizontal') : $r('app.media.navigation_more'))
-                  .width(24)
-                  .height(24)
-                  .fillColor('#FFFFFF')
-              }
-              .width(40)
-              .height(40)
-              .justifyContent(FlexAlign.Center)
-              .alignItems(HorizontalAlign.Center)
-              .transition(this.gatedT(
-                TransitionEffect.OPACITY.animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.EaseInOut })
-                  .combine(TransitionEffect.translate({ x: -24 }).animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.EaseInOut }))
-              ))
-              .onClick(() => {
-                this.onMorePress();
-              })
-            }
-            .width('100%')
-            .padding({ left: 16, right: 16, top: 8, bottom: 10 })
-            .linearGradient({
-              direction: GradientDirection.Bottom,
-              colors: [['rgba(0,0,0,0.7)', 0], ['rgba(0,0,0,0.3)', 0.5], ['rgba(0,0,0,0)', 1]]
-            })
-          }
-
-          Blank().layoutWeight(1)
-
-          // 底部控制栏
-          Column() {
-            // 进度条区域（仅点播显示）
-            if (!this.liveMode) {
-              // 视频名称：仅全屏显示，位于进度条上方（独占一行，不与进度条重叠）
-              if (this.isFullscreen && this.videoTitle !== '') {
-                Text(this.videoTitle)
-                  .fontSize(12)
-                  .fontColor('#FFFFFF')
-                  .height(14)
-                  .width('100%')
-                  .padding({ left: 37 })
-                  .margin({ bottom: 8 })
-                  .textAlign(TextAlign.Start)
-                  .maxLines(1)
-                  .textOverflow({ overflow: TextOverflow.Ellipsis })
-                  .opacity(this.titleFade)
-                  .marqueeOptions({ start: true, step: 4 })
-                  .transition(this.gatedT(
-                    TransitionEffect.OPACITY.animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.EaseInOut })
-                      .combine(TransitionEffect.translate({ y: 8 }).animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.EaseInOut }))
-                  ))
-              }
-
-              // 时间显示：当前时间在进度条左侧、总时长在右侧
-              // 两侧定宽槽位（50vp）使进度条始终居中，间距左右对称
-              Stack() {
-              Row() {
-                // 当前播放时间（左侧，右对齐贴住进度条）
-                Text(this.formatTime(this.currentTime))
-                  .fontSize(12)
-                  .fontColor('#FFFFFF')
-                  .width(50)
-                  .textAlign(TextAlign.End)
-                  .maxLines(1)
-
-                // 进度条滑块
-                if (this.hasSeekDuration()) {
-                  Slider({
-                    value: this.seekDisplayTime(),
-                    min: 0,
-                    max: this.duration,
-                    step: 1,
-                    style: SliderStyle.OutSet
-                  })
-                    .layoutWeight(1)
-                    // ⭐ 轨道自带不对称缩进（左~14vp/右~7vp）：右侧 margin 多 7vp 补偿，使时间与轨道间距两侧一致
-                    .margin({ left: 8, right: 15 })
-                    // ⭐ 非全屏：默认只显示已播放部分，拖动/点击调节时显示未播放轨道；全屏始终显示
-                    .trackColor(bufferedTrack(this.bufferedUntil, this.duration))
-                    .selectedColor('#FFFFFF')
-                    // ⭐ 滑块改为"调节时可见"：原先恒为 Transparent，静止状态下没有任何可抓取的视觉锚点
-                    .blockColor(this.seekTrackVisible ? '#FFFFFF' : Color.Transparent)
-                    // ⭐ 轨道粗细用 trackThickness 控制（height 只定组件高，轨道默认厚度是主题值，不随 height 变）
-                    // ⭐ 触摸热区：**Slider 不支持 responseRegion**（官方 slider.d.ts 明确
-                    //   "All the universal attributes except responseRegion are supported"），
-                    //   所以唯一有效的办法是把 Slider 自身的布局盒撑高 —— 命中判定用的就是这个盒子。
-                    //   OutSet 样式下轨道/滑块在盒内垂直居中，抬高 height 不会移动轨道视觉位置。
-                    //   原先 height=20：手指容易落在 20vp 带外、反而命中视频区触发"单击隐藏控制栏"，
-                    //   这是"点进度条不准/点不中"的高频原因。
-                    .height(44)
-                    .trackThickness(this.isFullscreen ? (this.seekTrackVisible ? 5 : 4) : (this.seekTrackVisible ? 4 : 3))
-                    .onChange((value: number, mode: SliderChangeMode) => {
-                      // ⭐ 交互上报必须**先于** currentTime 赋值：页面以"上报时刻的 ct"作为拖动锚点，
-                      //   若先改 currentTime，锚点就变成了新值，页面会判成"位置没变"而吞掉提交。
-                      // ⭐ 提交点选在 onChange 的 End/Click，而不是 onTouch 的 Up。
-                      //   ⚠️ 真机实测（hilog）事件序列，点击滑轨时为：
-                      //     onChange(Begin, 新值) → onTouch(Down) → onChange(Click) → onChange(End) → onTouch(Up)
-                      //   两个反直觉点：
-                      //     1) **Begin 早于 Down**，且 Begin 的 value 已经是跳转后的新值 ——
-                      //        所以"按下时记锚点"必然把锚点记成目标值，位移判定为 0，提交被吞（旧实现即败于此）；
-                      //     2) Click 与 End 连续触发且值相同，必须去重，否则一次点击提交两次 seek。
-                      const interacting = mode === SliderChangeMode.Begin || mode === SliderChangeMode.Moving;
-                      this.onSeekBarInteract(interacting, value);
-                      // 跟随数值更新显示。
-                      // ⭐ 点击滑轨保留原有的"平滑滑到位"观感：Slider 的 value 绑在 currentTime 上，
-                      //   在 animateTo 里改它能让滑块/轨道滑过去而不是瞬跳
-                      //   （文字内容不是可动画属性，所以时间文案仍是即时跳到目标值）。
-                      if (mode === SliderChangeMode.Click) {
-                        this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 180, curve: Curve.EaseOut }, () => {
-                          this.currentTime = value;
-                        });
-                    } else {
-                      this.currentTime = value;
-                    }
-                    // 非全屏：拖动/点击中显示轨道（厚度随之平滑过渡），松开后隐藏
-                    if (!this.isFullscreen) {
-                      this.getUIContext().animateTo({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 200, curve: Curve.EaseOut }, () => {
-                        this.seekTrackVisible = interacting;
-                      });
-                    }
-                  })
-                  // ⭐ 进度条交互**兜底**入口：只处理"交互被系统取消"（来电/多任务/父容器抢事件）。
-                  //   ⚠️ 这里**不能**用 stopPropagation：实测发现它会把 Slider 自身的 click-jump 一起打断
-                  //      （点击滑轨完全无反应），而它本来也拦不住父节点的手势对象 ——
-                  //      官方明确"终止冒泡并不会中断父组件对手势的响应处理"。
-                  //      父级手势的互斥已由页面侧 sliderDragging_ 守卫解决，不需要这一层。
-                  .onTouch((e: TouchEvent) => {
-                    if (e.type === TouchType.Cancel) {
-                      this.onSeekBarInteract(false, this.currentTime);
-                    }
-                  })
-                } else {
-                  Row().layoutWeight(1).height(2).margin({ left: 8, right: 15 })
-                    .backgroundColor('#4DFFFFFF').hitTestBehavior(HitTestMode.None)
-                }
-
-                // 总时长（右侧，左对齐贴住进度条）
-                Text(this.formatTime(this.duration))
-                  .fontSize(12)
-                  .fontColor('#FFFFFF')
-                  .width(50)
-                  .textAlign(TextAlign.Start)
-                  .maxLines(1)
-              }
-              .width('100%')
-              // ⭐ 与内部 Slider 的 44vp 触摸热区等高：若这里仍是 20vp，Slider 会溢出父行，
-              //   在非全屏下溢出部分压到下方按钮行顶部（抢点击）；等高后热区完整落在行内
-              .height(44)
-              .justifyContent(FlexAlign.SpaceBetween)
-              .alignItems(VerticalAlign.Center)
-              .padding({ left: 16, right: 16 })
-              .transition(this.gatedT(
-                TransitionEffect.OPACITY.animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.EaseInOut })
-                  .combine(TransitionEffect.translate({ y: 8 }).animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.EaseInOut }))
-              ))
-              }
-              .width('100%')
-            }
-
-            // 底部控制按钮行
-            Row() {
-              if (this.isMirrorControls && this.isFullscreen && !this.liveMode) {
-                // ⭐ 镜像布局：左右按钮组整体对调（组内顺序不变）
-                this.bottomRightGroup(true, 45);
-                this.bottomLeftGroup(-45);
-              } else {
-                this.bottomLeftGroup(45);
-                this.bottomRightGroup(false, -45);
-              }
-            }
-            .width('100%')
-            .height(42)
-            .padding({ left: 16, right: 16 })
-            .justifyContent(FlexAlign.SpaceBetween)
-            .alignItems(VerticalAlign.Center)
-          }
-          .width('100%')
-          .padding({ bottom: 10 })
-          .linearGradient({
-            direction: GradientDirection.Top,
-            colors: [['rgba(0,0,0,0.7)', 0], ['rgba(0,0,0,0.3)', 0.5], ['rgba(0,0,0,0)', 1]]
-          })
         }
-        .width('100%')
-        .height('100%')
-        .justifyContent(FlexAlign.SpaceBetween)
-        .transition(this.gatedT(TransitionEffect.OPACITY.animation({ expectedFrameRateRange: { min: 60, max: 120, expected: 120 }, duration: 300, curve: Curve.EaseInOut })))
       }
-
-        }
       if ((this.referenceHalfScreen || this.referenceLandscapeFullscreen) && !this.hidePlaybackControls && !this.isLocked) {
         this.ReferenceReplayButton()
       }
@@ -2796,12 +1871,6 @@ export struct VideoControls {
 
       if (this.referenceLandscapeFullscreen) {
         this.ReferenceLandscapeLockButton()
-      }
-
-      // ⭐ 侧边按钮组（镜像切换 + 锁定/解锁）：左右两侧对称各一份，'left'/'right' 决定贴边方向
-      if (!this.referenceLandscapeFullscreen) {
-        this.sideButtons('right');
-        this.sideButtons('left');
       }
 
       // The lab owns the complete shell. Render in normal layout so popup
@@ -3003,3 +2072,5 @@ export struct VideoControls {
     .onTouch((e: TouchEvent) => { this.onPlayerTouch(e); })
   }
 }
+
+
