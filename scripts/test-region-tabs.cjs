@@ -18,6 +18,8 @@ compile(section(api, 'export const REGION_TABS', '// ==================== 常量
 ctx.REGION_TABS = ctx.exports.REGION_TABS;
 assert.deepEqual(Array.from(ctx.REGION_TABS, c => c.name), ['全站','番剧','国创','动画','音乐','舞蹈','游戏','知识','科技','运动','汽车','美食','动物','鬼畜','时尚','娱乐','影视','纪录','电影','剧集','综艺']);
 ctx.RecommendItem = class { pgcSeasonId = 0; };
+ctx.RecommendFilterScene = { Rank: 'rank' };
+ctx.RecommendFilterService = { filterList: items => items };
 ctx.fetchPgcSeasonsByParams = async (type, page, size, params) => {
   assert.equal(params.type, '1'); assert.equal(size, 30);
   return [{ seasonType: type, seasonId: 123, epId: 7, title: '正确节目', cover: 'cover', indexShow: '全12集', score: '9.5' },

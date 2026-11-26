@@ -74,6 +74,7 @@ assert.match(gate, /AppStorage\.get<boolean>\('cellularPrefetch'\) === true/,
     DOMAIN: 0, TAG: 'EntryAbility',
     hilog: { info() {}, error(msg) { throw new Error(msg); } },
     PersistentStorage: { persistProp() {} },
+    RecommendFilterSettings: { loadSync() {} },
     AppStorage: { setOrCreate: (key, value) => restored.set(key, value) },
     preferences: { getPreferencesSync: () => ({
       getSync: (key, fallback) => saved.has(key) ? saved.get(key) : fallback,

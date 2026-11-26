@@ -31,6 +31,7 @@ import { initializeLoginCredentials } from '../utils/CredentialStore';
 import { StatusBarUtils } from '../utils/StatusBarUtils';
 import { BiliLinkParser, BiliLinkResult } from '../utils/BiliLinkParser';
 import { checkForUpdate, UpdateCheckStatus } from '../services/UpdateChecker';
+import { RecommendFilterSettings } from '../services/RecommendFilterSettings';
 
 const DOMAIN = 0x0000;
 const TAG = 'EntryAbility';
@@ -449,6 +450,8 @@ export default class EntryAbility extends UIAbility {
 
   private loadCardSettings(): void {
     try {
+      // 首屏推荐请求前必须已恢复过滤设置；否则冷启动第一页会绕过所有本地规则。
+      RecommendFilterSettings.loadSync(this.context);
       const pref = preferences.getPreferencesSync(this.context, { name: 'my_app_settings' });
       // 首屏和窗口显隐都使用启动时恢复的值。前后台切换只应用当前值。
       AppStorage.setOrCreate('hideNavigationIndicator', pref.getSync('hideNavigationIndicator', false) === true);

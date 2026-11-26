@@ -242,9 +242,18 @@ export struct DiscoverPage {
       if (this.isLoadingMore || !this.hasMore) return;
       this.isLoadingMore = true;
     }
-    const newItems = await getPopularVideos(this.pageNum, this.pageSize);
-    // ⭐ 只过滤已屏蔽的UP主，不过滤已看视频
-    const filteredItems = UserBehaviorService.filterBlockedUploadersOnly(newItems);
+    // 规则过滤发生在接口层；整页都被过滤时继续取下一页，避免首屏直接空白。
+    let filteredItems: RecommendItem[] = [];
+    let lastRawCount: number = 0;
+    let attempts: number = 0;
+    while (attempts < 3) {
+      const newItems = await getPopularVideos(this.pageNum, this.pageSize);
+      lastRawCount = newItems.length;
+      filteredItems = UserBehaviorService.filterBlockedUploadersOnly(newItems);
+      this.pageNum++;
+      attempts++;
+      if (filteredItems.length > 0 || newItems.length < this.pageSize) break;
+    }
     if (filteredItems.length > 0) {
       if (refresh) {
         this.playbackVisibleIndexes.clear();
@@ -253,9 +262,8 @@ export struct DiscoverPage {
       } else {
         this.dataSource.addItems(filteredItems);
       }
-      this.pageNum++;
     } else {
-      this.hasMore = false;
+      this.hasMore = lastRawCount >= this.pageSize;
     }
     this.isLoading = false;
     this.isRefreshing = false;
@@ -297,7 +305,8 @@ export struct DiscoverPage {
    * ⭐ 显示视频菜单（底部弹窗）
    */
   private showVideoMenu(item: RecommendItem): void {
-    void VideoCardMenu.show(this.getUIContext(), item.title, item.pgcSeasonId > 0 ? '' : item.id, item.ownerMid, this.isDarkMode);
+    void VideoCardMenu.show(this.getUIContext(), item.title, item.pgcSeasonId > 0 ? '' : item.id,
+      item.ownerMid, this.isDarkMode, item.ownerName);
   }
 
   /**
@@ -327,7 +336,7 @@ export struct DiscoverPage {
   private async handleBlockUploader(item: RecommendItem): Promise<void> {
     try {
       const result = await sendDislikeUpFeedback(item.id, item.ownerMid);
-      UserBehaviorService.addBlockedUploader(item.ownerMid);
+      UserBehaviorService.addBlockedUploader(item.ownerMid, item.ownerName);
       this.removeVideosByUploader(item.ownerMid);
       if (result.success) {
         this.getUIContext().getPromptAction().showToast({ message: `已屏蔽 ${item.ownerName}`, duration: 1500 });
@@ -339,7 +348,7 @@ export struct DiscoverPage {
     } catch (err) {
       logError(`[屏蔽UP主] 异常: ${err}`);
       try {
-        UserBehaviorService.addBlockedUploader(item.ownerMid);
+        UserBehaviorService.addBlockedUploader(item.ownerMid, item.ownerName);
         this.removeVideosByUploader(item.ownerMid);
       } catch (_) { }
       this.getUIContext().getPromptAction().showToast({ message: `已本地屏蔽 ${item.ownerName}`, duration: 1500 });
@@ -354,7 +363,7 @@ export struct DiscoverPage {
       const result = await blacklistUploader(Number(item.ownerMid));
       if (result) {
         // 拉黑成功，也加入本地屏蔽列表
-        UserBehaviorService.addBlockedUploader(item.ownerMid);
+        UserBehaviorService.addBlockedUploader(item.ownerMid, item.ownerName);
         this.removeVideosByUploader(item.ownerMid);
         this.getUIContext().getPromptAction().showToast({ message: `已拉黑 ${item.ownerName}`, duration: 1500 });
         logInfo(`[拉黑UP主] ${item.ownerMid} - ${item.ownerName}`);

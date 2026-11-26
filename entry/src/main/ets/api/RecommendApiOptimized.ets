@@ -16,6 +16,8 @@ import { RecommendItem } from '../model/RecommendItem';
 import { WbiSign, AppSign } from '../utils/SignUtils';
 import { getRecommendVideos } from './BilibiliApi';
 import { hasLoginSession } from '../utils/LoginCookie';
+import { RecommendFilterScene } from '../model/RecommendFilterModel';
+import { RecommendFilterService } from '../services/RecommendFilterService';
 
 // ========== 辅助函数 ==========
 
@@ -292,15 +294,16 @@ export async function getRecommendVideosOptimized(
       }
     }
 
-    logInfo(`[App推荐] 返回 ${result.length} 条数据（原始 ${items.length} 条）`);
+    const filtered = RecommendFilterService.filterList(result, RecommendFilterScene.HomeApp, 'App推荐');
+    logInfo(`[App推荐] 返回 ${result.length} 条数据，过滤后 ${filtered.length} 条（原始 ${items.length} 条）`);
 
     // ⭐ 7. 记录最后一个视频ID，用于下次推荐
-    if (result.length > 0) {
-      const lastItem = result[result.length - 1];
+    if (filtered.length > 0) {
+      const lastItem = filtered[filtered.length - 1];
       AppStorage.setOrCreate('lastRecommendVideoId', lastItem.id);
     }
 
-    return result;
+    return filtered;
 
   } catch (err) {
     logError(`[App推荐] 请求异常: ${errMsg(err)}`);

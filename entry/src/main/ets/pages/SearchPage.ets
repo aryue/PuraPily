@@ -12,6 +12,7 @@ import { PageWallpaper } from '../components/PageWallpaper';
 import { AppNavigation, NavPageHost } from '../services/AppNavigation';
 import { VideoListItem, videoListPublished } from '../components/VideoListItem';
 import { VideoCardFeedback } from '../services/VideoCardFeedback';
+import { RecommendFilterService } from '../services/RecommendFilterService';
 import { curves, display, LazyColumnLayout, LazyColumnLayoutAttribute, LazyVWaterFlowLayout,
   LazyVWaterFlowLayoutAttribute, LengthMetrics } from '@kit.ArkUI';
 import { FirstScreenDataSource } from '../model/FirstScreenDataSource';
@@ -558,13 +559,14 @@ export struct SearchPage {
     }
     try {
       let page = this.activePage;
-      const items = tab === 'live_user'
+      const rawItems = tab === 'live_user'
         ? await this.searchLiveFeedRooms(keyword, page, request)
         : await searchByType(keyword, tab, page, 20, order);
       if (request !== this.searchRequestVersion) return;
-      let collected = items;
+      // 过滤只影响展示，不改变“接口是否还有下一页”的判断。
+      let collected = RecommendFilterService.filterSearchResults(rawItems, tab, tab);
       if (tab === 'live_user' && reset) {
-        let hasMore = items.length >= 20;
+        let hasMore = rawItems.length >= 20;
         let searched = 1;
         while (collected.length < 10 && hasMore && searched < 10) {
           const more = await this.searchLiveFeedRooms(keyword, ++page, request);
@@ -575,7 +577,7 @@ export struct SearchPage {
         }
       }
       this.activePage = page;
-      this.activeHasMore = tab === 'live_user' ? collected.length >= 20 : items.length > 0;
+      this.activeHasMore = tab === 'live_user' ? collected.length >= 20 : rawItems.length > 0;
       this.activeResults = reset ? collected : this.activeResults.concat(collected);
       // 搜索结果没有首页那种列表阶段预取：点击瞬间才发取流请求，实测要多等 ~200ms。
       // 结果一回来就把前几条的地址备好（只取地址，不下媒体、不建播放器）。

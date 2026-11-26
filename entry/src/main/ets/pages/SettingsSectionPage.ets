@@ -4,6 +4,7 @@ import { PageHeader } from '../components/PageHeader';
 import { PageWallpaper } from '../components/PageWallpaper';
 import { ProfilePage } from './ProfilePage';
 import { AppNavigation, SettingsSectionRouteParams } from '../services/AppNavigation';
+import { ContentFilterPage } from './ContentFilterPage';
 
 /** 设置页二级分区（外观与交互 / 播放设置），卡片实现复用 ProfilePage 的 settingsOnly 分支。 */
 @Component
@@ -21,6 +22,9 @@ export struct SettingsSectionPage {
     if (params !== null && params.section === 'playback') {
       this.section = 'playback';
       this.sectionTitle = '播放设置';
+    } else if (params !== null && params.section === 'filter') {
+      this.section = 'filter';
+      this.sectionTitle = '内容过滤';
     }
   }
 
@@ -28,7 +32,11 @@ export struct SettingsSectionPage {
     Stack() {
       PageWallpaper()
       Stack({ alignContent: Alignment.TopStart }) {
-        ProfilePage({ settingsOnly: true, settingsSection: this.section })
+        if (this.section === 'filter') {
+          ContentFilterPage()
+        } else {
+          ProfilePage({ settingsOnly: true, settingsSection: this.section })
+        }
         PageHeader({ withTabs: false }) {
           Row({ space: 10 }) {
             HeaderBackButton({ onBack: () => { AppNavigation.back(); } })

@@ -7,6 +7,7 @@ const store = new Map();
 const calls = [];
 const blocked = new Set();
 const watched = new Set();
+const whitelist = new Set();
 let blacklistSuccess = false, resolveFeedback;
 const ctx = { exports: {}, AppStorage: { get: k => store.get(k), setOrCreate: (k, v) => store.set(k, v) },
   require: name => name.includes('/FeedbackService') ? {
@@ -14,6 +15,13 @@ const ctx = { exports: {}, AppStorage: { get: k => store.get(k), setOrCreate: (k
     sendDislikeUpFeedback: async (id, mid) => { calls.push(['block', id, mid]); throw new Error('offline'); }
   } : name.includes('/BilibiliApi') ? {
     blacklistUploader: async mid => { calls.push(['blacklist', mid]); return blacklistSuccess; }
+  } : name.includes('/RecommendFilterService') ? {
+    RecommendFilterService: { isWhitelistedUser: mid => whitelist.has(mid) }
+  } : name.includes('/RecommendFilterSettings') ? {
+    RecommendFilterSettings: {
+      addWhitelist: mid => whitelist.add(mid),
+      removeWhitelist: mid => whitelist.delete(mid)
+    }
   } : { UserBehaviorService: {
     addWatchedVideo: id => watched.add(id), addBlockedUploader: mid => blocked.add(mid),
     isBlockedUploader: mid => blocked.has(mid)
@@ -26,7 +34,7 @@ const id = 'BV1234567890', other = 'BV0987654321';
 (async () => {
   assert.equal(f.actions('ss123', '123').length, 0, 'season identity cannot be sent to archive feedback');
   assert.equal(f.actions(id, '0').length, 2, 'invalid uploader identity hides uploader actions');
-  assert.equal(f.actions(id, '123').length, 4);
+  assert.equal(f.actions(id, '123').length, 5);
   // Use the actual compiled App-feed parser rather than an invented BV fixture.
   const modelContext = { exports: {} };
   vm.runInNewContext(ts.transpileModule(fs.readFileSync('entry/build/default/cache/default/default@CompileArkTS/esmodule/debug/entry/src/main/ets/model/RecommendItem.ts', 'utf8'), {
@@ -37,7 +45,7 @@ const id = 'BV1234567890', other = 'BV0987654321';
     title: 'App recommendation', cover: 'https://example.com/cover.jpg', args: { up_id: 123, up_name: 'UP' }
   });
   assert.equal(appItem.id, '113456789012345');
-  assert.equal(f.actions(appItem.id, appItem.ownerMid).length, 4, 'App AV identities must expose the same menu as Web BV identities');
+  assert.equal(f.actions(appItem.id, appItem.ownerMid).length, 5, 'App AV identities must expose the same menu as Web BV identities');
   assert.equal(f.actions(appItem.id, '0').length, 2);
   for (const invalid of ['', '0', '-1', '1.5', '01', '9007199254740992', 'ep123', 'ss123', 'live123']) {
     assert.equal(f.actions(invalid, '123').length, 0, 'reject non-archive or unsafe identity: ' + invalid);
@@ -61,6 +69,11 @@ const id = 'BV1234567890', other = 'BV0987654321';
   blacklistSuccess = true;
   assert.match(await f.perform('拉黑UP主', other, '789'), /已拉黑/);
   assert.ok(blocked.has('789'));
+  assert.match(await f.perform('加入白名单', other, '789', 'UP'), /已加入推荐白名单/);
+  assert.ok(whitelist.has('789'));
+  assert.equal(f.actions(other, '789')[4], '移出白名单');
+  assert.match(await f.perform('移出白名单', other, '789', 'UP'), /已移出推荐白名单/);
+  assert.equal(whitelist.has('789'), false);
   const n = calls.length;
   assert.match(await f.perform('看过类似', other, '321'), /已标记/);
   assert.equal(calls.length, n, 'seen-before is a local action');

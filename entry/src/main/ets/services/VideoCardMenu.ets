@@ -4,7 +4,7 @@ import { VideoCardFeedback } from './VideoCardFeedback';
 /** All video-card entry points share one system window and action ordering. */
 export class VideoCardMenu {
   static async show(context: UIContext, title: string, videoId: string, ownerMid: string,
-    dark: boolean): Promise<void> {
+    dark: boolean, ownerName: string = ''): Promise<void> {
     const actions = VideoCardFeedback.actions(videoId, ownerMid);
     if (actions.length === 0) return;
     const prompt = context.getPromptAction();
@@ -19,7 +19,7 @@ export class VideoCardMenu {
     try {
       const result = await prompt.showActionMenu({ title: title, buttons: buttons });
       if (result.index >= 0 && result.index < actions.length) {
-        const message = await VideoCardFeedback.perform(actions[result.index], videoId, ownerMid);
+        const message = await VideoCardFeedback.perform(actions[result.index], videoId, ownerMid, ownerName);
         prompt.showToast({ message: message, duration: 1500 });
       }
     } catch (_) {

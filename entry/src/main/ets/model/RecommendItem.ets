@@ -13,9 +13,16 @@ export class RecommendItem {
   pubdate: number = 0;
   cid: number = 0;
   duration: number = 0;      // 新增：时长（秒）
+  // 字段是否真实存在：0 在 B 站接口里既可能是真值，也可能是缺省占位。
+  // 过滤规则只对 known 的统计字段生效，避免把「接口没给」误判成「数据为 0」。
+  durationKnown: boolean = false;
+  playKnown: boolean = false;
+  likeKnown: boolean = false;
   videoWidth: number = 0;
   videoHeight: number = 0;
   isFollowed: boolean = false; // B站搜索API自带关注状态（仅bili_user有效）
+  tname: string = '';          // 分区名（App 推荐 / 热门 / 排行可用）
+  canPlay: number = -1;        // App 推荐的 can_play：-1=接口未提供，1=可播，0=不可播
   // 直播专用
   online: number = 0;         // 观看人数
   // 番剧（PGC）专用
@@ -45,6 +52,8 @@ export class RecommendItem {
       item.playCount = stat['view'] || 0;
       item.danmakuCount = stat['danmaku'] || 0;
       item.likeCount = stat['like'] || 0;
+      item.playKnown = typeof stat['view'] === 'number';
+      item.likeKnown = typeof stat['like'] === 'number';
     }
     
     const owner = obj['owner'] as Record<string, Object>;
@@ -59,7 +68,15 @@ export class RecommendItem {
       item.rcmdReason = (reason['content'] as string) || '';
     }
     item.pubdate = (obj['pubdate'] as number) || 0;
-    item.duration = (obj['duration'] as number) || 0;
+    if (typeof obj['duration'] === 'number') {
+      item.duration = obj['duration'] as number;
+      item.durationKnown = true;
+    }
+    item.tname = (obj['tname'] as string) || '';
+    item.isFollowed = (obj['is_followed'] as number) === 1;
+    if (typeof obj['can_play'] === 'number') {
+      item.canPlay = obj['can_play'] as number;
+    }
     const dimension = obj['dimension'] as Record<string, number>;
     if (dimension) {
       const rotated = Math.abs(dimension['rotate'] || 0) % 180 === 90;
@@ -101,6 +118,7 @@ export class RecommendItem {
       item.aid = (playerArgs['aid'] as number) || 0;
       item.cid = (playerArgs['cid'] as number) || 0;
       item.duration = (playerArgs['duration'] as number) || 0;
+      item.durationKnown = typeof playerArgs['duration'] === 'number';
       const dimension = playerArgs['dimension'] as Record<string, number>;
       if (dimension) {
         const rotated = Math.abs(dimension['rotate'] || 0) % 180 === 90;
@@ -149,6 +167,7 @@ export class RecommendItem {
       const upId = args['up_id'] as number;
       item.ownerMid = upId ? upId.toString() : '';
       item.ownerName = (args['up_name'] as string) || '';
+      item.tname = (args['tname'] as string) || '';
     }
     
     // 播放/弹幕数（App API 以文字形式返回）
@@ -156,12 +175,24 @@ export class RecommendItem {
     const coverLeftText2 = (obj['cover_left_text_2'] as string) || '';
     item.playCount = RecommendItem.parseCountText(coverLeftText1);
     item.danmakuCount = RecommendItem.parseCountText(coverLeftText2);
+    item.playKnown = coverLeftText1.length > 0;
+    if (typeof obj['can_play'] === 'number') {
+      item.canPlay = obj['can_play'] as number;
+    }
     
     // 推荐理由
-    const rcmdReason = obj['rcmd_reason'] as string;
-    item.rcmdReason = rcmdReason || '';
+    const rcmdReason = (obj['rcmd_reason'] as string) || '';
+    item.rcmdReason = rcmdReason;
     // 从推荐理由推断是否已关注
     item.isFollowed = rcmdReason === '已关注' || rcmdReason === '新关注';
+    // App 推荐偶尔把点赞数塞进推荐理由（如「1.2万赞」）。
+    if (rcmdReason.includes('赞')) {
+      const likeFromReason = RecommendItem.parseCountText(rcmdReason);
+      if (likeFromReason > 0) {
+        item.likeCount = likeFromReason;
+        item.likeKnown = true;
+      }
+    }
     
     // 发布时间
     item.pubdate = (obj['pubdate'] as number) || 0;

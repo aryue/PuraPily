@@ -26,6 +26,8 @@ function load(file) {
     if (name.endsWith('/SignUtils')) return { AppSign: { APP_KEYS: { android_hd: { appkey: 'test', appsec: 'test' } } }, WbiSign: { md5: async () => 'signature' } };
     if (name.endsWith('/BilibiliApi')) return { getRecommendVideos: async (...args) => { webRequests.push(args); return videos; } };
     if (name.endsWith('/RecommendItem')) return { RecommendItem: { fromAppApi: item => item } };
+    if (name.endsWith('/RecommendFilterModel')) return { RecommendFilterScene: { HomeApp: 'homeApp', HomeWeb: 'homeWeb' } };
+    if (name.endsWith('/RecommendFilterService')) return { RecommendFilterService: { filterList: items => items } };
     if (name.endsWith('/UserBehaviorService')) return { UserBehaviorService: {} };
     return load(path.resolve(path.dirname(file), name + '.ets'));
   } };

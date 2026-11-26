@@ -8,12 +8,14 @@ export struct VideoCardMoreButton {
   @Prop actionText: string = '';
   @Prop videoId: string = '';
   @Prop ownerMid: string = '';
+  @Prop ownerName: string = '';
   @StorageLink('isDarkMode') isDarkMode: boolean = true;
   onActivate?: () => void;
   onMore?: () => void;
 
   private async openMenu(): Promise<void> {
-    await VideoCardMenu.show(this.getUIContext(), this.title, this.videoId, this.ownerMid, this.isDarkMode);
+    await VideoCardMenu.show(this.getUIContext(), this.title, this.videoId, this.ownerMid,
+      this.isDarkMode, this.ownerName);
   }
 
   build() {

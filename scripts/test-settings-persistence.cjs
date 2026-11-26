@@ -51,6 +51,7 @@ async function main() {
     logError: unexpectedError, logWarn: unexpectedError, hilog: { info() {}, error: unexpectedError },
     AppStorage: { get: key => active.get(key), set: (key, value) => active.set(key, value),
       setOrCreate: (key, value) => active.set(key, value) },
+    RecommendFilterSettings: { loadSync() {} },
     preferences: { getPreferencesSync: (_context, options) => {
       assert.equal(options.name, 'my_app_settings');
       return pref;

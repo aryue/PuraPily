@@ -12,6 +12,8 @@ import { http } from '@kit.NetworkKit';
 import { logInfo, logWarn, logError } from '../utils/Logger';
 import { RecommendItem } from '../model/RecommendItem';
 import { fetchPgcSeasonsByParams } from './PgcApi';
+import { RecommendFilterScene } from '../model/RecommendFilterModel';
+import { RecommendFilterService } from '../services/RecommendFilterService';
 
 // ==================== 接口定义 ====================
 
@@ -53,7 +55,7 @@ export async function fetchRegionContent(rid: number, page: number = 1): Promise
   if (!region) throw new Error('未知分区');
   if (!region.seasonType) return page === 1 ? fetchRegionRanking(region.rankingRid ?? rid) : [];
   const seasons = await fetchPgcSeasonsByParams(region.seasonType, page, 30, { 'type': '1', 'order': '2' });
-  return seasons.filter(season => season.seasonType === region.seasonType).map(season => {
+  const items = seasons.filter(season => season.seasonType === region.seasonType).map(season => {
     const item = new RecommendItem();
     item.id = `ss${season.seasonId}`;
     item.pgcSeasonId = season.seasonId;
@@ -61,9 +63,11 @@ export async function fetchRegionContent(rid: number, page: number = 1): Promise
     item.title = season.title;
     item.coverUrl = season.cover;
     item.ownerName = season.indexShow;
+    item.tname = region.name;
     item.rcmdReason = season.score ? `${season.score} 分` : season.badge;
     return item;
   });
+  return RecommendFilterService.filterList(items, RecommendFilterScene.Rank, `分区排行(${region.name})`);
 }
 
 // ==================== 常量和请求头 ====================
@@ -113,20 +117,26 @@ export async function fetchRegionRanking(rid: number = 0): Promise<RecommendItem
     const data = body['data'] as Record<string, Object> || {};
     const rawList = data['list'] as Array<Record<string, Object>> || [];
 
-    return rawList.map((item: Record<string, Object>): RecommendItem => {
+    const items = rawList.map((item: Record<string, Object>): RecommendItem => {
       const rec = new RecommendItem();
       rec.id = (item['bvid'] as string) || '';
       rec.aid = Number(item['aid'] ?? 0);
       rec.title = (item['title'] as string) || '';
+      rec.tname = (item['tname'] as string) || '';
       const pic = item['pic'] as string;
       rec.coverUrl = pic ? (pic.startsWith('http') ? pic : `https:${pic}`) : '';
-      rec.duration = Number(item['duration'] ?? 0);
+      if (typeof item['duration'] === 'number') {
+        rec.duration = item['duration'] as number;
+        rec.durationKnown = true;
+      }
       rec.pubdate = Number(item['pubdate'] ?? 0);
 
       const stat = item['stat'] as Record<string, number> || {};
       rec.playCount = stat['view'] || 0;
       rec.danmakuCount = stat['danmaku'] || 0;
       rec.likeCount = stat['like'] || 0;
+      rec.playKnown = typeof stat['view'] === 'number';
+      rec.likeKnown = typeof stat['like'] === 'number';
 
       const owner = item['owner'] as Record<string, Object> || {};
       rec.ownerName = (owner['name'] as string) || '';
@@ -135,6 +145,7 @@ export async function fetchRegionRanking(rid: number = 0): Promise<RecommendItem
 
       return rec;
     });
+    return RecommendFilterService.filterList(items, RecommendFilterScene.Rank, `分区排行(rid=${rid})`);
   } catch (err) {
     logError(`[RegionApi] 异常: ${err}`);
     return [];

@@ -18,6 +18,7 @@ import { sendVideoInteraction, VideoInteractionResult, VideoInteractionRequest }
 import { MIN_HEARTBEAT_PROGRESS_SEC } from '../model/WatchHistoryHelper';
 import { common } from '@kit.AbilityKit';
 import { preferences } from '@kit.ArkData';
+import { RecommendFilterSettings } from './RecommendFilterSettings';
 
 // ========== 类型定义 ==========
 
@@ -350,11 +351,13 @@ export class UserBehaviorService {
    * 添加屏蔽UP主
    * ⭐ 同时保存到持久化存储
    */
-  static addBlockedUploader(mid: string): void {
+  static addBlockedUploader(mid: string, name: string = ''): void {
     let blocked = AppStorage.get<Set<string>>('blockedUploaders') || new Set<string>();
     blocked.add(mid);
     AppStorage.setOrCreate('blockedUploaders', blocked);
+    if (name) RecommendFilterSettings.setBlockedName(mid, name);
     AppStorage.setOrCreate('cardFeedbackRevision', (AppStorage.get<number>('cardFeedbackRevision') ?? 0) + 1);
+    RecommendFilterSettings.bumpRevision();
     logInfo(`[屏蔽] 已屏蔽UP主: ${mid}`);
     
     // ⭐ 异步保存到持久化存储
@@ -389,7 +392,9 @@ export class UserBehaviorService {
     let blocked = AppStorage.get<Set<string>>('blockedUploaders') || new Set<string>();
     blocked.delete(mid);
     AppStorage.setOrCreate('blockedUploaders', blocked);
+    RecommendFilterSettings.removeBlockedName(mid);
     AppStorage.setOrCreate('cardFeedbackRevision', (AppStorage.get<number>('cardFeedbackRevision') ?? 0) + 1);
+    RecommendFilterSettings.bumpRevision();
     logInfo(`[屏蔽] 已取消屏蔽UP主: ${mid}`);
     UserBehaviorService.saveBlockedUploaders();
   }
@@ -404,16 +409,9 @@ export class UserBehaviorService {
         logWarn('[屏蔽] 无法获取context，跳过加载');
         return;
       }
-      const pref = await preferences.getPreferences(context, 'my_app_settings');
-      const stored = await pref.get('blockedUploaders', '') as string;
-      if (stored) {
-        const blockedArray: string[] = JSON.parse(stored) as string[];
-        const blocked = new Set<string>(blockedArray);
-        AppStorage.setOrCreate('blockedUploaders', blocked);
-        logInfo(`[屏蔽] 已从持久化存储加载 ${blocked.size} 个屏蔽UP主`);
-      } else {
-        logInfo('[屏蔽] 持久化存储中无屏蔽UP主数据');
-      }
+      await RecommendFilterSettings.load(context);
+      const blocked = AppStorage.get<Set<string>>('blockedUploaders') ?? new Set<string>();
+      logInfo(`[屏蔽] 已从持久化存储加载 ${blocked.size} 个屏蔽UP主`);
     } catch (err) {
       logError(`[屏蔽] 加载失败: ${err}`);
     }

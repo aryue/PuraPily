@@ -1438,7 +1438,8 @@ export struct HomePage {
    * ⭐ 显示视频菜单（底部弹窗）
    */
   private showVideoMenu(item: RecommendItem): void {
-    void VideoCardMenu.show(this.getUIContext(), item.title, item.pgcSeasonId > 0 ? '' : item.id, item.ownerMid, this.isDarkMode);
+    void VideoCardMenu.show(this.getUIContext(), item.title, item.pgcSeasonId > 0 ? '' : item.id,
+      item.ownerMid, this.isDarkMode, item.ownerName);
   }
 
   /**
@@ -1485,7 +1486,7 @@ export struct HomePage {
       const result = await sendDislikeUpFeedback(item.id, item.ownerMid);
 
       // 2. ⭐ 添加到本地屏蔽列表（持久化存储）
-      UserBehaviorService.addBlockedUploader(item.ownerMid);
+      UserBehaviorService.addBlockedUploader(item.ownerMid, item.ownerName);
 
       // 3. 从列表中移除该UP主的所有视频
       this.removeVideosByUploader(item.ownerMid);
@@ -1501,7 +1502,7 @@ export struct HomePage {
       logError(`[屏蔽UP主] 异常: ${err}`);
       // 即使异常也尝试本地屏蔽
       try {
-        UserBehaviorService.addBlockedUploader(item.ownerMid);
+        UserBehaviorService.addBlockedUploader(item.ownerMid, item.ownerName);
         this.removeVideosByUploader(item.ownerMid);
       } catch (_) { }
       this.getUIContext().getPromptAction().showToast({ message: `已本地屏蔽 ${item.ownerName}`, duration: 1500 });
@@ -1516,7 +1517,7 @@ export struct HomePage {
       const result = await blacklistUploader(Number(item.ownerMid));
       if (result) {
         // 拉黑成功，也加入本地屏蔽列表
-        UserBehaviorService.addBlockedUploader(item.ownerMid);
+        UserBehaviorService.addBlockedUploader(item.ownerMid, item.ownerName);
         this.removeVideosByUploader(item.ownerMid);
         this.getUIContext().getPromptAction().showToast({ message: `已拉黑 ${item.ownerName}`, duration: 1500 });
         logInfo(`[拉黑UP主] ${item.ownerMid} - ${item.ownerName}`);

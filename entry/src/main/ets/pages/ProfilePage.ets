@@ -1275,7 +1275,7 @@ export struct ProfilePage {
     }.width('100%').height(56).padding({ left: 16, right: 16 }).id(entryId).onClick(action)
   }
 
-  /** 设置一级：不带标题的单张卡片，只留两个分区入口与清理/关于/退出。 */
+  /** 设置一级：不带标题的单张卡片，保留分区入口与清理/关于/退出。 */
   @Builder
   SettingsRoot() {
     Scroll() {
@@ -1284,6 +1284,7 @@ export struct ProfilePage {
           Column() {
             this.SettingsEntryRow('外观与交互', 'setting-entry-appearance', () => this.openSettingsSection('appearance'))
             this.SettingsEntryRow('播放设置', 'setting-entry-playback', () => this.openSettingsSection('playback'))
+            this.SettingsEntryRow('内容过滤', 'setting-entry-filter', () => this.openSettingsSection('filter'))
             Row() {
               Text('清除缓存').fontSize(15).fontColor(this.isDarkMode ? '#E7E9EB' : '#18191C').layoutWeight(1)
               Text(this.cacheSizeText + ' ›').fontSize(13).fontColor(this.isDarkMode ? '#C9CDD3' : '#50545A')

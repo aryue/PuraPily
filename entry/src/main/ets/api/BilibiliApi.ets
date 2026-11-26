@@ -24,6 +24,8 @@ import { mergeLoginCookies, hasLoginSession, loginCookiesFromUrl, classifyLoginV
 import { PlaybackWarmPlayer } from '../services/PlaybackWarmPlayer';
 import { IjkPrewarm } from '../services/IjkPrewarm';
 import { ClipInfoItem } from '../model/SkipSegment';
+import { RecommendFilterScene } from '../model/RecommendFilterModel';
+import { RecommendFilterService } from '../services/RecommendFilterService';
 
 // ============================================
 // 限流缓解：全局请求间隔控制 + 参数轮换
@@ -325,6 +327,8 @@ interface SearchResultItem {
   play?: number;
   video_review?: number;
   author?: string;
+  duration?: string;
+  typename?: string;
 
   // 直播专用字段
   roomid?: number;
@@ -787,8 +791,9 @@ export async function getPopularVideos(page: number = 1, pageSize: number = 30):
       const item = RecommendItem.fromPopularApi(list[i]);
       if (item.id) result.push(item);
     }
-    logInfo(`热门视频接口返回 ${result.length} 条数据`);
-    return result;
+    const filtered = RecommendFilterService.filterList(result, RecommendFilterScene.Hot, '热门');
+    logInfo(`热门视频接口返回 ${result.length} 条数据，过滤后 ${filtered.length} 条`);
+    return filtered;
   } catch (err) {
     logError(`请求热门视频异常: ${errMsg(err)}`);
     return [];
@@ -951,8 +956,9 @@ export async function getRecommendVideos(freshIdx: number, pageSize: number = 30
     // ⭐ 不再自动递增！让调用者完全控制 fresh_idx
     // 调用者应该在请求成功后自己递增索引
 
-    logInfo(`[推荐] 返回 ${result.length} 条数据，fresh_idx=${actualFreshIdx}`);
-    return result;
+    const filtered = RecommendFilterService.filterList(result, RecommendFilterScene.HomeWeb, 'Web推荐');
+    logInfo(`[推荐] 返回 ${result.length} 条数据，过滤后 ${filtered.length} 条，fresh_idx=${actualFreshIdx}`);
+    return filtered;
   } catch (err) {
     logError(`请求推荐视频异常: ${errMsg(err)}，返回空数据`);
     return [];
@@ -2069,6 +2075,20 @@ function decodeHtmlEntities(text: string): string {
     .replace(/&#39;/g, "'");
 }
 
+/** 搜索视频时长是 "12:34" / "1:02:03" 文本。解析失败保持 unknown。 */
+function parseSearchDuration(text: string): number {
+  if (!text) return 0;
+  const parts = text.split(':');
+  if (parts.length < 2) return 0;
+  let seconds = 0;
+  for (let i = 0; i < parts.length; i++) {
+    const value = parseInt(parts[i], 10);
+    if (isNaN(value)) return 0;
+    seconds = seconds * 60 + value;
+  }
+  return seconds;
+}
+
 /**
  * 按类型搜索（通用搜索接口）
  * @param keyword 搜索关键词
@@ -2198,10 +2218,20 @@ export async function searchByType(
         // video 类型
         item.id = obj.bvid as string;
         item.ownerName = decodeHtmlEntities((obj.author as string) || '');
+        item.ownerMid = obj.mid ? String(obj.mid) : '';
         item.playCount = (obj.play as number) || 0;
+        item.playKnown = typeof obj.play === 'number';
         item.danmakuCount = (obj.video_review as number) || 0;
+        item.likeCount = (obj.like as number) || 0;
+        item.likeKnown = typeof obj.like === 'number';
         item.cid = (obj.cid as number) || 0;
         item.title = (obj.title as string || '').replace(/<[^>]+>/g, '');
+        item.tname = (obj.typename as string) || '';
+        const durationText = (obj.duration as string) || '';
+        if (durationText) {
+          item.duration = parseSearchDuration(durationText);
+          item.durationKnown = true;
+        }
         const vPic = (obj.pic as string) || '';
         item.coverUrl = vPic ? (vPic.startsWith('http') ? vPic : `https:${vPic}`) : '';
         item.pubdate = (obj.pubdate as number) || 0;
@@ -3376,8 +3406,9 @@ export async function getRelatedVideos(bvid: string): Promise<RecommendItem[]> {
       }
       if (items.length >= 20) break;
     }
-    logInfo(`[getRelatedVideos] bvid=${bvid} 获取到 ${items.length} 个相关视频`);
-    return items;
+    const filtered = RecommendFilterService.filterList(items, RecommendFilterScene.Related, '相关视频');
+    logInfo(`[getRelatedVideos] bvid=${bvid} 获取到 ${items.length} 个相关视频，过滤后 ${filtered.length} 个`);
+    return filtered;
   } catch (err) {
     logError(`[getRelatedVideos] 异常: ${err}`);
     return [];

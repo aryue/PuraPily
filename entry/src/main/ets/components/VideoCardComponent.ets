@@ -229,7 +229,8 @@ export struct VideoCardComponent {
           Text(this.item.ownerName).fontSize(11).fontColor(this.secondaryColor()).maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
           VideoCardMoreButton({ title: this.item.title,
-            videoId: this.item.pgcSeasonId > 0 ? '' : this.item.id, ownerMid: this.item.ownerMid })
+            videoId: this.item.pgcSeasonId > 0 ? '' : this.item.id,
+            ownerMid: this.item.ownerMid, ownerName: this.item.ownerName })
         // No uploader/menu still reserves the normal 24vp metadata row.
         }.width('100%').constraintSize({ minHeight: 24 })
       }.width('100%').padding(8).alignItems(HorizontalAlign.Start)

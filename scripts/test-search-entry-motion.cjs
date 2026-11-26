@@ -8,6 +8,7 @@ const body = names.map(name => pageClass.members.find(n => ts.isMethodDeclaratio
 const calls = [], animations = [], toasts = [];
 const context = { exports: {}, Curve: { FastOutSlowIn: 0 }, clearTimeout() {}, logError() {}, logWarn() {},
   AppNavigation: { back() { backs++; return Promise.resolve(); } },
+  RecommendFilterService: { filterSearchResults: items => items },
   searchByType: (...args) => new Promise((resolve, reject) => calls.push({ args, resolve, reject })) };
 let backs = 0;
 vm.runInNewContext(ts.transpileModule(`export class Subject { ${body} }`, {
