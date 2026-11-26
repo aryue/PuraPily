@@ -2,8 +2,8 @@
   "app": {
     "bundleName": "com.pura.pili",
     "vendor": "example",
-    "versionCode": 2001005,
-    "versionName": "2.1.5",
+    "versionCode": 2003000,
+    "versionName": "2.3.0",
     "buildVersion": "1",
     "icon": "$media:layered_image",
     "label": "$string:app_name",
